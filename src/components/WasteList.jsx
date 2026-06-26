@@ -1,93 +1,155 @@
 import { useState } from 'react';
+import DateNavigator from './DateNavigator';
 
 function WasteList({ items, onDeleteEntry, onClearAll }) {
   const [activeFilter, setActiveFilter] = useState('All');
+  const [viewMode, setViewMode] = useState('day');
+  const [selectedDate, setSelectedDate] = useState(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  });
 
-  // Filter categorization handler (Includes components inside recipes matching specific toggles)
-  const filteredItems = items.filter(item => {
-    if (activeFilter === 'All') return true;
-    if (item.isRecipe) {
-      return item.ingredients.some(ing => ing.category === activeFilter);
+  const parseDate = (dateStr) => {
+    if (!dateStr) return new Date(0);
+    const parts = dateStr.split('/');
+    if (parts.length === 3) {
+      const [day, month, year] = parts;
+      return new Date(Number(year), Number(month) - 1, Number(day));
     }
+    return new Date(dateStr);
+  };
+
+  const dateFilteredItems = items.filter((item) => {
+    if (viewMode === 'all') return true;
+
+    const itemDate = parseDate(item?.date);
+    itemDate.setHours(0, 0, 0, 0);
+
+    if (viewMode === 'day') {
+      const sel = new Date(selectedDate);
+      sel.setHours(0, 0, 0, 0);
+      return itemDate.getTime() === sel.getTime();
+    }
+
+    if (viewMode === 'month') {
+      return itemDate.getMonth() === selectedDate.getMonth() && itemDate.getFullYear() === selectedDate.getFullYear();
+    }
+
+    return true;
+  });
+
+  const filteredItems = dateFilteredItems.filter((item) => {
+    if (activeFilter === 'All') return true;
+    if (item.isRecipe) return item.ingredients.some((ing) => ing.category === activeFilter);
     return item.category === activeFilter;
   });
 
+  const totalCost = dateFilteredItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+  const totalCount = dateFilteredItems.length;
   const filterCategories = ['All', 'Produce', 'Dairy', 'Bakery', 'Meat/Poultry', 'Pantry', 'Other'];
 
   return (
-    <div style={{ maxWidth: '450px', margin: '20px auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-        <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Logged Items</h3>
+    <section className="list-page">
+      <div className="section-header">
+        <div>
+          <p className="eyebrow">Waste log</p>
+          <h2 className="title">Logged Items</h2>
+          <p className="subtitle">Review entries by date range and category.</p>
+        </div>
         {items.length > 0 && (
-          <button onClick={onClearAll} style={{ backgroundColor: '#ff4d4d', color: '#fff', border: 'none', padding: '5px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}>
-            Clear All
+          <button type="button" onClick={onClearAll} className="danger-button">
+            Clear all
           </button>
         )}
       </div>
 
-      {/* Pill Filter Row */}
-      <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '10px', marginBottom: '15px' }}>
-        {filterCategories.map(cat => (
-          <button key={cat} onClick={() => setActiveFilter(cat)} style={{ padding: '4px 10px', borderRadius: '12px', border: '1px solid #333', backgroundColor: activeFilter === cat ? '#4CAF50' : '#222', color: '#fff', fontSize: '0.75rem', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+      <DateNavigator
+        selectedDate={selectedDate}
+        onDateChange={setSelectedDate}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+      />
+
+      {viewMode !== 'all' && (
+        <div className="budget-panel" style={{ marginBottom: '14px' }}>
+          <div className="budget-row">
+            <span className="small-text">
+              <strong>{totalCount}</strong> item{totalCount !== 1 ? 's' : ''} logged
+            </span>
+            <span className="price">R{totalCost.toFixed(2)}</span>
+          </div>
+        </div>
+      )}
+
+      <div className="filter-row" aria-label="Waste category filter">
+        {filterCategories.map((cat) => (
+          <button
+            key={cat}
+            type="button"
+            onClick={() => setActiveFilter(cat)}
+            className={`pill-button${activeFilter === cat ? ' is-active' : ''}`}
+          >
             {cat}
           </button>
         ))}
       </div>
 
       {filteredItems.length === 0 ? (
-        <p style={{ textAlign: 'center', color: '#666', fontSize: '0.9rem', marginTop: '20px' }}>No items found under this scope.</p>
+        <div className="empty-state">
+          {viewMode === 'all'
+            ? 'No items found under this scope.'
+            : viewMode === 'day'
+              ? 'No waste was logged on this day.'
+              : 'No waste was logged this month.'}
+        </div>
       ) : (
-        <ul style={{ listStyleType: 'none', padding: 0, margin: 0 }}>
-          {filteredItems.map((item) => (
-            <li key={item.id} style={{
-              backgroundColor: '#1a1a1a',
-              borderLeft: `4px solid ${item.isRecipe ? '#ff9800' : '#ff4d4d'}`,
-              borderRadius: '4px',
-              padding: '12px',
-              marginBottom: '10px',
-              border: '1px solid #333',
-              position: 'relative'
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <h4 style={{ margin: '0 0 4px 0', textTransform: 'capitalize', fontSize: '1rem' }}>
-                    {item.name} 
-                    <span style={{ fontSize: '0.75rem', color: '#aaa', marginLeft: '6px' }}>
-                      (x{item.quantity})
+        <ul className="log-list">
+          {filteredItems.map((item) => {
+            const itemCost = Number(item?.cost) || 0;
+
+            return (
+              <li key={item.id} className={`log-card ${item.isRecipe ? 'is-recipe' : 'is-single'}`}>
+                <div className="item-row">
+                  <div>
+                    <h3 className="log-title">
+                      {item.name}
+                      <span className="small-text"> x{item.quantity}</span>
+                    </h3>
+                    <span className="log-meta">
+                      {item.reason} - {item.date}{item.staff ? ` - ${item.staff}` : ''}
                     </span>
-                  </h4>
-                  <span style={{ fontSize: '0.75rem', color: '#888' }}>
-                    Reason: {item.reason} | {item.date}
-                  </span>
-                </div>
+                  </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <span style={{ backgroundColor: '#2d2d2d', color: '#ff4d4d', padding: '3px 8px', borderRadius: '4px', fontWeight: 'bold', fontSize: '0.85rem' }}>
-                    R{item.cost.toFixed(2)}
-                  </span>
-                  <button onClick={() => onDeleteEntry(item.id)} style={{ backgroundColor: 'transparent', border: 'none', color: '#888', cursor: 'pointer', fontSize: '1rem' }}>🗑️</button>
-                </div>
-              </div>
-
-              {/* NEW: Structured Ingredient Sub-Explosion Panel */}
-              {item.isRecipe && item.ingredients && (
-                <div style={{ marginTop: '10px', paddingTop: '8px', borderTop: '1px dashed #333' }}>
-                  <span style={{ display: 'block', fontSize: '0.75rem', color: '#ff9800', fontWeight: 'bold', marginBottom: '4px', textTransform: 'uppercase' }}>Recipe Cost Breakdown:</span>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    {item.ingredients.map((ing, idx) => (
-                      <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', backgroundColor: '#222', padding: '4px 8px', borderRadius: '4px' }}>
-                        <span style={{ color: '#ccc' }}>• {ing.name} <code style={{ color: '#888', fontSize: '0.7rem' }}>[{ing.category}]</code></span>
-                        <span style={{ color: '#aaa' }}>R{ing.cost.toFixed(2)}</span>
-                      </div>
-                    ))}
+                  <div className="manager-row">
+                    <span className="price">R{itemCost.toFixed(2)}</span>
+                    <button type="button" onClick={() => onDeleteEntry(item.id)} className="delete-button" title={`Delete ${item.name}`}>
+                      x
+                    </button>
                   </div>
                 </div>
-              )}
-            </li>
-          ))}
+
+                {item.isRecipe && item.ingredients && (
+                  <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border-soft)' }}>
+                    <h4 className="breakdown-title">Ingredient breakdown</h4>
+                    <div className="ingredient-list">
+                      {item.ingredients.map((ing, idx) => (
+                        <div key={`${ing.name}-${idx}`} className="ingredient-card item-row">
+                          <span className="small-text">
+                            {ing.name} <span className="badge">{ing.category}</span>
+                          </span>
+                          <span className="price">R{(Number(ing.cost) || 0).toFixed(2)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
-    </div>
+    </section>
   );
 }
 

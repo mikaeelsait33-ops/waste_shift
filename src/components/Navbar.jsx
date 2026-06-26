@@ -1,17 +1,40 @@
-function Navbar() {
+const navItems = [
+  { key: 'dashboard', label: 'Dashboard' },
+  { key: 'logWaste', label: 'Log Waste' },
+  { key: 'wasteLog', label: 'Waste Log' },
+  { key: 'stockroom', label: 'Stockroom' },
+];
+
+function Navbar({ activePage, onNavigate, wasteCount = 0 }) {
   return (
-    <nav style={{ background: '#1a1a2e', padding: '16px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-      <h2 style={{ color: '#00d4aa', margin: 0 }}>WasteShift</h2>
-      <div style={{ display: 'flex', gap: '16px' }}>
-        <button style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', fontSize: '16px' }}>
-          Log Waste
-        </button>
-        <button style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', fontSize: '16px' }}>
-          Dashboard
-        </button>
+    <nav className="navbar">
+      <div className="brand">
+        <span className="brand-mark">WS</span>
+        <div>
+          <h1 className="brand-name">WasteShift</h1>
+          <p className="brand-subtitle">Waste control</p>
+        </div>
+      </div>
+
+      <div className="nav-links" aria-label="Primary navigation">
+        {navItems.map((item) => {
+          const isActive = activePage === item.key;
+
+          return (
+            <button
+              key={item.key}
+              type="button"
+              className={`nav-button${isActive ? ' is-active' : ''}`}
+              onClick={() => onNavigate(item.key)}
+            >
+              {item.label}
+              {item.key === 'wasteLog' && wasteCount > 0 ? ` (${wasteCount})` : ''}
+            </button>
+          );
+        })}
       </div>
     </nav>
-  )
+  );
 }
 
-export default Navbar
+export default Navbar;

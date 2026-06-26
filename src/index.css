@@ -1,48 +1,709 @@
-/* Global Reset & Base Setup */
 :root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-
-  color-scheme: dark;
-  background-color: #121212; /* Deep dark background */
-  color: #ffffff;
-
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #eef1f4;
+  background: #101112;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  --bg: #101112;
+  --surface: #17191b;
+  --surface-2: #1f2225;
+  --surface-3: #272b2f;
+  --border: #30363c;
+  --border-soft: #252a2f;
+  --text: #eef1f4;
+  --muted: #9aa3ad;
+  --muted-2: #707a84;
+  --accent: #28d3a1;
+  --accent-strong: #15b98a;
+  --amber: #dba44d;
+  --danger: #ef5b5b;
+  --success: #43c476;
+  --shadow: 0 18px 45px rgba(0, 0, 0, 0.32);
+}
+
+* {
+  box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  padding: 0;
   min-width: 320px;
   min-height: 100vh;
-  background-color: #121212;
-  font-family: Inter, system-ui, sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(40, 211, 161, 0.08), transparent 34rem),
+    linear-gradient(180deg, #111315 0%, #0f1011 100%);
 }
 
-/* Smooth out custom scrollbars if any elements overflow */
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #141414;
+  background: #121416;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #333;
-  border-radius: 4px;
+  background: #343a40;
+  border-radius: 8px;
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: #444;
+.app-shell {
+  min-height: 100vh;
+  color: var(--text);
 }
 
-/* Ensure inputs and selects behave well globally */
-input, select, button {
-  font-family: inherit;
+.app-page {
+  width: min(100% - 32px, 660px);
+  margin: 0 auto;
+  padding: 28px 0 48px;
+}
+
+.app-page--wide {
+  width: min(100% - 32px, 860px);
+}
+
+.navbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 16px 28px;
+  background: rgba(16, 17, 18, 0.92);
+  border-bottom: 1px solid var(--border-soft);
+  backdrop-filter: blur(16px);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 168px;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
+  background: linear-gradient(135deg, var(--accent), #7be0bf);
+  color: #0f1413;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.brand-name {
+  margin: 0;
+  color: var(--text);
+  font-size: 1.12rem;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.brand-subtitle {
+  margin: 4px 0 0;
+  color: var(--muted-2);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.nav-links {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.nav-button,
+.segment-button,
+.pill-button,
+.ghost-button,
+.primary-button,
+.danger-button,
+.icon-button {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.nav-button {
+  min-height: 36px;
+  padding: 8px 12px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.nav-button.is-active {
+  background: #e9f9f4;
+  border-color: #e9f9f4;
+  color: #12201c;
+  font-weight: 800;
+}
+
+.panel {
+  background: rgba(23, 25, 27, 0.96);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.panel-body {
+  padding: 22px;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: var(--muted-2);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 0;
+  color: var(--text);
+  font-size: 1.28rem;
+  line-height: 1.2;
+}
+
+.subtitle {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.segmented-control {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px;
+  background: #111315;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.segment-button {
+  min-height: 32px;
+  padding: 6px 11px;
+  background: transparent;
+  color: var(--muted);
+  border-color: transparent;
+  font-size: 0.82rem;
+}
+
+.segment-button.is-active {
+  background: var(--surface-3);
+  color: var(--text);
+  border-color: var(--border);
+  font-weight: 800;
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0;
+}
+
+.metric-card {
+  padding: 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.metric-value {
+  display: block;
+  color: var(--text);
+  font-size: 1.85rem;
+  font-weight: 850;
+  line-height: 1;
+}
+
+.metric-value.is-danger {
+  color: var(--danger);
+}
+
+.metric-label {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.insight-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  margin-top: 16px;
+  background: var(--border-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.insight-item {
+  padding: 14px;
+  background: #141719;
+}
+
+.insight-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted-2);
+  font-size: 0.72rem;
+}
+
+.insight-value {
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 750;
+}
+
+.budget-panel {
+  padding: 16px;
+  margin-top: 12px;
+  background: #141719;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.budget-row,
+.item-row,
+.manager-row,
+.inventory-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.progress-track {
+  width: 100%;
+  height: 8px;
+  margin: 12px 0 7px;
+  overflow: hidden;
+  background: #2a2f33;
+  border-radius: 999px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--amber);
+}
+
+.progress-fill.is-danger {
+  background: var(--danger);
+}
+
+.breakdown-grid {
+  display: grid;
+  gap: 18px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.breakdown-title {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.breakdown-item {
+  margin-bottom: 10px;
+}
+
+.breakdown-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.form-panel {
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.field {
+  margin-bottom: 14px;
+}
+
+.field label,
+.field-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.input,
+.select {
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 11px;
+  color: var(--text);
+  background: #111315;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  outline: none;
+}
+
+.input:focus,
+.select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(40, 211, 161, 0.12);
+}
+
+.input:disabled {
+  color: var(--success);
+  background: #181d1b;
+}
+
+.primary-button,
+.danger-button,
+.ghost-button,
+.pill-button {
+  min-height: 36px;
+  padding: 8px 13px;
+  font-weight: 750;
+}
+
+.primary-button {
+  width: 100%;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0d1714;
+}
+
+.primary-button:disabled {
+  opacity: 0.52;
+}
+
+.danger-button {
+  background: rgba(239, 91, 91, 0.14);
+  border-color: rgba(239, 91, 91, 0.35);
+  color: #ff9a9a;
+}
+
+.ghost-button {
+  background: transparent;
+  color: var(--muted);
+}
+
+.ghost-button.is-warning {
+  border-color: rgba(219, 164, 77, 0.4);
+  color: var(--amber);
+}
+
+.muted-box {
+  padding: 14px;
+  margin-bottom: 12px;
+  background: #131517;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.staff-list,
+.inventory-list,
+.ingredient-list {
+  display: grid;
+  gap: 8px;
+}
+
+.staff-card,
+.ingredient-card,
+.inventory-card,
+.log-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.staff-card,
+.ingredient-card,
+.inventory-card {
+  padding: 10px 12px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #2a2f33;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.badge.is-green {
+  background: rgba(67, 196, 118, 0.13);
+  color: #80dda5;
+}
+
+.badge.is-red {
+  background: rgba(239, 91, 91, 0.13);
+  color: #ff9a9a;
+}
+
+.price {
+  color: var(--danger);
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.price.is-total {
+  color: var(--amber);
+}
+
+.list-page {
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.filter-row {
+  display: flex;
+  gap: 7px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  margin: 14px 0 18px;
+}
+
+.pill-button {
+  background: #151719;
+  color: var(--muted);
+  border-color: var(--border-soft);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.pill-button.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0d1714;
+}
+
+.log-list {
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.log-card {
+  padding: 14px;
+}
+
+.log-card.is-recipe {
+  border-left: 3px solid var(--amber);
+}
+
+.log-card.is-single {
+  border-left: 3px solid var(--danger);
+}
+
+.log-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.98rem;
+  text-transform: capitalize;
+}
+
+.log-meta {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted-2);
+  font-size: 0.78rem;
+}
+
+.delete-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--muted-2);
+  cursor: pointer;
+}
+
+.delete-button:hover {
+  border-color: rgba(239, 91, 91, 0.35);
+  color: #ff9a9a;
+}
+
+.empty-state {
+  padding: 28px 18px;
+  color: var(--muted);
+  background: rgba(23, 25, 27, 0.7);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.date-navigator {
+  padding: 14px;
+  margin-bottom: 14px;
+  background: #141719;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.date-nav-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.date-display {
+  flex: 1;
+  text-align: center;
+}
+
+.date-title {
+  display: block;
+  color: var(--text);
+  font-weight: 800;
+}
+
+.date-actions {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.icon-button {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.icon-button:disabled {
+  opacity: 0.35;
+}
+
+.inventory-section {
+  display: grid;
+  gap: 16px;
+}
+
+.inventory-heading {
+  margin-bottom: 9px;
+}
+
+.inventory-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.98rem;
+}
+
+.inventory-card {
+  margin-bottom: 14px;
+}
+
+.small-text {
+  color: var(--muted-2);
+  font-size: 0.78rem;
+}
+
+@media (max-width: 720px) {
+  .navbar {
+    padding: 14px 16px;
+  }
+
+  .brand {
+    width: 100%;
+  }
+
+  .nav-links {
+    justify-content: stretch;
+    width: 100%;
+  }
+
+  .nav-button {
+    flex: 1 1 calc(50% - 6px);
+  }
+
+  .app-page {
+    width: min(100% - 24px, 660px);
+    padding-top: 20px;
+  }
+
+  .section-header,
+  .budget-row,
+  .item-row,
+  .manager-row,
+  .inventory-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .metrics-grid,
+  .insight-strip,
+  .field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .panel-body {
+    padding: 18px;
+  }
 }

@@ -4,16 +4,83 @@ import Dashboard from './components/Dashboard';
 import WasteForm from './components/WasteForm';
 import WasteList from './components/WasteList';
 import RecipeManager from './components/RecipeManager';
+import defaultRecipes from './data/defaultRecipes';
 
-// ✅ Clean Slate: Starter seeds have been completely emptied out here
-const DEFAULT_RECIPES = {};
+// Seed stockroom recipes from the bundled menu catalog.
+const DEFAULT_RECIPES = defaultRecipes;
+const DEFAULT_RECIPE_SEED_VERSION = 'gemini-code-1782487423638-priced-menu-v1';
+
+const isRecipeMap = (value) => (
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+);
+
+const cloneRecipeMap = (recipeMap) => Object.fromEntries(
+  Object.entries(recipeMap).map(([key, recipe]) => [
+    key,
+    {
+      ...recipe,
+      ingredients: Array.isArray(recipe.ingredients)
+        ? recipe.ingredients.map((ingredient) => ({ ...ingredient }))
+        : [],
+    },
+  ])
+);
+
+const mergeDefaultRecipeUpdates = (savedRecipeMap) => {
+  const savedRecipes = cloneRecipeMap(savedRecipeMap);
+  const updatedRecipes = {
+    ...savedRecipes,
+    ...cloneRecipeMap(DEFAULT_RECIPES),
+  };
+
+  for (const key of Object.keys(DEFAULT_RECIPES)) {
+    const savedRecipe = savedRecipes[key];
+    if (!savedRecipe || !Array.isArray(savedRecipe.ingredients)) continue;
+
+    const savedStockByIngredientName = new Map(
+      savedRecipe.ingredients.map((ingredient) => [ingredient.name, ingredient.stock])
+    );
+
+    updatedRecipes[key] = {
+      ...updatedRecipes[key],
+      ingredients: updatedRecipes[key].ingredients.map((ingredient) => ({
+        ...ingredient,
+        stock: savedStockByIngredientName.get(ingredient.name) ?? ingredient.stock,
+      })),
+    };
+  }
+
+  return updatedRecipes;
+};
+
+const buildInitialRecipes = () => {
+  const savedRecipes = localStorage.getItem('customRecipes');
+  const savedSeedVersion = localStorage.getItem('defaultRecipeSeedVersion');
+  const savedRecipeMap = savedRecipes ? JSON.parse(savedRecipes) : {};
+
+  if (!isRecipeMap(savedRecipeMap)) {
+    return cloneRecipeMap(DEFAULT_RECIPES);
+  }
+
+  if (!savedRecipes || savedSeedVersion !== DEFAULT_RECIPE_SEED_VERSION) {
+    return mergeDefaultRecipeUpdates(savedRecipeMap);
+  }
+
+  return cloneRecipeMap(savedRecipeMap);
+};
 
 function App() {
-  const [activeTab, setActiveTab] = useState('tracker'); // 'tracker' or 'stockroom'
+  const [activeTab, setActiveTab] = useState('dashboard');
 
   const [wasteItems, setWasteItems] = useState(() => {
-    const savedItems = localStorage.getItem('wasteItems');
-    return savedItems ? JSON.parse(savedItems) : [];
+    try {
+      const savedItems = localStorage.getItem('wasteItems');
+      const parsed = savedItems ? JSON.parse(savedItems) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      console.error("Corrupted waste items in storage, resetting.", e);
+      return [];
+    }
   });
 
   const [budget, setBudget] = useState(() => {
@@ -23,8 +90,24 @@ function App() {
 
   // Custom dynamic recipe database state loop
   const [recipes, setRecipes] = useState(() => {
-    const savedRecipes = localStorage.getItem('customRecipes');
-    return savedRecipes ? JSON.parse(savedRecipes) : DEFAULT_RECIPES;
+    try {
+      return buildInitialRecipes();
+    } catch (e) {
+      console.error("Corrupted recipes in storage, resetting.", e);
+      return cloneRecipeMap(DEFAULT_RECIPES);
+    }
+  });
+
+  // Dynamic staff list with roles
+  const [staffList, setStaffList] = useState(() => {
+    try {
+      const savedStaff = localStorage.getItem('staffList');
+      const parsed = savedStaff ? JSON.parse(savedStaff) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      console.error("Corrupted staff list in storage, resetting.", e);
+      return [];
+    }
   });
 
   useEffect(() => {
@@ -37,7 +120,20 @@ function App() {
 
   useEffect(() => {
     localStorage.setItem('customRecipes', JSON.stringify(recipes));
+    localStorage.setItem('defaultRecipeSeedVersion', DEFAULT_RECIPE_SEED_VERSION);
   }, [recipes]);
+
+  useEffect(() => {
+    localStorage.setItem('staffList', JSON.stringify(staffList));
+  }, [staffList]);
+
+  const handleAddStaff = (newStaffMember) => {
+    setStaffList(prev => [...prev, { ...newStaffMember, id: Date.now().toString() }]);
+  };
+
+  const handleDeleteStaff = (staffId) => {
+    setStaffList(prev => prev.filter(s => s.id !== staffId));
+  };
 
   // Deducts raw physical ingredients from inventory stock parameters upon a waste submission
   const handleAddEntry = (newEntry) => {
@@ -79,39 +175,36 @@ function App() {
   const handleClearRecipes = () => {
     if (window.confirm("Are you sure you want to completely clear out your entire recipe database? This cannot be undone! 🚨")) {
       setRecipes({});
-      localStorage.removeItem('customRecipes');
+      localStorage.setItem('customRecipes', JSON.stringify({}));
+      localStorage.setItem('defaultRecipeSeedVersion', DEFAULT_RECIPE_SEED_VERSION);
     }
   };
 
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#121212', color: '#fff', fontFamily: 'sans-serif' }}>
-      <Navbar />
+    <div className="app-shell">
+      <Navbar activePage={activeTab} onNavigate={setActiveTab} wasteCount={wasteItems.length} />
 
-      {/* Modern Control Header Tabs */}
-      <div style={{ display: 'flex', justifyContent: 'center', gap: '15px', margin: '20px 0 10px 0' }}>
-        <button onClick={() => setActiveTab('tracker')} style={{ padding: '10px 20px', borderRadius: '20px', border: '1px solid #333', backgroundColor: activeTab === 'tracker' ? '#4CAF50' : '#222', color: '#fff', fontWeight: 'bold', cursor: 'pointer' }}>
-          📊 Waste Tracker Dashboard
-        </button>
-        <button onClick={() => setActiveTab('stockroom')} style={{ padding: '10px 20px', borderRadius: '20px', border: '1px solid #333', backgroundColor: activeTab === 'stockroom' ? '#ff9800' : '#222', color: '#fff', fontWeight: 'bold', cursor: 'pointer' }}>
-          🏢 Stock & Recipe Manager
-        </button>
-      </div>
-      
-      <div style={{ padding: '10px 20px', maxWidth: '600px', margin: '0 auto' }}>
-        {activeTab === 'tracker' ? (
-          <>
-            <Dashboard items={wasteItems} budget={budget} setBudget={setBudget} />
-            <WasteForm onAddEntry={handleAddEntry} recipes={recipes} />
-            <WasteList items={wasteItems} onDeleteEntry={handleDeleteEntry} onClearAll={handleClearAll} />
-          </>
-        ) : (
+      <main className={`app-page${activeTab === 'wasteLog' ? ' app-page--wide' : ''}`}>
+        {activeTab === 'dashboard' && (
+          <Dashboard items={wasteItems} budget={budget} setBudget={setBudget} />
+        )}
+
+        {activeTab === 'logWaste' && (
+          <WasteForm onAddEntry={handleAddEntry} recipes={recipes} staffList={staffList} onAddStaff={handleAddStaff} onDeleteStaff={handleDeleteStaff} />
+        )}
+
+        {activeTab === 'wasteLog' && (
+          <WasteList items={wasteItems} onDeleteEntry={handleDeleteEntry} onClearAll={handleClearAll} />
+        )}
+
+        {activeTab === 'stockroom' && (
           <RecipeManager 
             recipes={recipes} 
             onAddRecipe={handleAddNewRecipe} 
             onClearRecipes={handleClearRecipes} 
           />
         )}
-      </div>
+      </main>
     </div>
   );
 }
