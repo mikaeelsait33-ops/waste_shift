@@ -1,13 +1,13 @@
 import { useMemo, useState } from 'react';
 import { STAFF_SECTIONS, getStaffSectionMeta, inferStaffSection } from '../utils/staffSections';
+import {
+  PREVENTABLE_REASONS,
+  getEntryFoodCostLost,
+  getEntryGrossProfitLost,
+  getEntryPotentialRevenueLost,
+} from '../utils/wasteCalculations';
 
 const timeframes = ['all', 'day', 'week', 'month', 'year'];
-
-const preventableReasons = new Set([
-  'Kitchen Prep Mistake',
-  'Passed Expiration Date',
-  'Spoiled/Overripe',
-]);
 
 const getMetricRows = (metricsObj, totalValue) => (
   Object.entries(metricsObj)
@@ -107,7 +107,9 @@ function Dashboard({ items, budget, settings, staffList }) {
   });
 
   const totalItems = filteredItems.length;
-  const totalFinancialLoss = filteredItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+  const totalFinancialLoss = filteredItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
+  const totalPotentialRevenueLost = filteredItems.reduce((sum, item) => sum + getEntryPotentialRevenueLost(item), 0);
+  const totalGrossProfitLost = filteredItems.reduce((sum, item) => sum + getEntryGrossProfitLost(item), 0);
   const averageLoss = totalItems > 0 ? totalFinancialLoss / totalItems : 0;
   const daysElapsed = today.getDate();
   const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
@@ -115,7 +117,7 @@ function Dashboard({ items, budget, settings, staffList }) {
     const itemDate = parseDate(item?.date);
     return itemDate.getMonth() === today.getMonth() && itemDate.getFullYear() === today.getFullYear();
   });
-  const currentMonthLoss = currentMonthItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+  const currentMonthLoss = currentMonthItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
   const remainingBudget = Math.max(0, budget - currentMonthLoss);
   const budgetUsagePercent = budget > 0 ? Math.min(100, (currentMonthLoss / budget) * 100) : 0;
   const todayItems = safeItems.filter((item) => {
@@ -123,12 +125,16 @@ function Dashboard({ items, budget, settings, staffList }) {
     itemDate.setHours(0, 0, 0, 0);
     return itemDate.getTime() === today.getTime();
   });
-  const todayLoss = todayItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+  const todayLoss = todayItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
+  const weekStart = new Date(today);
+  weekStart.setDate(weekStart.getDate() - 7);
+  const weekItems = safeItems.filter((item) => parseDate(item?.date) >= weekStart);
+  const weekLoss = weekItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
   const sectionDateItems = safeItems.filter((item) => isSameDay(parseDate(item?.date), sectionDate));
-  const sectionDateLoss = sectionDateItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+  const sectionDateLoss = sectionDateItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
   const sectionRings = STAFF_SECTIONS.map((section) => {
     const sectionItems = sectionDateItems.filter((item) => getItemStaffSection(item) === section.key);
-    const sectionLoss = sectionItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+    const sectionLoss = sectionItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
     const percent = sectionDateLoss > 0 ? Math.round((sectionLoss / sectionDateLoss) * 100) : 0;
 
     return {
@@ -150,25 +156,46 @@ function Dashboard({ items, budget, settings, staffList }) {
   const currentDailyAverage = daysElapsed > 0 ? currentMonthLoss / daysElapsed : 0;
   const projectedBudgetGap = budget > 0 ? projectedMonthLoss - budget : 0;
   const preventableLoss = filteredItems.reduce((sum, item) => (
-    preventableReasons.has(item?.reason) ? sum + (Number(item?.cost) || 0) : sum
+    PREVENTABLE_REASONS.has(item?.reason) ? sum + getEntryFoodCostLost(item) : sum
   ), 0);
   const preventablePercent = totalFinancialLoss > 0 ? Math.round((preventableLoss / totalFinancialLoss) * 100) : 0;
 
   const reasonMetrics = filteredItems.reduce((acc, item) => {
     const reason = item?.reason || 'Unknown';
-    acc[reason] = (acc[reason] || 0) + (Number(item?.cost) || 0);
+    acc[reason] = (acc[reason] || 0) + getEntryFoodCostLost(item);
     return acc;
   }, {});
 
   const staffMetrics = filteredItems.reduce((acc, item) => {
     const name = item?.staff || 'Unassigned';
-    acc[name] = (acc[name] || 0) + (Number(item?.cost) || 0);
+    acc[name] = (acc[name] || 0) + getEntryFoodCostLost(item);
     return acc;
   }, {});
 
   const itemMetrics = filteredItems.reduce((acc, item) => {
     const name = item?.name || 'Unknown';
-    acc[name] = (acc[name] || 0) + (Number(item?.cost) || 0);
+    acc[name] = (acc[name] || 0) + getEntryFoodCostLost(item);
+    return acc;
+  }, {});
+
+  const ingredientMetrics = filteredItems.reduce((acc, item) => {
+    if (item?.isRecipe && Array.isArray(item.ingredients) && item.ingredients.length > 0) {
+      item.ingredients.forEach((ingredient) => {
+        const name = ingredient?.name || 'Unknown ingredient';
+        acc[name] = (acc[name] || 0) + (Number(ingredient?.cost) || 0);
+      });
+      return acc;
+    }
+
+    const name = item?.name || 'Unknown ingredient';
+    acc[name] = (acc[name] || 0) + getEntryFoodCostLost(item);
+    return acc;
+  }, {});
+
+  const departmentMetrics = filteredItems.reduce((acc, item) => {
+    const sectionKey = item?.department || getItemStaffSection(item);
+    const section = getStaffSectionMeta(sectionKey);
+    acc[section.label] = (acc[section.label] || 0) + getEntryFoodCostLost(item);
     return acc;
   }, {});
 
@@ -182,7 +209,7 @@ function Dashboard({ items, budget, settings, staffList }) {
     }
 
     const category = item?.category || 'Other';
-    acc[category] = (acc[category] || 0) + (Number(item?.cost) || 0);
+    acc[category] = (acc[category] || 0) + getEntryFoodCostLost(item);
     return acc;
   }, {});
 
@@ -196,9 +223,12 @@ function Dashboard({ items, budget, settings, staffList }) {
   const topReason = getTopMetric(reasonMetrics);
   const topStaff = getTopMetric(staffMetrics);
   const topCategory = getTopMetric(categoryMetrics);
+  const topIngredient = getTopMetric(ingredientMetrics);
+  const topDepartment = getTopMetric(departmentMetrics);
   const reasonRows = getMetricRows(reasonMetrics, totalFinancialLoss);
   const staffRows = getMetricRows(staffMetrics, totalFinancialLoss);
   const categoryRows = getMetricRows(categoryMetrics, totalFinancialLoss);
+  const departmentRows = getMetricRows(departmentMetrics, totalFinancialLoss);
   const topReasonShare = totalFinancialLoss > 0 && topReason ? Math.round((topReason[1] / totalFinancialLoss) * 100) : 0;
   const topItemShare = totalFinancialLoss > 0 && topItem ? Math.round((topItem[1] / totalFinancialLoss) * 100) : 0;
 
@@ -218,6 +248,7 @@ function Dashboard({ items, budget, settings, staffList }) {
     topReason ? `${topReason[0]} is ${topReasonShare}% of loss in this view. Put it first in the next shift huddle.` : null,
     topItem ? `${topItem[0]} is ${topItemShare}% of loss here. Check prep quantity, holding time, or order volume.` : null,
     topCategory ? `${topCategory[0]} carries the highest category loss. Review par levels before the next order.` : null,
+    topDepartment ? `${topDepartment[0]} is the highest department contributor in this view. Check shift handover notes.` : null,
     budgetUsagePercent > 85 ? 'Monthly loss is near the limit. Add an end-of-shift review before closing.' : null,
     currentDailyAverage > dailyBudgetPace && dailyBudgetPace > 0 ? `Current daily loss average is R${(currentDailyAverage - dailyBudgetPace).toFixed(2)} above budget pace.` : null,
   ].filter(Boolean).slice(0, 4);
@@ -272,28 +303,36 @@ function Dashboard({ items, budget, settings, staffList }) {
 
         <div className="metrics-grid">
           <div className="metric-card">
-            <span className="metric-value">{totalItems}</span>
-            <span className="metric-label">Items wasted</span>
+            <span className={`metric-value${dailyValueLimit > 0 && todayLoss > dailyValueLimit ? ' is-danger' : ''}`}>R{todayLoss.toFixed(2)}</span>
+            <span className="metric-label">Today&apos;s food cost lost</span>
           </div>
           <div className="metric-card">
-            <span className="metric-value is-danger">R{totalFinancialLoss.toFixed(2)}</span>
-            <span className="metric-label">Financial loss</span>
+            <span className="metric-value is-danger">R{weekLoss.toFixed(2)}</span>
+            <span className="metric-label">This week&apos;s food cost lost</span>
+          </div>
+          <div className="metric-card">
+            <span className={`metric-value${budget > 0 && currentMonthLoss > budget ? ' is-danger' : ''}`}>R{currentMonthLoss.toFixed(2)}</span>
+            <span className="metric-label">This month&apos;s food cost lost</span>
+          </div>
+          <div className="metric-card">
+            <span className="metric-value">{totalItems}</span>
+            <span className="metric-label">Incidents in {timeframeLabel.toLowerCase()}</span>
+          </div>
+          <div className="metric-card">
+            <span className="metric-value is-danger">R{totalPotentialRevenueLost.toFixed(2)}</span>
+            <span className="metric-label">Potential revenue lost</span>
+          </div>
+          <div className="metric-card">
+            <span className={totalGrossProfitLost > 0 ? 'metric-value is-danger' : 'metric-value'}>R{totalGrossProfitLost.toFixed(2)}</span>
+            <span className="metric-label">Gross profit lost</span>
           </div>
           <div className="metric-card">
             <span className="metric-value">R{averageLoss.toFixed(2)}</span>
-            <span className="metric-label">Average loss per entry</span>
+            <span className="metric-label">Average food cost per entry</span>
           </div>
           <div className="metric-card">
             <span className={`metric-value${budget > 0 && projectedMonthLoss > budget ? ' is-danger' : ''}`}>R{projectedMonthLoss.toFixed(2)}</span>
-            <span className="metric-label">Projected month-end loss</span>
-          </div>
-          <div className="metric-card">
-            <span className={`metric-value${currentDailyAverage > dailyBudgetPace && dailyBudgetPace > 0 ? ' is-danger' : ''}`}>R{currentDailyAverage.toFixed(2)}</span>
-            <span className="metric-label">Current month daily average</span>
-          </div>
-          <div className="metric-card">
-            <span className="metric-value">R{dailyBudgetPace.toFixed(2)}</span>
-            <span className="metric-label">Daily budget pace</span>
+            <span className="metric-label">Projected month-end food cost</span>
           </div>
         </div>
 
@@ -304,12 +343,20 @@ function Dashboard({ items, budget, settings, staffList }) {
               <span className="insight-value">{topItem ? topItem[0] : 'N/A'}</span>
             </div>
             <div className="insight-item">
+              <span className="insight-label">Biggest ingredient</span>
+              <span className="insight-value">{topIngredient ? topIngredient[0] : 'N/A'}</span>
+            </div>
+            <div className="insight-item">
               <span className="insight-label">Primary cause</span>
               <span className="insight-value">{topReason ? topReason[0] : 'N/A'}</span>
             </div>
             <div className="insight-item">
-              <span className="insight-label">Highest cost by</span>
+              <span className="insight-label">Highest staff contributor</span>
               <span className="insight-value">{topStaff ? topStaff[0] : 'N/A'}</span>
+            </div>
+            <div className="insight-item">
+              <span className="insight-label">Biggest department</span>
+              <span className="insight-value">{topDepartment ? topDepartment[0] : 'N/A'}</span>
             </div>
           </div>
         )}
@@ -433,7 +480,7 @@ function Dashboard({ items, budget, settings, staffList }) {
         )}
 
         {totalItems > 0 && (
-          <div className="breakdown-grid breakdown-grid--three">
+          <div className="breakdown-grid breakdown-grid--four">
             <div>
               <h3 className="breakdown-title">Loss by reason</h3>
               {reasonRows.map((row) => (
@@ -472,6 +519,21 @@ function Dashboard({ items, budget, settings, staffList }) {
                   </div>
                 );
               })}
+            </div>
+
+            <div>
+              <h3 className="breakdown-title">Department contribution</h3>
+              {departmentRows.map((row) => (
+                  <div key={row.label} className="breakdown-item">
+                    <div className="breakdown-label">
+                      <span>{row.label}</span>
+                      <span>R{row.value.toFixed(2)} ({row.pct}%)</span>
+                    </div>
+                    <div className="progress-track">
+                      <div className="progress-fill" style={{ width: `${row.pct}%` }} />
+                    </div>
+                  </div>
+              ))}
             </div>
 
             <div>

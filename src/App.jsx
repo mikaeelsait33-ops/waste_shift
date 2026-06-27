@@ -8,15 +8,27 @@ import defaultRecipes from './data/defaultRecipes';
 import menuItemsCsv from './data/menuItems.csv?raw';
 import staffMembersCsv from './data/staffMembers.csv?raw';
 import { inferStaffSection } from './utils/staffSections';
+import { createInventoryMovementsFromEntry, getEntryFoodCostLost } from './utils/wasteCalculations';
 
 // Seed recipes from the bundled menu catalog.
 const DEFAULT_RECIPES = defaultRecipes;
-const DEFAULT_RECIPE_SEED_VERSION = 'makeline-guide-recipes-v4';
+const DEFAULT_RECIPE_SEED_VERSION = 'makeline-guide-recipes-v5';
 const SERVER_DATABASE_ENDPOINT = '/api/database';
+const OLD_DEFAULT_COST_BASIS = 'Menu price from menuItems.csv split evenly across listed ingredients.';
 const DEFAULT_SETTINGS = {
   dailyWasteValueLimit: 0,
   dailyWasteEntryLimit: 0,
 };
+
+const createAuditLogEntry = ({ action, user, relatedItem, beforeValue = null, afterValue = null }) => ({
+  id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  date: new Date().toISOString(),
+  user: user || 'System',
+  action,
+  beforeValue,
+  afterValue,
+  relatedItem: relatedItem || '',
+});
 
 const isRecipeMap = (value) => (
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -36,10 +48,16 @@ const cloneRecipeMap = (recipeMap) => Object.fromEntries(
 
 const mergeDefaultRecipeUpdates = (savedRecipeMap) => {
   const savedRecipes = cloneRecipeMap(savedRecipeMap);
-  const updatedRecipes = {
-    ...savedRecipes,
-    ...cloneRecipeMap(DEFAULT_RECIPES),
-  };
+  const updatedRecipes = { ...savedRecipes };
+  const defaultRecipesToMerge = cloneRecipeMap(DEFAULT_RECIPES);
+
+  Object.entries(defaultRecipesToMerge).forEach(([key, defaultRecipe]) => {
+    const savedRecipe = updatedRecipes[key];
+
+    if (!savedRecipe || savedRecipe.costBasis === OLD_DEFAULT_COST_BASIS) {
+      updatedRecipes[key] = defaultRecipe;
+    }
+  });
 
   return updatedRecipes;
 };
@@ -401,6 +419,30 @@ function App() {
     }
   });
 
+  const [activeStaffId, setActiveStaffId] = useState(() => localStorage.getItem('activeStaffId') || '');
+
+  const [inventoryMovements, setInventoryMovements] = useState(() => {
+    try {
+      const savedMovements = localStorage.getItem('inventoryMovements');
+      const parsed = savedMovements ? JSON.parse(savedMovements) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      console.error("Corrupted inventory movement history in storage, resetting.", e);
+      return [];
+    }
+  });
+
+  const [auditLog, setAuditLog] = useState(() => {
+    try {
+      const savedAuditLog = localStorage.getItem('auditLog');
+      const parsed = savedAuditLog ? JSON.parse(savedAuditLog) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      console.error("Corrupted audit log in storage, resetting.", e);
+      return [];
+    }
+  });
+
   const [lastSavedAt, setLastSavedAt] = useState(() => localStorage.getItem('wasteShiftLastSavedAt') || '');
 
   // Custom dynamic recipe database state loop
@@ -470,7 +512,10 @@ function App() {
     customMenuItems,
     portionProfiles,
     settings,
-  }), [wasteItems, budget, recipes, staffList, customStaffList, customMenuItems, portionProfiles, settings]);
+    activeStaffId,
+    inventoryMovements,
+    auditLog,
+  }), [wasteItems, budget, recipes, staffList, customStaffList, customMenuItems, portionProfiles, settings, activeStaffId, inventoryMovements, auditLog]);
 
   const applyDatabaseData = useCallback((databaseData) => {
     setWasteItems(Array.isArray(databaseData.wasteItems) ? databaseData.wasteItems : []);
@@ -480,6 +525,9 @@ function App() {
     setCustomMenuItems(sanitizeMenuItems(databaseData.customMenuItems));
     setPortionProfiles(sanitizePortionProfiles(databaseData.portionProfiles));
     setSettings(sanitizeSettings(databaseData.settings));
+    setActiveStaffId(String(databaseData.activeStaffId || ''));
+    setInventoryMovements(Array.isArray(databaseData.inventoryMovements) ? databaseData.inventoryMovements : []);
+    setAuditLog(Array.isArray(databaseData.auditLog) ? databaseData.auditLog : []);
   }, []);
 
   const saveDatabaseToServer = useCallback(async (mode = 'manual') => {
@@ -533,6 +581,15 @@ function App() {
   }, [settings]);
 
   useEffect(() => {
+    if (activeStaffId) {
+      localStorage.setItem('activeStaffId', activeStaffId);
+      return;
+    }
+
+    localStorage.removeItem('activeStaffId');
+  }, [activeStaffId]);
+
+  useEffect(() => {
     localStorage.setItem('customRecipes', JSON.stringify(recipes));
     localStorage.setItem('defaultRecipeSeedVersion', DEFAULT_RECIPE_SEED_VERSION);
   }, [recipes]);
@@ -551,10 +608,18 @@ function App() {
   }, [portionProfiles]);
 
   useEffect(() => {
+    localStorage.setItem('inventoryMovements', JSON.stringify(inventoryMovements));
+  }, [inventoryMovements]);
+
+  useEffect(() => {
+    localStorage.setItem('auditLog', JSON.stringify(auditLog));
+  }, [auditLog]);
+
+  useEffect(() => {
     const timestamp = new Date().toISOString();
     localStorage.setItem('wasteShiftLastSavedAt', timestamp);
     setLastSavedAt(timestamp);
-  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, settings]);
+  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, settings, activeStaffId, inventoryMovements, auditLog]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -627,7 +692,7 @@ function App() {
     }, 900);
 
     return () => window.clearTimeout(timeoutId);
-  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, settings, serverSyncEnabled, serverLoadComplete, saveDatabaseToServer]);
+  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, settings, activeStaffId, inventoryMovements, auditLog, serverSyncEnabled, serverLoadComplete, saveDatabaseToServer]);
 
   const handleAddStaff = (newStaffMember) => {
     setCustomStaffList(prev => {
@@ -655,6 +720,24 @@ function App() {
 
   const handleAddEntry = (newEntry) => {
     setWasteItems(prevItems => [...prevItems, newEntry]);
+    setInventoryMovements(prevMovements => [
+      ...prevMovements,
+      ...createInventoryMovementsFromEntry(newEntry),
+    ]);
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: 'Waste entry created',
+        user: newEntry.createdBy || newEntry.staff,
+        relatedItem: newEntry.name,
+        afterValue: {
+          id: newEntry.id,
+          foodCostLost: getEntryFoodCostLost(newEntry),
+          potentialRevenueLost: Number(newEntry.potentialRevenueLost) || 0,
+          reason: newEntry.reason,
+        },
+      }),
+      ...prevLog,
+    ].slice(0, 500));
   };
 
   const handleSavePortionProfile = (profile) => {
@@ -680,11 +763,27 @@ function App() {
   };
 
   const handleSaveSettings = ({ budget: nextBudget, dailyWasteValueLimit, dailyWasteEntryLimit }) => {
+    const previousSettings = { budget, ...settings };
+
     setBudget(parseFloat(nextBudget) || 0);
     setSettings(sanitizeSettings({
       dailyWasteValueLimit,
       dailyWasteEntryLimit,
     }));
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: 'Settings changed',
+        user: activeStaffId ? staffList.find((member) => member.id === activeStaffId)?.name : 'System',
+        relatedItem: 'Waste guardrails',
+        beforeValue: previousSettings,
+        afterValue: {
+          budget: parseFloat(nextBudget) || 0,
+          dailyWasteValueLimit,
+          dailyWasteEntryLimit,
+        },
+      }),
+      ...prevLog,
+    ].slice(0, 500));
   };
 
   const handleAddNewRecipe = (key, recipeObject) => {
@@ -724,7 +823,26 @@ function App() {
   };
 
   const handleDeleteEntry = (idToDelete) => {
+    const entryToDelete = wasteItems.find((item) => item.id === idToDelete);
+
     setWasteItems(prevItems => prevItems.filter(item => item.id !== idToDelete));
+    setInventoryMovements(prevMovements => prevMovements.filter((movement) => movement.wasteEntryId !== idToDelete));
+
+    if (entryToDelete) {
+      setAuditLog(prevLog => [
+        createAuditLogEntry({
+          action: 'Waste entry deleted',
+          user: staffList.find((member) => member.id === activeStaffId)?.name || entryToDelete.lastEditedBy || 'System',
+          relatedItem: entryToDelete.name,
+          beforeValue: {
+            id: entryToDelete.id,
+            foodCostLost: getEntryFoodCostLost(entryToDelete),
+            reason: entryToDelete.reason,
+          },
+        }),
+        ...prevLog,
+      ].slice(0, 500));
+    }
   };
 
   const handleRestoreEntry = (entryToRestore) => {
@@ -737,6 +855,22 @@ function App() {
         ? prevItems
         : [...prevItems, entryToRestore]
     ));
+    setInventoryMovements(prevMovements => [
+      ...prevMovements.filter((movement) => movement.wasteEntryId !== entryToRestore.id),
+      ...createInventoryMovementsFromEntry(entryToRestore),
+    ]);
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: 'Waste entry restored',
+        user: staffList.find((member) => member.id === activeStaffId)?.name || entryToRestore.lastEditedBy || 'System',
+        relatedItem: entryToRestore.name,
+        afterValue: {
+          id: entryToRestore.id,
+          foodCostLost: getEntryFoodCostLost(entryToRestore),
+        },
+      }),
+      ...prevLog,
+    ].slice(0, 500));
   };
 
   const handleClearAll = () => {
@@ -744,6 +878,19 @@ function App() {
 
     if (typedConfirmation === 'CLEAR WASTE') {
       setWasteItems([]);
+      setInventoryMovements([]);
+      setAuditLog(prevLog => [
+        createAuditLogEntry({
+          action: 'Waste log cleared',
+          user: staffList.find((member) => member.id === activeStaffId)?.name || 'System',
+          relatedItem: 'All waste entries',
+          beforeValue: {
+            entries: wasteItems.length,
+            foodCostLost: wasteItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0),
+          },
+        }),
+        ...prevLog,
+      ].slice(0, 500));
     }
   };
 
@@ -764,7 +911,7 @@ function App() {
     <div className="app-shell">
       <Navbar activePage={activeTab} onNavigate={setActiveTab} wasteCount={wasteItems.length} />
 
-      <main className={`app-page${activeTab === 'wasteLog' || activeTab === 'settings' ? ' app-page--wide' : ''}`}>
+      <main className={`app-page${activeTab === 'dashboard' || activeTab === 'wasteLog' || activeTab === 'settings' ? ' app-page--wide' : ''}`}>
         {activeTab === 'dashboard' && (
           <Dashboard items={wasteItems} budget={budget} settings={settings} staffList={staffList} />
         )}
@@ -778,6 +925,8 @@ function App() {
             staffList={staffList}
             portionProfiles={portionProfiles}
             onSavePortionProfile={handleSavePortionProfile}
+            activeStaffId={activeStaffId}
+            onActiveStaffChange={setActiveStaffId}
           />
         )}
 
@@ -800,6 +949,9 @@ function App() {
             menuItems={menuItems}
             customMenuItems={customMenuItems}
             portionProfiles={portionProfiles}
+            activeStaffId={activeStaffId}
+            inventoryMovements={inventoryMovements}
+            auditLog={auditLog}
             serverSync={serverSync}
             lastSavedAt={lastSavedAt}
             onSaveSettings={handleSaveSettings}

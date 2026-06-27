@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { getEntryFoodCostLost } from '../utils/wasteCalculations';
 
 const DATABASE_NAME = 'WasteShift Local Database';
 const DATABASE_VERSION = 1;
@@ -13,6 +14,9 @@ function DataManager({
   menuItems,
   customMenuItems,
   portionProfiles,
+  activeStaffId,
+  inventoryMovements,
+  auditLog,
   serverSync,
   onSaveToServer,
   lastSavedAt,
@@ -30,10 +34,12 @@ function DataManager({
   const portionProfileCount = portionProfiles && typeof portionProfiles === 'object'
     ? Object.keys(portionProfiles).length
     : 0;
+  const inventoryMovementCount = Array.isArray(inventoryMovements) ? inventoryMovements.length : 0;
+  const auditEventCount = Array.isArray(auditLog) ? auditLog.length : 0;
   const ingredientCount = Object.values(recipes).reduce((sum, recipe) => (
     sum + (Array.isArray(recipe.ingredients) ? recipe.ingredients.length : 0)
   ), 0);
-  const totalWasteValue = wasteItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+  const totalWasteValue = wasteItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
   const formatDateTime = (value) => (value ? new Date(value).toLocaleString() : 'Not yet');
   const formatFileSize = (bytes) => {
     if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB';
@@ -54,6 +60,8 @@ function DataManager({
       portionProfiles: data.portionProfiles && typeof data.portionProfiles === 'object' && !Array.isArray(data.portionProfiles)
         ? Object.keys(data.portionProfiles).length
         : 0,
+      inventoryMovements: Array.isArray(data.inventoryMovements) ? data.inventoryMovements.length : 0,
+      auditLog: Array.isArray(data.auditLog) ? data.auditLog.length : 0,
       budget: Number(data.budget) || 0,
     };
   };
@@ -76,6 +84,9 @@ function DataManager({
       customStaffList,
       customMenuItems,
       portionProfiles,
+      activeStaffId,
+      inventoryMovements,
+      auditLog,
     },
   });
 
@@ -113,6 +124,8 @@ function DataManager({
       || snapshot.data.portionProfiles === null
       || Array.isArray(snapshot.data.portionProfiles)
     )) return false;
+    if (snapshot.data.inventoryMovements !== undefined && !Array.isArray(snapshot.data.inventoryMovements)) return false;
+    if (snapshot.data.auditLog !== undefined && !Array.isArray(snapshot.data.auditLog)) return false;
     return true;
   };
 
@@ -232,6 +245,14 @@ function DataManager({
             <span className="metric-value">{menuItemCount}</span>
             <span className="metric-label">Menu items</span>
           </div>
+          <div className="metric-card">
+            <span className="metric-value">{inventoryMovementCount}</span>
+            <span className="metric-label">Inventory movements</span>
+          </div>
+          <div className="metric-card">
+            <span className="metric-value">{auditEventCount}</span>
+            <span className="metric-label">Audit events</span>
+          </div>
         </div>
 
         <div className="database-grid">
@@ -273,6 +294,8 @@ function DataManager({
               <span className="badge">{importPreview.staff} staff</span>
               <span className="badge">{importPreview.customMenuItems} custom prices</span>
               <span className="badge">{importPreview.portionProfiles} portions</span>
+              <span className="badge">{importPreview.inventoryMovements} movements</span>
+              <span className="badge">{importPreview.auditLog} audit events</span>
             </div>
           </div>
         )}
@@ -289,6 +312,14 @@ function DataManager({
           <div className="budget-row" style={{ marginTop: '10px' }}>
             <span className="small-text">Remembered portion sizes</span>
             <span className="badge">{portionProfileCount}</span>
+          </div>
+          <div className="budget-row" style={{ marginTop: '10px' }}>
+            <span className="small-text">Inventory movements</span>
+            <span className="badge">{inventoryMovementCount}</span>
+          </div>
+          <div className="budget-row" style={{ marginTop: '10px' }}>
+            <span className="small-text">Audit events</span>
+            <span className="badge">{auditEventCount}</span>
           </div>
           <div className="budget-row" style={{ marginTop: '10px' }}>
             <span className="small-text">App-added staff members</span>

@@ -2,11 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import DataManager from './DataManager';
 import RecipeManager from './RecipeManager';
 import { STAFF_SECTIONS, getStaffSectionMeta, inferStaffSection } from '../utils/staffSections';
+import { getEntryFoodCostLost } from '../utils/wasteCalculations';
 
 const settingsSections = [
   { key: 'limits', label: 'Limits' },
   { key: 'staff', label: 'Staff' },
   { key: 'items', label: 'Menu & Recipes' },
+  { key: 'audit', label: 'Audit' },
   { key: 'database', label: 'Database' },
   { key: 'danger', label: 'Danger' },
 ];
@@ -219,6 +221,111 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff }) {
   );
 }
 
+function AuditLogPanel({ auditLog, inventoryMovements }) {
+  const safeAuditLog = Array.isArray(auditLog) ? auditLog : [];
+  const safeInventoryMovements = Array.isArray(inventoryMovements) ? inventoryMovements : [];
+  const recentAuditLog = safeAuditLog.slice(0, 80);
+  const recentMovements = safeInventoryMovements.slice(-8).reverse();
+  const totalMovementValue = safeInventoryMovements.reduce((sum, movement) => (
+    sum + (Number(movement?.costImpact) || 0)
+  ), 0);
+  const formatDateTime = (value) => (value ? new Date(value).toLocaleString() : 'Not recorded');
+  const formatAuditValue = (value) => {
+    if (value === null || value === undefined || value === '') {
+      return '';
+    }
+
+    if (typeof value === 'string') {
+      return value;
+    }
+
+    return JSON.stringify(value);
+  };
+
+  return (
+    <section className="panel">
+      <div className="panel-body">
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">Commercial trust</p>
+            <h2 className="title">Audit Log</h2>
+            <p className="subtitle">Track operational changes and the waste-driven inventory movement history.</p>
+          </div>
+          <span className="badge">{safeAuditLog.length} events</span>
+        </div>
+
+        <div className="metrics-grid">
+          <div className="metric-card">
+            <span className="metric-value">{safeAuditLog.length}</span>
+            <span className="metric-label">Audit events</span>
+          </div>
+          <div className="metric-card">
+            <span className="metric-value">{safeInventoryMovements.length}</span>
+            <span className="metric-label">Inventory movements</span>
+          </div>
+          <div className="metric-card">
+            <span className="metric-value is-danger">R{totalMovementValue.toFixed(2)}</span>
+            <span className="metric-label">Waste movement value</span>
+          </div>
+          <div className="metric-card">
+            <span className="metric-value">{recentAuditLog[0]?.user || 'None'}</span>
+            <span className="metric-label">Last actor</span>
+          </div>
+        </div>
+
+        <div className="breakdown-grid breakdown-grid--two">
+          <div>
+            <h3 className="breakdown-title">Recent audit events</h3>
+            {recentAuditLog.length === 0 ? (
+              <div className="empty-state">No audit events recorded yet.</div>
+            ) : (
+              <div className="staff-list">
+                {recentAuditLog.map((event) => (
+                  <div key={event.id} className="staff-card">
+                    <div className="budget-row">
+                      <strong>{event.action}</strong>
+                      <span className="badge">{event.user || 'System'}</span>
+                    </div>
+                    <div className="small-text">{formatDateTime(event.date)}{event.relatedItem ? ` - ${event.relatedItem}` : ''}</div>
+                    {(event.beforeValue || event.afterValue) && (
+                      <div className="small-text">
+                        {event.beforeValue && `Before: ${formatAuditValue(event.beforeValue)}`}
+                        {event.beforeValue && event.afterValue ? ' | ' : ''}
+                        {event.afterValue && `After: ${formatAuditValue(event.afterValue)}`}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <h3 className="breakdown-title">Latest inventory movements</h3>
+            {recentMovements.length === 0 ? (
+              <div className="empty-state">No inventory movements recorded yet.</div>
+            ) : (
+              <div className="staff-list">
+                {recentMovements.map((movement) => (
+                  <div key={movement.id} className="staff-card">
+                    <div className="budget-row">
+                      <strong>{movement.ingredientName}</strong>
+                      <span className="price">R{(Number(movement.costImpact) || 0).toFixed(2)}</span>
+                    </div>
+                    <div className="small-text">
+                      {movement.changeLabel || 'Waste deduction'} - {movement.staff || 'Unassigned'} - {movement.date || 'No date'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function Settings({
   budget,
   settings,
@@ -229,6 +336,9 @@ function Settings({
   menuItems,
   customMenuItems,
   portionProfiles,
+  activeStaffId,
+  inventoryMovements,
+  auditLog,
   serverSync,
   lastSavedAt,
   onSaveSettings,
@@ -258,14 +368,14 @@ function Settings({
   }, [settings]);
 
   const todayItems = getTodayItems(wasteItems);
-  const todayLoss = todayItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+  const todayLoss = todayItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
   const today = new Date();
   const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
   const currentMonthItems = (Array.isArray(wasteItems) ? wasteItems : []).filter((item) => {
     const itemDate = parseDate(item?.date);
     return itemDate.getMonth() === today.getMonth() && itemDate.getFullYear() === today.getFullYear();
   });
-  const currentMonthLoss = currentMonthItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+  const currentMonthLoss = currentMonthItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
   const activeWasteDays = new Set(currentMonthItems.map((item) => item?.date).filter(Boolean)).size;
   const draftBudgetValue = Number(draftBudget) || 0;
   const recommendedDailyValueLimit = draftBudgetValue > 0 ? draftBudgetValue / daysInMonth : 0;
@@ -488,10 +598,20 @@ function Settings({
           menuItems={menuItems}
           customMenuItems={customMenuItems}
           portionProfiles={portionProfiles}
+          activeStaffId={activeStaffId}
+          inventoryMovements={inventoryMovements}
+          auditLog={auditLog}
           serverSync={serverSync}
           onSaveToServer={onSaveToServer}
           lastSavedAt={lastSavedAt}
           onRestoreDatabase={onRestoreDatabase}
+        />
+      )}
+
+      {activeSection === 'audit' && (
+        <AuditLogPanel
+          auditLog={auditLog}
+          inventoryMovements={inventoryMovements}
         />
       )}
 

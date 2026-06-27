@@ -83,21 +83,6 @@ const createMenuPriceMap = (csvText) => {
   );
 };
 
-const splitMenuPriceAcrossIngredients = (menuPrice, ingredients) => {
-  if (!Array.isArray(ingredients) || ingredients.length === 0) {
-    return [];
-  }
-
-  const totalCents = Math.round(menuPrice * 100);
-  const baseCents = Math.floor(totalCents / ingredients.length);
-  const remainderCents = totalCents - (baseCents * ingredients.length);
-
-  return ingredients.map((ingredient, index) => ({
-    ...ingredient,
-    cost: (baseCents + (index < remainderCents ? 1 : 0)) / 100,
-  }));
-};
-
 const menuPrices = createMenuPriceMap(menuItemsCsv);
 
 const defaultRecipes = Object.fromEntries(
@@ -113,8 +98,7 @@ const defaultRecipes = Object.fromEntries(
       {
         ...recipe,
         menuPrice,
-        costBasis: 'Menu price from menuItems.csv split evenly across listed ingredients.',
-        ingredients: splitMenuPriceAcrossIngredients(menuPrice, recipe.ingredients),
+        costBasis: 'Menu price from menuItems.csv. Ingredient costs stay editable and are not inferred from revenue.',
       },
     ];
   })

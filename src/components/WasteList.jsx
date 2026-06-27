@@ -1,5 +1,10 @@
 import { useState } from 'react';
 import DateNavigator from './DateNavigator';
+import {
+  getEntryFoodCostLost,
+  getEntryGrossProfitLost,
+  getEntryPotentialRevenueLost,
+} from '../utils/wasteCalculations';
 
 function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
   const [activeFilter, setActiveFilter] = useState('All');
@@ -67,14 +72,14 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
 
     return searchableParts.some((part) => String(part || '').toLowerCase().includes(searchValue));
   }).sort((a, b) => {
-    if (sortMode === 'highestCost') return (Number(b?.cost) || 0) - (Number(a?.cost) || 0);
+    if (sortMode === 'highestCost') return getEntryFoodCostLost(b) - getEntryFoodCostLost(a);
     if (sortMode === 'name') return String(a?.name || '').localeCompare(String(b?.name || ''));
     return parseDate(b?.date).getTime() - parseDate(a?.date).getTime();
   });
 
-  const totalCost = dateFilteredItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+  const totalCost = dateFilteredItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
   const totalCount = dateFilteredItems.length;
-  const filteredCost = filteredItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+  const filteredCost = filteredItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
   const hasActiveFilters = activeFilter !== 'All' || Boolean(searchValue);
   const filterCategories = ['All', 'Produce', 'Dairy', 'Bakery', 'Meat/Poultry', 'Pantry', 'Other'];
   const categoryCounts = filterCategories.reduce((acc, category) => {
@@ -121,9 +126,30 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
   };
 
   const exportFilteredItems = () => {
-    const headers = ['Date', 'Item', 'Quantity', 'Unit', 'Measured Quantity', 'Measured Unit', 'Type', 'Category', 'Reason', 'Staff', 'Cost', 'Ingredients'];
+    const headers = [
+      'Date',
+      'Time',
+      'Item',
+      'Quantity',
+      'Unit',
+      'Measured Quantity',
+      'Measured Unit',
+      'Type',
+      'Category',
+      'Department',
+      'Reason',
+      'Staff',
+      'Food Cost Lost',
+      'Selling Price',
+      'Potential Revenue Lost',
+      'Gross Profit Lost',
+      'Food Cost Percentage',
+      'Status',
+      'Ingredients',
+    ];
     const rows = filteredItems.map((item) => [
       item.date,
+      item.time || '',
       item.name,
       item.quantity,
       item.unit || '',
@@ -131,9 +157,15 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
       item.measuredUnit || '',
       item.isRecipe ? 'Recipe' : 'Ingredient',
       item.category,
+      item.department || '',
       item.reason,
       item.staff || '',
-      (Number(item.cost) || 0).toFixed(2),
+      getEntryFoodCostLost(item).toFixed(2),
+      item.sellingPrice || '',
+      getEntryPotentialRevenueLost(item).toFixed(2),
+      getEntryGrossProfitLost(item).toFixed(2),
+      item.foodCostPercentage ?? '',
+      item.status || '',
       Array.isArray(item.ingredients)
         ? item.ingredients.map((ingredient) => `${ingredient.name}${ingredient.quantity ? ` ${ingredient.quantity}` : ''} (${ingredient.category})`).join('; ')
         : '',
@@ -268,7 +300,9 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
       ) : (
         <ul className="log-list">
           {filteredItems.map((item) => {
-            const itemCost = Number(item?.cost) || 0;
+            const itemCost = getEntryFoodCostLost(item);
+            const revenueLost = getEntryPotentialRevenueLost(item);
+            const grossProfitLost = getEntryGrossProfitLost(item);
 
             return (
               <li key={item.id} className={`log-card ${item.isRecipe ? 'is-recipe' : 'is-single'}`}>
@@ -279,7 +313,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
                       <span className="small-text"> {formatQuantity(item)}</span>
                     </h3>
                     <span className="log-meta">
-                      {item.reason} - {item.date}{item.staff ? ` - ${item.staff}` : ''}
+                      {item.reason} - {item.date}{item.time ? ` ${item.time}` : ''}{item.staff ? ` - ${item.staff}` : ''}
                     </span>
                   </div>
 
@@ -290,6 +324,18 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
                     </button>
                   </div>
                 </div>
+
+                {item.isRecipe && (
+                  <div className="import-summary-grid log-financials">
+                    <span className="badge">Food cost R{itemCost.toFixed(2)}</span>
+                    <span className="badge">Revenue R{revenueLost.toFixed(2)}</span>
+                    <span className={grossProfitLost > 0 ? 'badge is-red' : 'badge'}>Gross R{grossProfitLost.toFixed(2)}</span>
+                    {item.foodCostPercentage !== null && item.foodCostPercentage !== undefined && (
+                      <span className="badge">{Number(item.foodCostPercentage).toFixed(1)}% food cost</span>
+                    )}
+                    {item.costStatus === 'needs_ingredient_costs' && <span className="badge is-red">Needs ingredient costs</span>}
+                  </div>
+                )}
 
                 {item.isRecipe && item.ingredients && (
                   <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border-soft)' }}>

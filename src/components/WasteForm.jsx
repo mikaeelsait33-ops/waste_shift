@@ -1,24 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-
-const splitCostAcrossIngredients = (totalCost, ingredients) => {
-  const safeIngredients = Array.isArray(ingredients) ? ingredients : [];
-
-  if (safeIngredients.length === 0 || totalCost <= 0) {
-    return safeIngredients.map((ingredient) => ({
-      ...ingredient,
-      cost: 0,
-    }));
-  }
-
-  const totalCents = Math.round(totalCost * 100);
-  const baseCents = Math.floor(totalCents / safeIngredients.length);
-  const remainderCents = totalCents - (baseCents * safeIngredients.length);
-
-  return safeIngredients.map((ingredient, index) => ({
-    ...ingredient,
-    cost: (baseCents + (index < remainderCents ? 1 : 0)) / 100,
-  }));
-};
+import {
+  WASTE_REASONS,
+  calculateMenuWasteFinancials,
+  getEntryFoodCostLost,
+  getMenuSellingPrice,
+  getRecipeIngredientTotal,
+  roundCurrency,
+} from '../utils/wasteCalculations';
 
 const WASTE_UNITS = [
   { value: 'g', label: 'grams (g)' },
@@ -38,19 +26,12 @@ const CATEGORY_OPTIONS = [
   { value: 'Pantry', label: 'Pantry Goods' },
 ];
 
-const REASON_OPTIONS = [
-  'Passed Expiration Date',
-  'Spoiled/Overripe',
-  'Kitchen Prep Mistake',
-  'Other',
-];
-
 const COMMON_REASON_BY_CATEGORY = {
-  Produce: 'Spoiled/Overripe',
-  Dairy: 'Passed Expiration Date',
-  Bakery: 'Passed Expiration Date',
-  'Meat/Poultry': 'Passed Expiration Date',
-  Pantry: 'Passed Expiration Date',
+  Produce: 'Spoiled',
+  Dairy: 'Expired',
+  Bakery: 'Expired',
+  'Meat/Poultry': 'Expired',
+  Pantry: 'Expired',
 };
 
 const createWasteItemKey = (itemName) => String(itemName || '')
@@ -78,17 +59,20 @@ function WasteForm({
   staffList,
   portionProfiles,
   onSavePortionProfile,
+  activeStaffId,
+  onActiveStaffChange,
 }) {
   const [formType, setFormType] = useState('single');
+  const [menuSearch, setMenuSearch] = useState('');
   const [name, setName] = useState('');
   const [quantity, setQuantity] = useState('1');
   const [unit, setUnit] = useState('g');
   const [portionAmount, setPortionAmount] = useState('');
   const [portionUnit, setPortionUnit] = useState('g');
   const [category, setCategory] = useState('Produce');
-  const [reason, setReason] = useState('Passed Expiration Date');
+  const [reason, setReason] = useState('Expired');
   const [customReason, setCustomReason] = useState('');
-  const [staff, setStaff] = useState('');
+  const [selectedStaffId, setSelectedStaffId] = useState(activeStaffId || '');
   const [cost, setCost] = useState('');
   const [formMessage, setFormMessage] = useState('');
 
@@ -102,10 +86,26 @@ function WasteForm({
   const [selectedRecipeKey, setSelectedRecipeKey] = useState(safeMenuItems[0]?.key || '');
   const selectedMenuItem = safeMenuItems.find((item) => item.key === selectedRecipeKey);
   const selectedRecipe = recipes[selectedRecipeKey];
-  const selectedRecipeTotal = Array.isArray(selectedRecipe?.ingredients)
-    ? selectedRecipe.ingredients.reduce((sum, ing) => sum + (Number(ing.cost) || 0), 0)
-    : 0;
-  const selectedMenuItemCost = Number(selectedMenuItem?.menuPrice ?? selectedRecipeTotal) || 0;
+  const selectedRecipeFinancials = calculateMenuWasteFinancials({
+    recipe: selectedRecipe,
+    menuItem: selectedMenuItem,
+    quantity,
+  });
+  const selectedRecipeTotal = getRecipeIngredientTotal(selectedRecipe?.ingredients);
+  const selectedMenuItemPrice = getMenuSellingPrice(selectedMenuItem, selectedRecipe);
+  const activeStaffMember = safeStaffList.find((member) => member.id === selectedStaffId);
+  const menuSearchValue = menuSearch.trim().toLowerCase();
+  const filteredMenuItems = menuSearchValue
+    ? safeMenuItems.filter((item) => [
+      item.name,
+      item.key,
+      recipes[item.key]?.name,
+      ...(Array.isArray(recipes[item.key]?.ingredients) ? recipes[item.key].ingredients.map((ingredient) => ingredient.name) : []),
+    ].some((part) => String(part || '').toLowerCase().includes(menuSearchValue)))
+    : safeMenuItems;
+  const menuItemOptions = selectedMenuItem && !filteredMenuItems.some((item) => item.key === selectedMenuItem.key)
+    ? [selectedMenuItem, ...filteredMenuItems]
+    : filteredMenuItems;
   const activeWasteItem = formType === 'recipe'
     ? {
       key: selectedRecipeKey,
@@ -144,6 +144,25 @@ function WasteForm({
       })
       .slice(0, 18);
   }, [safeWasteItems]);
+  const recentMenuItemProfiles = useMemo(() => {
+    const seenKeys = new Set();
+
+    return [...safeWasteItems]
+      .reverse()
+      .filter((item) => item?.isRecipe && (item?.recipeKey || item?.name))
+      .filter((item) => {
+        const key = item.recipeKey || createWasteItemKey(item.name);
+
+        if (!key || seenKeys.has(key)) {
+          return false;
+        }
+
+        seenKeys.add(key);
+        return true;
+      })
+      .slice(0, 6);
+  }, [safeWasteItems]);
+  const lastEntry = safeWasteItems[safeWasteItems.length - 1];
   const itemNameOptions = recentSingleItemProfiles.map((item) => item.name);
   const normalizedName = name.trim().toLowerCase();
   const matchingProfiles = normalizedName
@@ -154,11 +173,17 @@ function WasteForm({
   const exactProfile = normalizedName
     ? recentSingleItemProfiles.find((item) => String(item.name || '').toLowerCase() === normalizedName)
     : null;
-  const suggestedReason = exactProfile?.reason || COMMON_REASON_BY_CATEGORY[category] || 'Passed Expiration Date';
+  const suggestedReason = exactProfile?.reason || COMMON_REASON_BY_CATEGORY[category] || 'Expired';
   const previewCost = formType === 'recipe'
-    ? selectedMenuItemCost * (Number.isFinite(quantityValue) ? quantityValue : 0)
+    ? selectedRecipeFinancials.foodCostLost
     : parseFloat(cost);
   const previewCostLabel = Number.isFinite(previewCost) ? `R${previewCost.toFixed(2)}` : 'Cost pending';
+  const previewRevenueLabel = formType === 'recipe'
+    ? `Revenue R${selectedRecipeFinancials.potentialRevenueLost.toFixed(2)}`
+    : 'No revenue impact';
+  const previewProfitLabel = formType === 'recipe' && selectedRecipeFinancials.costStatus === 'calculated'
+    ? `Gross profit R${selectedRecipeFinancials.grossProfitLost.toFixed(2)}`
+    : 'Gross profit pending';
   const previewQuantityLabel = formType === 'recipe'
     ? `${formatNumber(quantityValue) || '0'} finished menu item${Number(quantityValue) === 1 ? '' : 's'}`
     : unit === 'portion'
@@ -181,7 +206,7 @@ function WasteForm({
       setPortionUnit(profile.portionSizeUnit || 'g');
     }
 
-    if (REASON_OPTIONS.includes(profile.reason)) {
+    if (WASTE_REASONS.includes(profile.reason)) {
       setReason(profile.reason);
       setCustomReason('');
     } else if (profile.reason) {
@@ -199,6 +224,12 @@ function WasteForm({
       setSelectedRecipeKey(safeMenuItems[0].key);
     }
   }, [safeMenuItems, selectedRecipeKey]);
+
+  useEffect(() => {
+    if (activeStaffId && activeStaffId !== selectedStaffId) {
+      setSelectedStaffId(activeStaffId);
+    }
+  }, [activeStaffId, selectedStaffId]);
 
   useEffect(() => {
     if (formType !== 'single' || unit !== 'portion') {
@@ -220,16 +251,8 @@ function WasteForm({
       return;
     }
 
-    const recipe = recipes[selectedRecipeKey];
-    const menuItem = safeMenuItems.find((item) => item.key === selectedRecipeKey);
-    const recipeTotal = Array.isArray(recipe?.ingredients)
-      ? recipe.ingredients.reduce((sum, ing) => sum + (Number(ing.cost) || 0), 0)
-      : 0;
-    const singleItemCost = Number(menuItem?.menuPrice ?? recipeTotal) || 0;
-    const qtyMultiplier = parseFloat(quantity) || 1;
-
-    setCost((singleItemCost * qtyMultiplier).toFixed(2));
-  }, [formType, selectedRecipeKey, quantity, recipes, safeMenuItems]);
+    setCost(selectedRecipeFinancials.foodCostLost.toFixed(2));
+  }, [formType, selectedRecipeFinancials.foodCostLost]);
 
   const handleFormTypeChange = (nextFormType) => {
     setFormType(nextFormType);
@@ -242,6 +265,53 @@ function WasteForm({
     if (nextFormType === 'single') {
       setCost('');
     }
+  };
+
+  const getTodayDateParts = () => {
+    const now = new Date();
+    const [year, month, day] = now.toISOString().split('T')[0].split('-');
+
+    return {
+      now,
+      formattedDate: `${day}/${month}/${year}`,
+      time: now.toTimeString().slice(0, 5),
+    };
+  };
+
+  const handleStaffChange = (staffId) => {
+    setSelectedStaffId(staffId);
+    onActiveStaffChange?.(staffId);
+  };
+
+  const handleRepeatLastEntry = () => {
+    if (!lastEntry) {
+      return;
+    }
+
+    const { now, formattedDate, time } = getTodayDateParts();
+    const repeatedStaff = activeStaffMember
+      ? {
+        staffId: activeStaffMember.id,
+        staff: activeStaffMember.name,
+        staffRole: activeStaffMember.role,
+        department: activeStaffMember.staffSection,
+        createdBy: activeStaffMember.name,
+        lastEditedBy: activeStaffMember.name,
+      }
+      : {};
+    const repeatedEntry = {
+      ...lastEntry,
+      ...repeatedStaff,
+      id: `${Date.now()}`,
+      date: formattedDate,
+      time,
+      createdAt: now.toISOString(),
+      status: 'logged',
+      repeatedFromId: lastEntry.id,
+    };
+
+    onAddEntry(repeatedEntry);
+    setFormMessage(`Repeated ${lastEntry.name} for R${getEntryFoodCostLost(repeatedEntry).toFixed(2)}.`);
   };
 
   const handleSubmit = (e) => {
@@ -293,8 +363,10 @@ function WasteForm({
       measuredUnit = portionUnit;
     }
 
-    if (!staff) {
-      setFormMessage('Select the responsible staff member.');
+    const selectedStaffMember = safeStaffList.find((member) => member.id === selectedStaffId);
+
+    if (!selectedStaffMember) {
+      setFormMessage('Choose who is logging waste for this shift.');
       return;
     }
 
@@ -305,16 +377,28 @@ function WasteForm({
     }
 
     const [y, m, d] = wasteDate.split('-');
+    const now = new Date();
     const formattedDate = `${d}/${m}/${y}`;
+    const entryTime = now.toTimeString().slice(0, 5);
 
     let finalEntry = {
       id: Date.now().toString(),
       reason: actualReason,
-      staff,
+      staffId: selectedStaffMember.id,
+      staff: selectedStaffMember.name,
+      staffRole: selectedStaffMember.role,
+      department: selectedStaffMember.staffSection,
       date: formattedDate,
+      time: entryTime,
+      createdAt: now.toISOString(),
+      createdBy: selectedStaffMember.name,
+      lastEditedBy: selectedStaffMember.name,
+      status: 'logged',
     };
 
     if (formType === 'single') {
+      const foodCostLost = roundCurrency(parseFloat(cost) || 0);
+
       finalEntry = {
         ...finalEntry,
         name,
@@ -325,27 +409,25 @@ function WasteForm({
         portionSize,
         portionSizeUnit,
         category,
-        cost: parseFloat(cost) || 0,
+        itemType: 'ingredient',
+        cost: foodCostLost,
+        foodCostLost,
+        sellingPrice: null,
+        potentialRevenueLost: 0,
+        grossProfitLost: 0,
+        foodCostPercentage: null,
+        costStatus: 'manual',
         isRecipe: false,
         ingredients: [],
       };
     } else {
       const activeRecipe = recipes[selectedRecipeKey];
       const activeMenuItem = safeMenuItems.find((item) => item.key === selectedRecipeKey);
-      const recipeTotal = Array.isArray(activeRecipe?.ingredients)
-        ? activeRecipe.ingredients.reduce((sum, ing) => sum + (Number(ing.cost) || 0), 0)
-        : 0;
-      const menuItemCost = Number(activeMenuItem?.menuPrice ?? recipeTotal) || 0;
-      const finalCost = menuItemCost * qtyMultiplier;
-      const targetCost = finalCost;
-      const parsedIngredients = Array.isArray(activeRecipe?.ingredients)
-        ? recipeTotal > 0
-          ? activeRecipe.ingredients.map((ing) => ({
-            ...ing,
-            cost: (Number(ing.cost) || 0) * (targetCost / recipeTotal),
-          }))
-          : splitCostAcrossIngredients(targetCost, activeRecipe.ingredients)
-        : [];
+      const financials = calculateMenuWasteFinancials({
+        recipe: activeRecipe,
+        menuItem: activeMenuItem,
+        quantity: qtyMultiplier,
+      });
 
       finalEntry = {
         ...finalEntry,
@@ -357,10 +439,17 @@ function WasteForm({
         portionSize,
         portionSizeUnit,
         category: activeRecipe ? 'Menu Recipe' : 'Menu Item',
-        cost: finalCost,
+        itemType: 'menuItem',
+        cost: financials.foodCostLost,
+        foodCostLost: financials.foodCostLost,
+        sellingPrice: financials.sellingPrice,
+        potentialRevenueLost: financials.potentialRevenueLost,
+        grossProfitLost: financials.grossProfitLost,
+        foodCostPercentage: financials.foodCostPercentage,
+        costStatus: financials.costStatus,
         isRecipe: Boolean(activeRecipe),
         recipeKey: selectedRecipeKey,
-        ingredients: parsedIngredients,
+        ingredients: financials.ingredients,
       };
     }
 
@@ -381,8 +470,7 @@ function WasteForm({
       setPortionAmount('');
       setPortionUnit('g');
     }
-    setStaff('');
-    setReason('Passed Expiration Date');
+    setReason('Expired');
     setCustomReason('');
     setWasteDate(getTodayYMD());
     if (formType === 'single') setCost('');
@@ -413,6 +501,34 @@ function WasteForm({
             className={`segment-button${formType === 'recipe' ? ' is-active' : ''}`}
           >
             Menu item
+          </button>
+        </div>
+
+        <div className="smart-panel shift-panel">
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label htmlFor="shift-staff">Logging as</label>
+            {safeStaffList.length === 0 ? (
+              <div className="muted-box" style={{ marginBottom: 0 }}>
+                <p className="small-text" style={{ margin: 0 }}>Add staff members in Settings before logging waste.</p>
+              </div>
+            ) : (
+              <select
+                id="shift-staff"
+                value={selectedStaffId}
+                onChange={(e) => handleStaffChange(e.target.value)}
+                className="select"
+              >
+                <option value="">Choose staff member</option>
+                {safeStaffList.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.name} - {member.role}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+          <button type="button" onClick={handleRepeatLastEntry} className="ghost-button is-warning" disabled={!lastEntry}>
+            Repeat last
           </button>
         </div>
 
@@ -472,20 +588,58 @@ function WasteForm({
             )}
           </>
         ) : (
-          <div className="field">
-            <label htmlFor="menu-item">Menu item</label>
-            {safeMenuItems.length === 0 ? (
-              <div className="muted-box">No menu items found.</div>
-            ) : (
-              <select id="menu-item" value={selectedRecipeKey} onChange={(e) => setSelectedRecipeKey(e.target.value)} className="select">
-                {safeMenuItems.map((item) => (
-                  <option key={item.key} value={item.key}>
-                    {item.name}{item.menuPrice !== null ? ` - R${item.menuPrice.toFixed(2)}` : ''}
-                  </option>
-                ))}
-              </select>
+          <>
+            <div className="field">
+              <label htmlFor="menu-search">Search menu item or ingredient</label>
+              <input
+                id="menu-search"
+                type="search"
+                value={menuSearch}
+                onChange={(e) => setMenuSearch(e.target.value)}
+                placeholder="Start typing a menu item"
+                className="input"
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor="menu-item">Menu item</label>
+              {safeMenuItems.length === 0 ? (
+                <div className="muted-box">No menu items found.</div>
+              ) : menuItemOptions.length === 0 ? (
+                <div className="muted-box">No menu items match this search.</div>
+              ) : (
+                <select id="menu-item" value={selectedRecipeKey} onChange={(e) => setSelectedRecipeKey(e.target.value)} className="select">
+                  {menuItemOptions.map((item) => (
+                    <option key={item.key} value={item.key}>
+                      {item.name}{item.menuPrice !== null ? ` - R${item.menuPrice.toFixed(2)}` : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+
+            {recentMenuItemProfiles.length > 0 && (
+              <div className="smart-panel">
+                <div className="smart-panel__header">
+                  <span className="breakdown-title">Recent menu items</span>
+                  <span className="badge">{recentMenuItemProfiles.length}</span>
+                </div>
+                <div className="suggestion-row">
+                  {recentMenuItemProfiles.map((profile) => (
+                    <button
+                      key={`${profile.id}-${profile.recipeKey || profile.name}`}
+                      type="button"
+                      onClick={() => setSelectedRecipeKey(profile.recipeKey || createWasteItemKey(profile.name))}
+                      className="suggestion-button"
+                    >
+                      <span>{profile.name}</span>
+                      <strong>R{getEntryFoodCostLost(profile).toFixed(2)}</strong>
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
-          </div>
+          </>
         )}
 
         {formType === 'recipe' && selectedRecipe && (
@@ -494,9 +648,21 @@ function WasteForm({
               <span className="breakdown-title">Recipe breakdown</span>
               <span className="badge">{Array.isArray(selectedRecipe.ingredients) ? selectedRecipe.ingredients.length : 0} ingredients</span>
             </div>
+            <div className="import-summary-grid" style={{ marginBottom: '12px' }}>
+              <span className="badge">Food cost R{selectedRecipeFinancials.foodCostLost.toFixed(2)}</span>
+              <span className={selectedMenuItemPrice > 0 ? 'badge is-green' : 'badge'}>Revenue R{selectedRecipeFinancials.potentialRevenueLost.toFixed(2)}</span>
+              <span className={selectedRecipeFinancials.costStatus === 'calculated' ? 'badge is-green' : 'badge is-red'}>
+                {selectedRecipeFinancials.costStatus === 'calculated'
+                  ? `Gross R${selectedRecipeFinancials.grossProfitLost.toFixed(2)}`
+                  : 'Add ingredient costs'}
+              </span>
+              {selectedRecipeFinancials.foodCostPercentage !== null && (
+                <span className="badge">{selectedRecipeFinancials.foodCostPercentage.toFixed(1)}% food cost</span>
+              )}
+            </div>
             {Array.isArray(selectedRecipe.ingredients) && selectedRecipe.ingredients.length > 0 ? (
               <div className="ingredient-list">
-                {selectedRecipe.ingredients.slice(0, 5).map((ingredient, index) => (
+                {selectedRecipeFinancials.ingredients.slice(0, 5).map((ingredient, index) => (
                   <div key={`${ingredient.name}-${index}`} className="ingredient-card item-row">
                     <span className="small-text">
                       {ingredient.name}
@@ -543,7 +709,7 @@ function WasteForm({
           )}
 
           <div className="field">
-            <label htmlFor="cost-loss">{formType === 'recipe' ? 'Calculated cost loss' : 'Cost loss'}</label>
+            <label htmlFor="cost-loss">{formType === 'recipe' ? 'Food cost lost' : 'Cost loss'}</label>
             <input
               id="cost-loss"
               type="number"
@@ -599,25 +765,6 @@ function WasteForm({
         )}
 
         <div className="field">
-          <label htmlFor="responsible-staff">Responsible staff member</label>
-
-          {safeStaffList.length === 0 ? (
-            <div className="muted-box">
-              <p className="small-text" style={{ margin: 0 }}>Add staff members in Settings before logging waste.</p>
-            </div>
-          ) : (
-            <select id="responsible-staff" value={staff} onChange={(e) => setStaff(e.target.value)} className="select">
-              <option value="">Choose staff member</option>
-              {safeStaffList.map((member) => (
-                <option key={member.id} value={member.name}>
-                  {member.name} - {member.role}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-
-        <div className="field">
           <label htmlFor="waste-date">Date of waste</label>
           <input
             id="waste-date"
@@ -632,10 +779,11 @@ function WasteForm({
         <div className="field">
           <label htmlFor="waste-reason">Reason for waste</label>
           <select id="waste-reason" value={reason} onChange={(e) => setReason(e.target.value)} className="select">
-            <option value="Passed Expiration Date">Passed expiration date</option>
-            <option value="Spoiled/Overripe">Spoiled / overripe</option>
-            <option value="Kitchen Prep Mistake">Kitchen prep mistake</option>
-            <option value="Other">Other</option>
+            {WASTE_REASONS.map((reasonOption) => (
+              <option key={reasonOption} value={reasonOption}>
+                {reasonOption}
+              </option>
+            ))}
           </select>
           {suggestedReason && suggestedReason !== reason && (
             <button
@@ -668,9 +816,16 @@ function WasteForm({
               {previewCostLabel}
             </span>
           </div>
+          <div className="import-summary-grid">
+            <span className="badge">{previewRevenueLabel}</span>
+            {formType === 'recipe' && <span className="badge">{previewProfitLabel}</span>}
+            {formType === 'recipe' && selectedRecipeTotal > 0 && (
+              <span className="badge">Base cost R{selectedRecipeTotal.toFixed(2)}</span>
+            )}
+          </div>
           <div className="small-text">
             {previewQuantityLabel}
-            {formType === 'recipe' && selectedMenuItemCost <= 0 ? ' - add a price or ingredient costs in Settings' : ''}
+            {formType === 'recipe' && selectedRecipeFinancials.costStatus !== 'calculated' ? ' - add ingredient costs in Settings or via invoice import' : ''}
           </div>
         </div>
 
