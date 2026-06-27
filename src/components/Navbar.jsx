@@ -2,9 +2,7 @@ const navItems = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'logWaste', label: 'Log Waste' },
   { key: 'wasteLog', label: 'Waste Log' },
-  { key: 'recipes', label: 'Recipes' },
-  { key: 'menu', label: 'Menu' },
-  { key: 'database', label: 'Database' },
+  { key: 'settings', label: 'Settings' },
 ];
 
 function Navbar({ activePage, onNavigate, wasteCount = 0 }) {
@@ -28,9 +26,12 @@ function Navbar({ activePage, onNavigate, wasteCount = 0 }) {
               type="button"
               className={`nav-button${isActive ? ' is-active' : ''}`}
               onClick={() => onNavigate(item.key)}
+              aria-current={isActive ? 'page' : undefined}
             >
               {item.label}
-              {item.key === 'wasteLog' && wasteCount > 0 ? ` (${wasteCount})` : ''}
+              {item.key === 'wasteLog' && wasteCount > 0 && (
+                <span className="nav-count">{wasteCount}</span>
+              )}
             </button>
           );
         })}

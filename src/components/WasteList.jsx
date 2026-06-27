@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import DateNavigator from './DateNavigator';
 
-function WasteList({ items, onDeleteEntry, onClearAll }) {
+function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
   const [activeFilter, setActiveFilter] = useState('All');
   const [searchTerm, setSearchTerm] = useState('');
   const [sortMode, setSortMode] = useState('newest');
   const [viewMode, setViewMode] = useState('day');
+  const [deletedEntry, setDeletedEntry] = useState(null);
   const [selectedDate, setSelectedDate] = useState(() => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
@@ -43,10 +44,15 @@ function WasteList({ items, onDeleteEntry, onClearAll }) {
 
   const searchValue = searchTerm.trim().toLowerCase();
 
+  const itemMatchesCategory = (item, category) => {
+    if (category === 'All') return true;
+    if (item.isRecipe) return item.ingredients.some((ing) => ing.category === category);
+    return item.category === category;
+  };
+
   const filteredItems = dateFilteredItems.filter((item) => {
     if (activeFilter === 'All') return true;
-    if (item.isRecipe) return item.ingredients.some((ing) => ing.category === activeFilter);
-    return item.category === activeFilter;
+    return itemMatchesCategory(item, activeFilter);
   }).filter((item) => {
     if (!searchValue) return true;
 
@@ -55,6 +61,7 @@ function WasteList({ items, onDeleteEntry, onClearAll }) {
       item?.reason,
       item?.staff,
       item?.category,
+      item?.unit,
       ...(Array.isArray(item?.ingredients) ? item.ingredients.map((ingredient) => ingredient.name) : []),
     ];
 
@@ -67,7 +74,42 @@ function WasteList({ items, onDeleteEntry, onClearAll }) {
 
   const totalCost = dateFilteredItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
   const totalCount = dateFilteredItems.length;
+  const filteredCost = filteredItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+  const hasActiveFilters = activeFilter !== 'All' || Boolean(searchValue);
   const filterCategories = ['All', 'Produce', 'Dairy', 'Bakery', 'Meat/Poultry', 'Pantry', 'Other'];
+  const categoryCounts = filterCategories.reduce((acc, category) => {
+    acc[category] = dateFilteredItems.filter((item) => itemMatchesCategory(item, category)).length;
+    return acc;
+  }, {});
+  const unitLabels = {
+    g: 'g',
+    kg: 'kg',
+    ml: 'ml',
+    l: 'L',
+    portion: 'portion',
+  };
+
+  const formatQuantity = (item) => {
+    const itemQuantity = item?.quantity || '1';
+    const itemUnit = item?.unit;
+    const measuredQuantity = Number(item?.measuredQuantity);
+    const measuredUnit = item?.measuredUnit;
+
+    if (!itemUnit) {
+      return `x${itemQuantity}`;
+    }
+
+    if (itemUnit === 'portion') {
+      const suffix = Number(itemQuantity) === 1 ? 'portion' : 'portions';
+      const measuredLabel = Number.isFinite(measuredQuantity) && measuredQuantity > 0 && measuredUnit
+        ? ` = ${measuredQuantity.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')} ${unitLabels[measuredUnit] || measuredUnit}`
+        : '';
+
+      return `${itemQuantity} ${suffix}${measuredLabel}`;
+    }
+
+    return `${itemQuantity} ${unitLabels[itemUnit] || itemUnit}`;
+  };
 
   const escapeCsv = (value) => {
     const text = String(value ?? '');
@@ -75,11 +117,14 @@ function WasteList({ items, onDeleteEntry, onClearAll }) {
   };
 
   const exportFilteredItems = () => {
-    const headers = ['Date', 'Item', 'Quantity', 'Type', 'Category', 'Reason', 'Staff', 'Cost', 'Ingredients'];
+    const headers = ['Date', 'Item', 'Quantity', 'Unit', 'Measured Quantity', 'Measured Unit', 'Type', 'Category', 'Reason', 'Staff', 'Cost', 'Ingredients'];
     const rows = filteredItems.map((item) => [
       item.date,
       item.name,
       item.quantity,
+      item.unit || '',
+      item.measuredQuantity || '',
+      item.measuredUnit || '',
       item.isRecipe ? 'Recipe' : 'Ingredient',
       item.category,
       item.reason,
@@ -100,6 +145,22 @@ function WasteList({ items, onDeleteEntry, onClearAll }) {
     URL.revokeObjectURL(url);
   };
 
+  const handleDeleteClick = (item) => {
+    onDeleteEntry(item.id);
+    setDeletedEntry(item);
+  };
+
+  const handleUndoDelete = () => {
+    if (!deletedEntry) return;
+    onRestoreEntry?.(deletedEntry);
+    setDeletedEntry(null);
+  };
+
+  const clearFilters = () => {
+    setActiveFilter('All');
+    setSearchTerm('');
+  };
+
   return (
     <section className="list-page">
       <div className="section-header">
@@ -108,11 +169,6 @@ function WasteList({ items, onDeleteEntry, onClearAll }) {
           <h2 className="title">Logged Items</h2>
           <p className="subtitle">Review entries by date range and category.</p>
         </div>
-        {items.length > 0 && (
-          <button type="button" onClick={onClearAll} className="danger-button">
-            Clear all
-          </button>
-        )}
       </div>
 
       <DateNavigator
@@ -140,14 +196,35 @@ function WasteList({ items, onDeleteEntry, onClearAll }) {
         </button>
       </div>
 
+      {deletedEntry && (
+        <div className="undo-banner" role="status">
+          <span>
+            Removed <strong>{deletedEntry.name}</strong>
+          </span>
+          <div className="manager-row">
+            <button type="button" onClick={handleUndoDelete} className="ghost-button is-warning">
+              Undo
+            </button>
+            <button type="button" onClick={() => setDeletedEntry(null)} className="ghost-button">
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
       {viewMode !== 'all' && (
         <div className="budget-panel" style={{ marginBottom: '14px' }}>
           <div className="budget-row">
             <span className="small-text">
-              <strong>{totalCount}</strong> item{totalCount !== 1 ? 's' : ''} logged
+              <strong>{hasActiveFilters ? filteredItems.length : totalCount}</strong> item{(hasActiveFilters ? filteredItems.length : totalCount) !== 1 ? 's' : ''} shown
             </span>
-            <span className="price">R{totalCost.toFixed(2)}</span>
+            <span className="price">R{(hasActiveFilters ? filteredCost : totalCost).toFixed(2)}</span>
           </div>
+          {hasActiveFilters && (
+            <div className="small-text">
+              Scope total: {totalCount} item{totalCount !== 1 ? 's' : ''} worth R{totalCost.toFixed(2)}
+            </div>
+          )}
         </div>
       )}
 
@@ -160,19 +237,27 @@ function WasteList({ items, onDeleteEntry, onClearAll }) {
             className={`pill-button${activeFilter === cat ? ' is-active' : ''}`}
           >
             {cat}
+            <span className="pill-count">{categoryCounts[cat] || 0}</span>
           </button>
         ))}
       </div>
 
       {filteredItems.length === 0 ? (
         <div className="empty-state">
-          {searchValue
-            ? 'No items match your search.'
-            : viewMode === 'all'
-            ? 'No items found under this scope.'
-            : viewMode === 'day'
-              ? 'No waste was logged on this day.'
-              : 'No waste was logged this month.'}
+          <p style={{ margin: 0 }}>
+            {searchValue
+              ? 'No items match your search.'
+              : viewMode === 'all'
+              ? 'No items found under this scope.'
+              : viewMode === 'day'
+                ? 'No waste was logged on this day.'
+                : 'No waste was logged this month.'}
+          </p>
+          {hasActiveFilters && (
+            <button type="button" onClick={clearFilters} className="ghost-button compact-action">
+              Clear filters
+            </button>
+          )}
         </div>
       ) : (
         <ul className="log-list">
@@ -185,7 +270,7 @@ function WasteList({ items, onDeleteEntry, onClearAll }) {
                   <div>
                     <h3 className="log-title">
                       {item.name}
-                      <span className="small-text"> x{item.quantity}</span>
+                      <span className="small-text"> {formatQuantity(item)}</span>
                     </h3>
                     <span className="log-meta">
                       {item.reason} - {item.date}{item.staff ? ` - ${item.staff}` : ''}
@@ -194,7 +279,7 @@ function WasteList({ items, onDeleteEntry, onClearAll }) {
 
                   <div className="manager-row">
                     <span className="price">R{itemCost.toFixed(2)}</span>
-                    <button type="button" onClick={() => onDeleteEntry(item.id)} className="delete-button" title={`Delete ${item.name}`}>
+                    <button type="button" onClick={() => handleDeleteClick(item)} className="delete-button" title={`Delete ${item.name}`}>
                       x
                     </button>
                   </div>

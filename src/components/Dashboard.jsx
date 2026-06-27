@@ -8,9 +8,17 @@ const preventableReasons = new Set([
   'Spoiled/Overripe',
 ]);
 
-function Dashboard({ items, budget, setBudget }) {
-  const [isEditingBudget, setIsEditingBudget] = useState(false);
-  const [tempBudget, setTempBudget] = useState(budget);
+const getMetricRows = (metricsObj, totalValue) => (
+  Object.entries(metricsObj)
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, value]) => ({
+      label,
+      value,
+      pct: totalValue > 0 ? Math.round((value / totalValue) * 100) : 0,
+    }))
+);
+
+function Dashboard({ items, budget, settings }) {
   const [timeframe, setTimeframe] = useState('all');
 
   const safeItems = Array.isArray(items) ? items : [];
@@ -52,8 +60,6 @@ function Dashboard({ items, budget, setBudget }) {
   const totalItems = filteredItems.length;
   const totalFinancialLoss = filteredItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
   const averageLoss = totalItems > 0 ? totalFinancialLoss / totalItems : 0;
-  const remainingBudget = Math.max(0, budget - totalFinancialLoss);
-  const budgetUsagePercent = budget > 0 ? Math.min(100, (totalFinancialLoss / budget) * 100) : 0;
   const daysElapsed = today.getDate();
   const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
   const currentMonthItems = safeItems.filter((item) => {
@@ -61,10 +67,26 @@ function Dashboard({ items, budget, setBudget }) {
     return itemDate.getMonth() === today.getMonth() && itemDate.getFullYear() === today.getFullYear();
   });
   const currentMonthLoss = currentMonthItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+  const remainingBudget = Math.max(0, budget - currentMonthLoss);
+  const budgetUsagePercent = budget > 0 ? Math.min(100, (currentMonthLoss / budget) * 100) : 0;
+  const todayItems = safeItems.filter((item) => {
+    const itemDate = parseDate(item?.date);
+    itemDate.setHours(0, 0, 0, 0);
+    return itemDate.getTime() === today.getTime();
+  });
+  const todayLoss = todayItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+  const dailyValueLimit = Number(settings?.dailyWasteValueLimit) || 0;
+  const dailyEntryLimit = Number(settings?.dailyWasteEntryLimit) || 0;
+  const dailyValueUsagePercent = dailyValueLimit > 0 ? Math.min(100, (todayLoss / dailyValueLimit) * 100) : 0;
+  const dailyEntryUsagePercent = dailyEntryLimit > 0 ? Math.min(100, (todayItems.length / dailyEntryLimit) * 100) : 0;
   const projectedMonthLoss = daysElapsed > 0 ? (currentMonthLoss / daysElapsed) * daysInMonth : 0;
+  const dailyBudgetPace = budget > 0 ? budget / daysInMonth : 0;
+  const currentDailyAverage = daysElapsed > 0 ? currentMonthLoss / daysElapsed : 0;
+  const projectedBudgetGap = budget > 0 ? projectedMonthLoss - budget : 0;
   const preventableLoss = filteredItems.reduce((sum, item) => (
     preventableReasons.has(item?.reason) ? sum + (Number(item?.cost) || 0) : sum
   ), 0);
+  const preventablePercent = totalFinancialLoss > 0 ? Math.round((preventableLoss / totalFinancialLoss) * 100) : 0;
 
   const reasonMetrics = filteredItems.reduce((acc, item) => {
     const reason = item?.reason || 'Unknown';
@@ -108,19 +130,31 @@ function Dashboard({ items, budget, setBudget }) {
   const topReason = getTopMetric(reasonMetrics);
   const topStaff = getTopMetric(staffMetrics);
   const topCategory = getTopMetric(categoryMetrics);
-
-  const saveBudget = () => {
-    setBudget(parseFloat(tempBudget) || 0);
-    setIsEditingBudget(false);
-  };
+  const reasonRows = getMetricRows(reasonMetrics, totalFinancialLoss);
+  const staffRows = getMetricRows(staffMetrics, totalFinancialLoss);
+  const categoryRows = getMetricRows(categoryMetrics, totalFinancialLoss);
+  const topReasonShare = totalFinancialLoss > 0 && topReason ? Math.round((topReason[1] / totalFinancialLoss) * 100) : 0;
+  const topItemShare = totalFinancialLoss > 0 && topItem ? Math.round((topItem[1] / totalFinancialLoss) * 100) : 0;
 
   const timeframeLabel = timeframe === 'all' ? 'All Time' : timeframe === 'day' ? 'Today' : `This ${timeframe}`;
+  const attentionItems = [
+    budget > 0 && projectedBudgetGap > 0
+      ? `Projected month-end loss is R${projectedBudgetGap.toFixed(2)} over the monthly limit.`
+      : null,
+    dailyValueLimit > 0 && todayLoss > dailyValueLimit
+      ? `Today's waste value is R${(todayLoss - dailyValueLimit).toFixed(2)} over the daily value limit.`
+      : null,
+    dailyEntryLimit > 0 && todayItems.length > dailyEntryLimit
+      ? `Today's entry count is ${todayItems.length - dailyEntryLimit} over the daily entry limit.`
+      : null,
+  ].filter(Boolean);
   const actionRecommendations = [
-    topReason ? `Focus this week on "${topReason[0]}" - it is currently the largest waste cause.` : null,
-    topItem ? `Add a prep or ordering check for ${topItem[0]}, your highest-loss item in this view.` : null,
-    topCategory ? `Review par levels for ${topCategory[0]}, the category carrying the most loss.` : null,
-    budgetUsagePercent > 85 ? 'You are near the loss limit. Hold a quick end-of-shift review before closing.' : null,
-  ].filter(Boolean).slice(0, 3);
+    topReason ? `${topReason[0]} is ${topReasonShare}% of loss in this view. Put it first in the next shift huddle.` : null,
+    topItem ? `${topItem[0]} is ${topItemShare}% of loss here. Check prep quantity, holding time, or order volume.` : null,
+    topCategory ? `${topCategory[0]} carries the highest category loss. Review par levels before the next order.` : null,
+    budgetUsagePercent > 85 ? 'Monthly loss is near the limit. Add an end-of-shift review before closing.' : null,
+    currentDailyAverage > dailyBudgetPace && dailyBudgetPace > 0 ? `Current daily loss average is R${(currentDailyAverage - dailyBudgetPace).toFixed(2)} above budget pace.` : null,
+  ].filter(Boolean).slice(0, 4);
 
   return (
     <section className="panel">
@@ -146,6 +180,30 @@ function Dashboard({ items, budget, setBudget }) {
           </div>
         </div>
 
+        {safeItems.length === 0 && (
+          <div className="notice-panel notice-panel--warning">
+            <div>
+              <h3 className="breakdown-title">Ready for first entry</h3>
+              <p className="small-text" style={{ margin: 0 }}>
+                The dashboard will rank causes, staff, categories, and budget pace once waste is logged.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {attentionItems.length > 0 && (
+          <div className="notice-panel">
+            <div>
+              <h3 className="breakdown-title">Needs attention</h3>
+              <div className="action-list">
+                {attentionItems.map((attentionItem) => (
+                  <div key={attentionItem} className="action-card">{attentionItem}</div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="metrics-grid">
           <div className="metric-card">
             <span className="metric-value">{totalItems}</span>
@@ -160,8 +218,16 @@ function Dashboard({ items, budget, setBudget }) {
             <span className="metric-label">Average loss per entry</span>
           </div>
           <div className="metric-card">
-            <span className={`metric-value${projectedMonthLoss > budget ? ' is-danger' : ''}`}>R{projectedMonthLoss.toFixed(2)}</span>
+            <span className={`metric-value${budget > 0 && projectedMonthLoss > budget ? ' is-danger' : ''}`}>R{projectedMonthLoss.toFixed(2)}</span>
             <span className="metric-label">Projected month-end loss</span>
+          </div>
+          <div className="metric-card">
+            <span className={`metric-value${currentDailyAverage > dailyBudgetPace && dailyBudgetPace > 0 ? ' is-danger' : ''}`}>R{currentDailyAverage.toFixed(2)}</span>
+            <span className="metric-label">Current month daily average</span>
+          </div>
+          <div className="metric-card">
+            <span className="metric-value">R{dailyBudgetPace.toFixed(2)}</span>
+            <span className="metric-label">Daily budget pace</span>
           </div>
         </div>
 
@@ -185,24 +251,7 @@ function Dashboard({ items, budget, setBudget }) {
         <div className="budget-panel">
           <div className="budget-row">
             <span className="field-label">Monthly loss limit</span>
-            {isEditingBudget ? (
-              <div className="manager-row">
-                <input
-                  type="number"
-                  value={tempBudget}
-                  onChange={(e) => setTempBudget(e.target.value)}
-                  className="input"
-                  style={{ width: '110px' }}
-                />
-                <button type="button" onClick={saveBudget} className="ghost-button is-warning">
-                  Save
-                </button>
-              </div>
-            ) : (
-              <button type="button" onClick={() => setIsEditingBudget(true)} className="ghost-button is-warning">
-                R{budget.toFixed(2)}
-              </button>
-            )}
+            <span className="badge">R{budget.toFixed(2)}</span>
           </div>
 
           <div className="progress-track">
@@ -213,6 +262,35 @@ function Dashboard({ items, budget, setBudget }) {
           </div>
           <span className="small-text">R{remainingBudget.toFixed(2)} remaining before threshold breach</span>
         </div>
+
+        {(dailyValueLimit > 0 || dailyEntryLimit > 0) && (
+          <div className="budget-panel">
+            <h3 className="breakdown-title">Today&apos;s limits</h3>
+            {dailyValueLimit > 0 && (
+              <div className="breakdown-item">
+                <div className="breakdown-label">
+                  <span>Waste value</span>
+                  <span>R{todayLoss.toFixed(2)} / R{dailyValueLimit.toFixed(2)}</span>
+                </div>
+                <div className="progress-track">
+                  <div className={`progress-fill${todayLoss > dailyValueLimit ? ' is-danger' : ''}`} style={{ width: `${dailyValueUsagePercent}%` }} />
+                </div>
+              </div>
+            )}
+
+            {dailyEntryLimit > 0 && (
+              <div className="breakdown-item">
+                <div className="breakdown-label">
+                  <span>Waste entries</span>
+                  <span>{todayItems.length} / {dailyEntryLimit}</span>
+                </div>
+                <div className="progress-track">
+                  <div className={`progress-fill${todayItems.length > dailyEntryLimit ? ' is-danger' : ''}`} style={{ width: `${dailyEntryUsagePercent}%` }} />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {totalItems > 0 && (
           <div className="action-panel">
@@ -226,7 +304,7 @@ function Dashboard({ items, budget, setBudget }) {
             </div>
             <div className="metric-card">
               <span className="metric-value is-danger">R{preventableLoss.toFixed(2)}</span>
-              <span className="metric-label">Preventable loss in this view</span>
+              <span className="metric-label">Preventable loss in this view ({preventablePercent}%)</span>
             </div>
           </div>
         )}
@@ -235,62 +313,47 @@ function Dashboard({ items, budget, setBudget }) {
           <div className="breakdown-grid breakdown-grid--three">
             <div>
               <h3 className="breakdown-title">Loss by reason</h3>
-              {Object.keys(reasonMetrics).map((reasonKey) => {
-                const cost = reasonMetrics[reasonKey] || 0;
-                const pct = totalFinancialLoss > 0 ? ((cost / totalFinancialLoss) * 100).toFixed(0) : 0;
-
-                return (
-                  <div key={reasonKey} className="breakdown-item">
+              {reasonRows.map((row) => (
+                  <div key={row.label} className="breakdown-item">
                     <div className="breakdown-label">
-                      <span>{reasonKey}</span>
-                      <span>R{cost.toFixed(2)} ({pct}%)</span>
+                      <span>{row.label}</span>
+                      <span>R{row.value.toFixed(2)} ({row.pct}%)</span>
                     </div>
                     <div className="progress-track">
-                      <div className="progress-fill" style={{ width: `${pct}%` }} />
+                      <div className="progress-fill" style={{ width: `${row.pct}%` }} />
                     </div>
                   </div>
-                );
-              })}
+              ))}
             </div>
 
             <div>
               <h3 className="breakdown-title">Staff accountability</h3>
-              {Object.keys(staffMetrics).map((staffName) => {
-                const cost = staffMetrics[staffName] || 0;
-                const pct = totalFinancialLoss > 0 ? ((cost / totalFinancialLoss) * 100).toFixed(0) : 0;
-
-                return (
-                  <div key={staffName} className="breakdown-item">
+              {staffRows.map((row) => (
+                  <div key={row.label} className="breakdown-item">
                     <div className="breakdown-label">
-                      <span>{staffName}</span>
-                      <span>R{cost.toFixed(2)}</span>
+                      <span>{row.label}</span>
+                      <span>R{row.value.toFixed(2)}</span>
                     </div>
                     <div className="progress-track">
-                      <div className="progress-fill" style={{ width: `${pct}%` }} />
+                      <div className="progress-fill" style={{ width: `${row.pct}%` }} />
                     </div>
                   </div>
-                );
-              })}
+              ))}
             </div>
 
             <div>
               <h3 className="breakdown-title">Cost by category</h3>
-              {Object.keys(categoryMetrics).map((categoryName) => {
-                const cost = categoryMetrics[categoryName] || 0;
-                const pct = totalFinancialLoss > 0 ? ((cost / totalFinancialLoss) * 100).toFixed(0) : 0;
-
-                return (
-                  <div key={categoryName} className="breakdown-item">
+              {categoryRows.map((row) => (
+                  <div key={row.label} className="breakdown-item">
                     <div className="breakdown-label">
-                      <span>{categoryName}</span>
-                      <span>R{cost.toFixed(2)} ({pct}%)</span>
+                      <span>{row.label}</span>
+                      <span>R{row.value.toFixed(2)} ({row.pct}%)</span>
                     </div>
                     <div className="progress-track">
-                      <div className="progress-fill" style={{ width: `${pct}%` }} />
+                      <div className="progress-fill" style={{ width: `${row.pct}%` }} />
                     </div>
                   </div>
-                );
-              })}
+              ))}
             </div>
           </div>
         )}

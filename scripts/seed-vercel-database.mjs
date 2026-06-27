@@ -195,10 +195,15 @@ if (existingDatabase.exists && !shouldForce) {
 const data = {
   wasteItems: [],
   budget: 500,
+  settings: {
+    dailyWasteValueLimit: 0,
+    dailyWasteEntryLimit: 0,
+  },
   recipes: await createDefaultRecipes(),
   staffList: await createStaffMembers(),
   customStaffList: [],
   customMenuItems: [],
+  portionProfiles: {},
 };
 
 await requestJson(endpoint, {

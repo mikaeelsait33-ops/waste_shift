@@ -3,9 +3,7 @@ import Navbar from './components/Navbar';
 import Dashboard from './components/Dashboard';
 import WasteForm from './components/WasteForm';
 import WasteList from './components/WasteList';
-import RecipeManager from './components/RecipeManager';
-import DataManager from './components/DataManager';
-import MenuManager from './components/MenuManager';
+import Settings from './components/Settings';
 import defaultRecipes from './data/defaultRecipes';
 import menuItemsCsv from './data/menuItems.csv?raw';
 import staffMembersCsv from './data/staffMembers.csv?raw';
@@ -14,6 +12,10 @@ import staffMembersCsv from './data/staffMembers.csv?raw';
 const DEFAULT_RECIPES = defaultRecipes;
 const DEFAULT_RECIPE_SEED_VERSION = 'makeline-guide-recipes-v4';
 const SERVER_DATABASE_ENDPOINT = '/api/database';
+const DEFAULT_SETTINGS = {
+  dailyWasteValueLimit: 0,
+  dailyWasteEntryLimit: 0,
+};
 
 const isRecipeMap = (value) => (
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -194,6 +196,53 @@ const sanitizeMenuItems = (items) => {
     });
 };
 
+const sanitizePortionProfiles = (profiles) => {
+  if (!profiles || typeof profiles !== 'object' || Array.isArray(profiles)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(profiles)
+      .map(([profileKey, profile]) => {
+        const name = String(profile?.name || '').trim();
+        const amount = parseFloat(profile?.amount);
+        const unit = String(profile?.unit || '').trim();
+        const key = profile?.key || profileKey || createMenuItemKey(name);
+
+        if (!key || !name || !Number.isFinite(amount) || amount <= 0 || !unit) {
+          return null;
+        }
+
+        return [key, {
+          key,
+          name,
+          amount,
+          unit,
+          updatedAt: profile?.updatedAt || '',
+        }];
+      })
+      .filter(Boolean)
+  );
+};
+
+const sanitizeSettings = (settings) => {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+    return DEFAULT_SETTINGS;
+  }
+
+  const dailyWasteValueLimit = parseFloat(settings.dailyWasteValueLimit);
+  const dailyWasteEntryLimit = parseInt(settings.dailyWasteEntryLimit, 10);
+
+  return {
+    dailyWasteValueLimit: Number.isFinite(dailyWasteValueLimit) && dailyWasteValueLimit > 0
+      ? dailyWasteValueLimit
+      : 0,
+    dailyWasteEntryLimit: Number.isFinite(dailyWasteEntryLimit) && dailyWasteEntryLimit > 0
+      ? dailyWasteEntryLimit
+      : 0,
+  };
+};
+
 const attachRecipeInfo = (menuItem, recipes) => {
   const recipe = recipes?.[menuItem.key];
 
@@ -338,6 +387,17 @@ function App() {
     return savedBudget ? parseFloat(savedBudget) : 500; 
   });
 
+  const [settings, setSettings] = useState(() => {
+    try {
+      const savedSettings = localStorage.getItem('wasteShiftSettings');
+      const parsed = savedSettings ? JSON.parse(savedSettings) : DEFAULT_SETTINGS;
+      return sanitizeSettings(parsed);
+    } catch (e) {
+      console.error("Corrupted settings in storage, resetting.", e);
+      return DEFAULT_SETTINGS;
+    }
+  });
+
   const [lastSavedAt, setLastSavedAt] = useState(() => localStorage.getItem('wasteShiftLastSavedAt') || '');
 
   // Custom dynamic recipe database state loop
@@ -378,6 +438,17 @@ function App() {
     }
   });
 
+  const [portionProfiles, setPortionProfiles] = useState(() => {
+    try {
+      const savedProfiles = localStorage.getItem('portionProfiles');
+      const parsed = savedProfiles ? JSON.parse(savedProfiles) : {};
+      return sanitizePortionProfiles(parsed);
+    } catch (e) {
+      console.error("Corrupted portion profiles in storage, resetting.", e);
+      return {};
+    }
+  });
+
   const baseMenuItems = useMemo(() => createMenuItemsFromCsv(menuItemsCsv, recipes), [recipes]);
   const menuItems = useMemo(() => (
     mergeMenuItems(baseMenuItems, customMenuItems, recipes)
@@ -394,7 +465,9 @@ function App() {
     staffList,
     customStaffList,
     customMenuItems,
-  }), [wasteItems, budget, recipes, staffList, customStaffList, customMenuItems]);
+    portionProfiles,
+    settings,
+  }), [wasteItems, budget, recipes, staffList, customStaffList, customMenuItems, portionProfiles, settings]);
 
   const applyDatabaseData = useCallback((databaseData) => {
     setWasteItems(Array.isArray(databaseData.wasteItems) ? databaseData.wasteItems : []);
@@ -402,6 +475,8 @@ function App() {
     setRecipes(isRecipeMap(databaseData.recipes) ? cloneRecipeMap(databaseData.recipes) : {});
     setCustomStaffList(sanitizeStaffMembers(databaseData.customStaffList ?? databaseData.staffList));
     setCustomMenuItems(sanitizeMenuItems(databaseData.customMenuItems));
+    setPortionProfiles(sanitizePortionProfiles(databaseData.portionProfiles));
+    setSettings(sanitizeSettings(databaseData.settings));
   }, []);
 
   const saveDatabaseToServer = useCallback(async (mode = 'manual') => {
@@ -451,6 +526,10 @@ function App() {
   }, [budget]);
 
   useEffect(() => {
+    localStorage.setItem('wasteShiftSettings', JSON.stringify(settings));
+  }, [settings]);
+
+  useEffect(() => {
     localStorage.setItem('customRecipes', JSON.stringify(recipes));
     localStorage.setItem('defaultRecipeSeedVersion', DEFAULT_RECIPE_SEED_VERSION);
   }, [recipes]);
@@ -465,10 +544,14 @@ function App() {
   }, [customMenuItems]);
 
   useEffect(() => {
+    localStorage.setItem('portionProfiles', JSON.stringify(portionProfiles));
+  }, [portionProfiles]);
+
+  useEffect(() => {
     const timestamp = new Date().toISOString();
     localStorage.setItem('wasteShiftLastSavedAt', timestamp);
     setLastSavedAt(timestamp);
-  }, [wasteItems, budget, recipes, customStaffList, customMenuItems]);
+  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, settings]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -541,7 +624,7 @@ function App() {
     }, 900);
 
     return () => window.clearTimeout(timeoutId);
-  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, serverSyncEnabled, serverLoadComplete, saveDatabaseToServer]);
+  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, settings, serverSyncEnabled, serverLoadComplete, saveDatabaseToServer]);
 
   const handleAddStaff = (newStaffMember) => {
     setCustomStaffList(prev => {
@@ -567,7 +650,37 @@ function App() {
   };
 
   const handleAddEntry = (newEntry) => {
-    setWasteItems([...wasteItems, newEntry]);
+    setWasteItems(prevItems => [...prevItems, newEntry]);
+  };
+
+  const handleSavePortionProfile = (profile) => {
+    const name = String(profile?.name || '').trim();
+    const key = profile?.key || createMenuItemKey(name);
+    const amount = parseFloat(profile?.amount);
+    const unit = String(profile?.unit || '').trim();
+
+    if (!key || !name || !Number.isFinite(amount) || amount <= 0 || !unit) {
+      return;
+    }
+
+    setPortionProfiles(prevProfiles => ({
+      ...prevProfiles,
+      [key]: {
+        key,
+        name,
+        amount,
+        unit,
+        updatedAt: new Date().toISOString(),
+      },
+    }));
+  };
+
+  const handleSaveSettings = ({ budget: nextBudget, dailyWasteValueLimit, dailyWasteEntryLimit }) => {
+    setBudget(parseFloat(nextBudget) || 0);
+    setSettings(sanitizeSettings({
+      dailyWasteValueLimit,
+      dailyWasteEntryLimit,
+    }));
   };
 
   const handleAddNewRecipe = (key, recipeObject) => {
@@ -577,9 +690,9 @@ function App() {
     }));
   };
 
-  const handleUpsertMenuItem = ({ name, price }) => {
+  const handleUpsertMenuItem = ({ key: requestedKey, name, price }) => {
     const trimmedName = name.trim();
-    const key = createMenuItemKey(trimmedName);
+    const key = requestedKey || createMenuItemKey(trimmedName);
 
     if (!trimmedName || !key) {
       alert('Please enter a menu item name.');
@@ -607,11 +720,25 @@ function App() {
   };
 
   const handleDeleteEntry = (idToDelete) => {
-    setWasteItems(wasteItems.filter(item => item.id !== idToDelete));
+    setWasteItems(prevItems => prevItems.filter(item => item.id !== idToDelete));
+  };
+
+  const handleRestoreEntry = (entryToRestore) => {
+    if (!entryToRestore?.id) {
+      return;
+    }
+
+    setWasteItems(prevItems => (
+      prevItems.some((item) => item.id === entryToRestore.id)
+        ? prevItems
+        : [...prevItems, entryToRestore]
+    ));
   };
 
   const handleClearAll = () => {
-    if (window.confirm('Are you sure you want to clear your entire log?')) {
+    const typedConfirmation = window.prompt('Type CLEAR WASTE to permanently clear the entire waste log.');
+
+    if (typedConfirmation === 'CLEAR WASTE') {
       setWasteItems([]);
     }
   };
@@ -633,55 +760,53 @@ function App() {
     <div className="app-shell">
       <Navbar activePage={activeTab} onNavigate={setActiveTab} wasteCount={wasteItems.length} />
 
-      <main className={`app-page${activeTab === 'wasteLog' || activeTab === 'menu' ? ' app-page--wide' : ''}`}>
+      <main className={`app-page${activeTab === 'wasteLog' || activeTab === 'settings' ? ' app-page--wide' : ''}`}>
         {activeTab === 'dashboard' && (
-          <Dashboard items={wasteItems} budget={budget} setBudget={setBudget} />
+          <Dashboard items={wasteItems} budget={budget} settings={settings} />
         )}
 
         {activeTab === 'logWaste' && (
           <WasteForm
             onAddEntry={handleAddEntry}
+            wasteItems={wasteItems}
             recipes={recipes}
             menuItems={menuItems}
             staffList={staffList}
-            onAddStaff={handleAddStaff}
-            onDeleteStaff={handleDeleteStaff}
+            portionProfiles={portionProfiles}
+            onSavePortionProfile={handleSavePortionProfile}
           />
         )}
 
         {activeTab === 'wasteLog' && (
-          <WasteList items={wasteItems} onDeleteEntry={handleDeleteEntry} onClearAll={handleClearAll} />
-        )}
-
-        {activeTab === 'recipes' && (
-          <RecipeManager 
-            recipes={recipes} 
-            onAddRecipe={handleAddNewRecipe} 
-            onClearRecipes={handleClearRecipes} 
+          <WasteList
+            items={wasteItems}
+            onDeleteEntry={handleDeleteEntry}
+            onRestoreEntry={handleRestoreEntry}
           />
         )}
 
-        {activeTab === 'menu' && (
-          <MenuManager
-            menuItems={menuItems}
-            customMenuItems={customMenuItems}
-            onSaveMenuItem={handleUpsertMenuItem}
-            onRemoveCustomMenuItem={handleDeleteCustomMenuItem}
-          />
-        )}
-
-        {activeTab === 'database' && (
-          <DataManager
-            wasteItems={wasteItems}
+        {activeTab === 'settings' && (
+          <Settings
             budget={budget}
+            settings={settings}
+            wasteItems={wasteItems}
             recipes={recipes}
             staffList={staffList}
             customStaffList={customStaffList}
             menuItems={menuItems}
             customMenuItems={customMenuItems}
+            portionProfiles={portionProfiles}
             serverSync={serverSync}
-            onSaveToServer={() => saveDatabaseToServer('manual')}
             lastSavedAt={lastSavedAt}
+            onSaveSettings={handleSaveSettings}
+            onClearAllWaste={handleClearAll}
+            onAddStaff={handleAddStaff}
+            onDeleteStaff={handleDeleteStaff}
+            onAddRecipe={handleAddNewRecipe}
+            onClearRecipes={handleClearRecipes}
+            onSaveMenuItem={handleUpsertMenuItem}
+            onRemoveCustomMenuItem={handleDeleteCustomMenuItem}
+            onSaveToServer={() => saveDatabaseToServer('manual')}
             onRestoreDatabase={handleRestoreDatabase}
           />
         )}

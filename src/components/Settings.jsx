@@ -1,0 +1,484 @@
+import { useEffect, useMemo, useState } from 'react';
+import DataManager from './DataManager';
+import RecipeManager from './RecipeManager';
+
+const settingsSections = [
+  { key: 'limits', label: 'Limits' },
+  { key: 'staff', label: 'Staff' },
+  { key: 'items', label: 'Menu & Recipes' },
+  { key: 'database', label: 'Database' },
+  { key: 'danger', label: 'Danger' },
+];
+
+const parseDate = (dateStr) => {
+  if (!dateStr) return new Date(0);
+  const parts = dateStr.split('/');
+  if (parts.length === 3) {
+    const [day, month, year] = parts;
+    return new Date(Number(year), Number(month) - 1, Number(day));
+  }
+  return new Date(dateStr);
+};
+
+const getTodayItems = (items) => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  return (Array.isArray(items) ? items : []).filter((item) => {
+    const itemDate = parseDate(item?.date);
+    itemDate.setHours(0, 0, 0, 0);
+    return itemDate.getTime() === today.getTime();
+  });
+};
+
+function StaffSettings({ staffList, onAddStaff, onDeleteStaff }) {
+  const [name, setName] = useState('');
+  const [role, setRole] = useState('');
+  const [message, setMessage] = useState('');
+  const [staffSearch, setStaffSearch] = useState('');
+  const safeStaffList = useMemo(() => (Array.isArray(staffList) ? staffList : []), [staffList]);
+  const filteredStaffList = useMemo(() => {
+    const searchValue = staffSearch.trim().toLowerCase();
+
+    if (!searchValue) {
+      return safeStaffList;
+    }
+
+    return safeStaffList.filter((member) => (
+      [member.name, member.role].some((part) => String(part || '').toLowerCase().includes(searchValue))
+    ));
+  }, [safeStaffList, staffSearch]);
+  const customStaffCount = safeStaffList.filter((member) => !member.isCsvSeed).length;
+
+  const handleDeleteClick = (member) => {
+    if (window.confirm(`Remove ${member.name} from staff options?`)) {
+      onDeleteStaff(member.id);
+      setMessage(`${member.name} removed.`);
+    }
+  };
+
+  const handleSubmit = (event) => {
+    event.preventDefault();
+
+    const trimmedName = name.trim();
+    const trimmedRole = role.trim();
+
+    if (!trimmedName || !trimmedRole) {
+      setMessage('Enter a staff name and role.');
+      return;
+    }
+
+    if (safeStaffList.some((member) => member.name.toLowerCase() === trimmedName.toLowerCase())) {
+      setMessage('That staff member already exists.');
+      return;
+    }
+
+    onAddStaff({ name: trimmedName, role: trimmedRole });
+    setName('');
+    setRole('');
+    setMessage('Staff member saved.');
+  };
+
+  return (
+    <div className="panel">
+      <div className="panel-body">
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">Staff setup</p>
+            <h2 className="title">Staff Members</h2>
+            <p className="subtitle">Manage the names available when logging responsibility.</p>
+          </div>
+          <span className="badge">{safeStaffList.length} total</span>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          <div className="field-grid">
+            <div className="field">
+              <label htmlFor="staff-name">Name</label>
+              <input
+                id="staff-name"
+                type="text"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                className="input"
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor="staff-role">Role</label>
+              <input
+                id="staff-role"
+                type="text"
+                value={role}
+                onChange={(event) => setRole(event.target.value)}
+                list="staff-role-options"
+                className="input"
+              />
+              <datalist id="staff-role-options">
+                <option value="Kitchen" />
+                <option value="Prep" />
+                <option value="Manager" />
+                <option value="Front of house" />
+                <option value="Bar" />
+              </datalist>
+            </div>
+          </div>
+
+          <button type="submit" className="primary-button">
+            Save staff member
+          </button>
+        </form>
+
+        {message && (
+          <div className="empty-state" style={{ marginTop: '14px', padding: '14px' }}>
+            {message}
+          </div>
+        )}
+
+        <div className="toolbar toolbar--single">
+          <input
+            type="search"
+            value={staffSearch}
+            onChange={(event) => setStaffSearch(event.target.value)}
+            placeholder="Search staff or role"
+            className="input"
+          />
+        </div>
+
+        <div className="notice-list" style={{ marginBottom: '12px' }}>
+          <span className="badge">{customStaffCount} app-added</span>
+          <span className="badge">{safeStaffList.length - customStaffCount} CSV</span>
+        </div>
+
+        <div className="staff-list" style={{ marginTop: '16px' }}>
+          {filteredStaffList.length === 0 ? (
+            <div className="empty-state">No staff members match the current search.</div>
+          ) : filteredStaffList.map((member) => (
+            <div key={member.id} className="staff-card item-row">
+              <div>
+                <strong>{member.name}</strong>
+                <span className="badge">{member.role}</span>
+                {member.isCsvSeed && <span className="badge">CSV</span>}
+              </div>
+              {!member.isCsvSeed && (
+                <button type="button" onClick={() => handleDeleteClick(member)} className="delete-button" title={`Remove ${member.name}`}>
+                  x
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Settings({
+  budget,
+  settings,
+  wasteItems,
+  recipes,
+  staffList,
+  customStaffList,
+  menuItems,
+  customMenuItems,
+  portionProfiles,
+  serverSync,
+  lastSavedAt,
+  onSaveSettings,
+  onClearAllWaste,
+  onAddStaff,
+  onDeleteStaff,
+  onAddRecipe,
+  onClearRecipes,
+  onSaveMenuItem,
+  onRemoveCustomMenuItem,
+  onSaveToServer,
+  onRestoreDatabase,
+}) {
+  const [activeSection, setActiveSection] = useState('limits');
+  const [draftBudget, setDraftBudget] = useState(String(budget || 0));
+  const [dailyWasteValueLimit, setDailyWasteValueLimit] = useState(String(settings?.dailyWasteValueLimit || ''));
+  const [dailyWasteEntryLimit, setDailyWasteEntryLimit] = useState(String(settings?.dailyWasteEntryLimit || ''));
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    setDraftBudget(String(budget || 0));
+  }, [budget]);
+
+  useEffect(() => {
+    setDailyWasteValueLimit(String(settings?.dailyWasteValueLimit || ''));
+    setDailyWasteEntryLimit(String(settings?.dailyWasteEntryLimit || ''));
+  }, [settings]);
+
+  const todayItems = getTodayItems(wasteItems);
+  const todayLoss = todayItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+  const today = new Date();
+  const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+  const currentMonthItems = (Array.isArray(wasteItems) ? wasteItems : []).filter((item) => {
+    const itemDate = parseDate(item?.date);
+    return itemDate.getMonth() === today.getMonth() && itemDate.getFullYear() === today.getFullYear();
+  });
+  const currentMonthLoss = currentMonthItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+  const activeWasteDays = new Set(currentMonthItems.map((item) => item?.date).filter(Boolean)).size;
+  const draftBudgetValue = Number(draftBudget) || 0;
+  const recommendedDailyValueLimit = draftBudgetValue > 0 ? draftBudgetValue / daysInMonth : 0;
+  const recommendedDailyEntryLimit = currentMonthItems.length > 0
+    ? Math.max(1, Math.ceil(currentMonthItems.length / Math.max(1, activeWasteDays) * 1.25))
+    : 5;
+  const dailyValueLimit = Number(settings?.dailyWasteValueLimit) || 0;
+  const dailyEntryLimit = Number(settings?.dailyWasteEntryLimit) || 0;
+  const dailyValueUsagePercent = dailyValueLimit > 0 ? Math.min(100, (todayLoss / dailyValueLimit) * 100) : 0;
+  const dailyEntryUsagePercent = dailyEntryLimit > 0 ? Math.min(100, (todayItems.length / dailyEntryLimit) * 100) : 0;
+
+  const handleSaveLimits = (event) => {
+    event.preventDefault();
+
+    onSaveSettings({
+      budget: draftBudget,
+      dailyWasteValueLimit,
+      dailyWasteEntryLimit,
+    });
+    setMessage('Limits saved.');
+  };
+
+  return (
+    <section className="settings-page">
+      <div className="section-header">
+        <div>
+          <p className="eyebrow">Settings</p>
+          <h2 className="title">Setup & Controls</h2>
+          <p className="subtitle">Manage limits, staff, menu items, database sync, and high-impact actions.</p>
+        </div>
+      </div>
+
+      <div className="segmented-control settings-tabs" aria-label="Settings sections">
+        {settingsSections.map((section) => (
+          <button
+            key={section.key}
+            type="button"
+            onClick={() => setActiveSection(section.key)}
+            className={`segment-button${activeSection === section.key ? ' is-active' : ''}`}
+          >
+            {section.label}
+          </button>
+        ))}
+      </div>
+
+      {activeSection === 'limits' && (
+        <form onSubmit={handleSaveLimits} className="panel">
+          <div className="panel-body">
+            <div className="section-header">
+              <div>
+                <p className="eyebrow">Daily limits</p>
+                <h2 className="title">Waste Guardrails</h2>
+                <p className="subtitle">Set daily controls used on the dashboard.</p>
+              </div>
+            </div>
+
+            <div className="metrics-grid">
+              <div className="metric-card">
+                <span className={`metric-value${dailyValueLimit > 0 && todayLoss > dailyValueLimit ? ' is-danger' : ''}`}>
+                  R{todayLoss.toFixed(2)}
+                </span>
+                <span className="metric-label">Today&apos;s waste value</span>
+              </div>
+              <div className="metric-card">
+                <span className={`metric-value${dailyEntryLimit > 0 && todayItems.length > dailyEntryLimit ? ' is-danger' : ''}`}>
+                  {todayItems.length}
+                </span>
+                <span className="metric-label">Today&apos;s entries</span>
+              </div>
+              <div className="metric-card">
+                <span className={`metric-value${draftBudgetValue > 0 && currentMonthLoss > draftBudgetValue ? ' is-danger' : ''}`}>
+                  R{currentMonthLoss.toFixed(2)}
+                </span>
+                <span className="metric-label">This month&apos;s waste value</span>
+              </div>
+              <div className="metric-card">
+                <span className="metric-value">R{recommendedDailyValueLimit.toFixed(2)}</span>
+                <span className="metric-label">Suggested daily value pace</span>
+              </div>
+            </div>
+
+            <div className="field-grid">
+              <div className="field">
+                <label htmlFor="monthly-loss-limit">Monthly loss limit</label>
+                <input
+                  id="monthly-loss-limit"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={draftBudget}
+                  onChange={(event) => setDraftBudget(event.target.value)}
+                  className="input"
+                />
+              </div>
+
+              <div className="field">
+                <label htmlFor="daily-value-limit">Daily value limit</label>
+                <input
+                  id="daily-value-limit"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={dailyWasteValueLimit}
+                  onChange={(event) => setDailyWasteValueLimit(event.target.value)}
+                  placeholder="R"
+                  className="input"
+                />
+              </div>
+
+              <div className="field">
+                <label htmlFor="daily-entry-limit">Daily entry limit</label>
+                <input
+                  id="daily-entry-limit"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={dailyWasteEntryLimit}
+                  onChange={(event) => setDailyWasteEntryLimit(event.target.value)}
+                  placeholder="Entries"
+                  className="input"
+                />
+              </div>
+            </div>
+
+            <div className="smart-panel">
+              <div className="smart-panel__header">
+                <span className="breakdown-title">Smart suggestions</span>
+                <span className="badge">Based on this month</span>
+              </div>
+              <div className="suggestion-row">
+                <button
+                  type="button"
+                  onClick={() => setDailyWasteValueLimit(recommendedDailyValueLimit.toFixed(2))}
+                  className="suggestion-button"
+                  disabled={recommendedDailyValueLimit <= 0}
+                >
+                  <span>Daily value limit</span>
+                  <strong>R{recommendedDailyValueLimit.toFixed(2)}</strong>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDailyWasteEntryLimit(String(recommendedDailyEntryLimit))}
+                  className="suggestion-button"
+                >
+                  <span>Daily entry limit</span>
+                  <strong>{recommendedDailyEntryLimit}</strong>
+                </button>
+              </div>
+            </div>
+
+            {(dailyValueLimit > 0 || dailyEntryLimit > 0) && (
+              <div className="breakdown-grid">
+                {dailyValueLimit > 0 && (
+                  <div className="breakdown-item">
+                    <div className="breakdown-label">
+                      <span>Daily value usage</span>
+                      <span>R{todayLoss.toFixed(2)} / R{dailyValueLimit.toFixed(2)}</span>
+                    </div>
+                    <div className="progress-track">
+                      <div className={`progress-fill${todayLoss > dailyValueLimit ? ' is-danger' : ''}`} style={{ width: `${dailyValueUsagePercent}%` }} />
+                    </div>
+                  </div>
+                )}
+
+                {dailyEntryLimit > 0 && (
+                  <div className="breakdown-item">
+                    <div className="breakdown-label">
+                      <span>Daily entry usage</span>
+                      <span>{todayItems.length} / {dailyEntryLimit}</span>
+                    </div>
+                    <div className="progress-track">
+                      <div className={`progress-fill${todayItems.length > dailyEntryLimit ? ' is-danger' : ''}`} style={{ width: `${dailyEntryUsagePercent}%` }} />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <button type="submit" className="primary-button">
+              Save limits
+            </button>
+
+            {message && (
+              <div className="empty-state" style={{ marginTop: '14px', padding: '14px' }}>
+                {message}
+              </div>
+            )}
+          </div>
+        </form>
+      )}
+
+      {activeSection === 'staff' && (
+        <StaffSettings
+          staffList={staffList}
+          onAddStaff={onAddStaff}
+          onDeleteStaff={onDeleteStaff}
+        />
+      )}
+
+      {activeSection === 'items' && (
+        <RecipeManager
+          recipes={recipes}
+          menuItems={menuItems}
+          customMenuItems={customMenuItems}
+          onAddRecipe={onAddRecipe}
+          onClearRecipes={onClearRecipes}
+          onSaveMenuItem={onSaveMenuItem}
+          onRemoveCustomMenuItem={onRemoveCustomMenuItem}
+        />
+      )}
+
+      {activeSection === 'database' && (
+        <DataManager
+          wasteItems={wasteItems}
+          budget={budget}
+          settings={settings}
+          recipes={recipes}
+          staffList={staffList}
+          customStaffList={customStaffList}
+          menuItems={menuItems}
+          customMenuItems={customMenuItems}
+          portionProfiles={portionProfiles}
+          serverSync={serverSync}
+          onSaveToServer={onSaveToServer}
+          lastSavedAt={lastSavedAt}
+          onRestoreDatabase={onRestoreDatabase}
+        />
+      )}
+
+      {activeSection === 'danger' && (
+        <div className="panel">
+          <div className="panel-body">
+            <div className="section-header">
+              <div>
+                <p className="eyebrow">Danger zone</p>
+                <h2 className="title">Protected Actions</h2>
+                <p className="subtitle">Clear large sets of operational data from one deliberate place.</p>
+              </div>
+            </div>
+
+            <div className="notice-panel">
+              <div>
+                <h3 className="breakdown-title">Clear waste log</h3>
+                <p className="small-text" style={{ margin: 0 }}>
+                  Removes all logged waste entries. Recipes, staff, prices, limits, and portion sizes stay saved.
+                </p>
+              </div>
+              <div className="manager-row">
+                <span className="badge is-red">{wasteItems.length} entries</span>
+                <button type="button" onClick={onClearAllWaste} className="danger-button" disabled={wasteItems.length === 0}>
+                  Clear all waste
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+export default Settings;

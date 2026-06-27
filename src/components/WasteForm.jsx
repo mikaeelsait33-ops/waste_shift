@@ -20,25 +20,174 @@ const splitCostAcrossIngredients = (totalCost, ingredients) => {
   }));
 };
 
-function WasteForm({ onAddEntry, recipes, menuItems, staffList, onAddStaff, onDeleteStaff }) {
+const WASTE_UNITS = [
+  { value: 'g', label: 'grams (g)' },
+  { value: 'kg', label: 'kilograms (kg)' },
+  { value: 'ml', label: 'millilitres (ml)' },
+  { value: 'l', label: 'litres (L)' },
+  { value: 'portion', label: 'portions' },
+];
+
+const PORTION_SIZE_UNITS = WASTE_UNITS.filter((unitOption) => unitOption.value !== 'portion');
+
+const CATEGORY_OPTIONS = [
+  { value: 'Produce', label: 'Produce' },
+  { value: 'Dairy', label: 'Dairy & Eggs' },
+  { value: 'Bakery', label: 'Bakery & Grains' },
+  { value: 'Meat/Poultry', label: 'Meat & Poultry' },
+  { value: 'Pantry', label: 'Pantry Goods' },
+];
+
+const REASON_OPTIONS = [
+  'Passed Expiration Date',
+  'Spoiled/Overripe',
+  'Kitchen Prep Mistake',
+  'Other',
+];
+
+const COMMON_REASON_BY_CATEGORY = {
+  Produce: 'Spoiled/Overripe',
+  Dairy: 'Passed Expiration Date',
+  Bakery: 'Passed Expiration Date',
+  'Meat/Poultry': 'Passed Expiration Date',
+  Pantry: 'Passed Expiration Date',
+};
+
+const createWasteItemKey = (itemName) => String(itemName || '')
+  .trim()
+  .toLowerCase()
+  .replace(/&/g, ' ')
+  .replace(/[^a-z0-9]+/g, '_')
+  .replace(/^_+|_+$/g, '');
+
+const formatNumber = (value) => {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return '';
+  }
+
+  return Number.isInteger(numericValue) ? String(numericValue) : numericValue.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+};
+
+function WasteForm({
+  onAddEntry,
+  wasteItems,
+  recipes,
+  menuItems,
+  staffList,
+  portionProfiles,
+  onSavePortionProfile,
+}) {
   const [formType, setFormType] = useState('single');
   const [name, setName] = useState('');
   const [quantity, setQuantity] = useState('1');
+  const [unit, setUnit] = useState('g');
+  const [portionAmount, setPortionAmount] = useState('');
+  const [portionUnit, setPortionUnit] = useState('g');
   const [category, setCategory] = useState('Produce');
   const [reason, setReason] = useState('Passed Expiration Date');
   const [customReason, setCustomReason] = useState('');
   const [staff, setStaff] = useState('');
   const [cost, setCost] = useState('');
-  const [showStaffManager, setShowStaffManager] = useState(false);
-  const [newStaffName, setNewStaffName] = useState('');
-  const [newStaffRole, setNewStaffRole] = useState('');
+  const [formMessage, setFormMessage] = useState('');
 
   const getTodayYMD = () => new Date().toISOString().split('T')[0];
   const [wasteDate, setWasteDate] = useState(getTodayYMD());
 
   const safeStaffList = Array.isArray(staffList) ? staffList : [];
+  const safeWasteItems = useMemo(() => (Array.isArray(wasteItems) ? wasteItems : []), [wasteItems]);
   const safeMenuItems = useMemo(() => (Array.isArray(menuItems) ? menuItems : []), [menuItems]);
+  const safePortionProfiles = portionProfiles && typeof portionProfiles === 'object' ? portionProfiles : {};
   const [selectedRecipeKey, setSelectedRecipeKey] = useState(safeMenuItems[0]?.key || '');
+  const selectedMenuItem = safeMenuItems.find((item) => item.key === selectedRecipeKey);
+  const selectedRecipe = recipes[selectedRecipeKey];
+  const selectedRecipeTotal = Array.isArray(selectedRecipe?.ingredients)
+    ? selectedRecipe.ingredients.reduce((sum, ing) => sum + (Number(ing.cost) || 0), 0)
+    : 0;
+  const selectedMenuItemCost = Number(selectedMenuItem?.menuPrice ?? selectedRecipeTotal) || 0;
+  const activeWasteItem = formType === 'recipe'
+    ? {
+      key: selectedRecipeKey,
+      name: selectedMenuItem?.name || recipes[selectedRecipeKey]?.name || '',
+    }
+    : {
+      key: createWasteItemKey(name),
+      name: name.trim(),
+    };
+  const activePortionProfile = activeWasteItem.key ? safePortionProfiles[activeWasteItem.key] : null;
+  const quantityValue = parseFloat(quantity);
+  const portionAmountValue = parseFloat(portionAmount);
+  const measuredAmount = unit === 'portion'
+    && Number.isFinite(quantityValue)
+    && Number.isFinite(portionAmountValue)
+    && quantityValue > 0
+    && portionAmountValue > 0
+      ? quantityValue * portionAmountValue
+      : null;
+  const recentSingleItemProfiles = useMemo(() => {
+    const seenNames = new Set();
+
+    return [...safeWasteItems]
+      .reverse()
+      .filter((item) => !item?.isRecipe && item?.name)
+      .filter((item) => {
+        const key = String(item.name).trim().toLowerCase();
+
+        if (!key || seenNames.has(key)) {
+          return false;
+        }
+
+        seenNames.add(key);
+        return true;
+      })
+      .slice(0, 18);
+  }, [safeWasteItems]);
+  const itemNameOptions = recentSingleItemProfiles.map((item) => item.name);
+  const normalizedName = name.trim().toLowerCase();
+  const matchingProfiles = normalizedName
+    ? recentSingleItemProfiles
+      .filter((item) => String(item.name || '').toLowerCase().includes(normalizedName))
+      .slice(0, 3)
+    : recentSingleItemProfiles.slice(0, 3);
+  const exactProfile = normalizedName
+    ? recentSingleItemProfiles.find((item) => String(item.name || '').toLowerCase() === normalizedName)
+    : null;
+  const suggestedReason = exactProfile?.reason || COMMON_REASON_BY_CATEGORY[category] || 'Passed Expiration Date';
+  const previewCost = formType === 'recipe' && unit === 'portion'
+    ? selectedMenuItemCost * (Number.isFinite(quantityValue) ? quantityValue : 0)
+    : parseFloat(cost);
+  const previewCostLabel = Number.isFinite(previewCost) ? `R${previewCost.toFixed(2)}` : 'Cost pending';
+  const previewQuantityLabel = unit === 'portion'
+    ? measuredAmount
+      ? `${formatNumber(quantityValue)} portions = ${formatNumber(measuredAmount)} ${portionUnit}`
+      : 'Portion size pending'
+    : `${formatNumber(quantityValue) || '0'} ${unit}`;
+
+  const applyProfile = (profile) => {
+    if (!profile) return;
+
+    setName(profile.name || '');
+    setCategory(profile.category || 'Produce');
+    setQuantity(String(profile.quantity || '1'));
+    setUnit(profile.unit || 'g');
+    setCost(Number(profile.cost) > 0 ? Number(profile.cost).toFixed(2) : '');
+
+    if (profile.unit === 'portion') {
+      setPortionAmount(profile.portionSize ? String(profile.portionSize) : '');
+      setPortionUnit(profile.portionSizeUnit || 'g');
+    }
+
+    if (REASON_OPTIONS.includes(profile.reason)) {
+      setReason(profile.reason);
+      setCustomReason('');
+    } else if (profile.reason) {
+      setReason('Other');
+      setCustomReason(profile.reason);
+    }
+
+    setFormMessage(`Loaded recent values for ${profile.name}.`);
+  };
 
   useEffect(() => {
     const selectedMenuItemExists = safeMenuItems.some((item) => item.key === selectedRecipeKey);
@@ -49,34 +198,108 @@ function WasteForm({ onAddEntry, recipes, menuItems, staffList, onAddStaff, onDe
   }, [safeMenuItems, selectedRecipeKey]);
 
   useEffect(() => {
+    if (unit !== 'portion') {
+      return;
+    }
+
+    if (activePortionProfile) {
+      setPortionAmount(String(activePortionProfile.amount));
+      setPortionUnit(activePortionProfile.unit);
+      return;
+    }
+
+    setPortionAmount('');
+    setPortionUnit('g');
+  }, [unit, activeWasteItem.key, activePortionProfile]);
+
+  useEffect(() => {
+    if (formType !== 'recipe' || unit !== 'portion') {
+      return;
+    }
+
     const recipe = recipes[selectedRecipeKey];
     const menuItem = safeMenuItems.find((item) => item.key === selectedRecipeKey);
     const recipeTotal = Array.isArray(recipe?.ingredients)
       ? recipe.ingredients.reduce((sum, ing) => sum + (Number(ing.cost) || 0), 0)
       : 0;
     const singleItemCost = Number(menuItem?.menuPrice ?? recipeTotal) || 0;
+    const qtyMultiplier = parseFloat(quantity) || 1;
 
-    if (formType === 'recipe') {
-      const qtyMultiplier = parseFloat(quantity) || 1;
-      setCost((singleItemCost * qtyMultiplier).toFixed(2));
-    } else if (formType === 'single') {
+    setCost((singleItemCost * qtyMultiplier).toFixed(2));
+  }, [formType, selectedRecipeKey, quantity, unit, recipes, safeMenuItems]);
+
+  const handleFormTypeChange = (nextFormType) => {
+    setFormType(nextFormType);
+    setUnit(nextFormType === 'recipe' ? 'portion' : 'g');
+    setQuantity('1');
+    setPortionAmount('');
+    setPortionUnit('g');
+    setFormMessage('');
+
+    if (nextFormType === 'single') {
       setCost('');
     }
-  }, [formType, selectedRecipeKey, quantity, recipes, safeMenuItems]);
+  };
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (formType === 'single' && (!name || !cost)) return;
-    if (formType === 'recipe' && !selectedRecipeKey) return;
+
+    if (formType === 'single' && !name.trim()) {
+      setFormMessage('Enter the food item name before saving.');
+      return;
+    }
+
+    if (formType === 'single' && cost === '') {
+      setFormMessage('Enter the cost loss for this item.');
+      return;
+    }
+
+    if (formType === 'recipe' && !selectedRecipeKey) {
+      setFormMessage('Choose a menu item before saving.');
+      return;
+    }
+
+    const qtyMultiplier = parseFloat(quantity);
+    if (!Number.isFinite(qtyMultiplier) || qtyMultiplier <= 0) {
+      setFormMessage('Enter a quantity greater than zero.');
+      return;
+    }
+
+    let measuredQuantity = qtyMultiplier;
+    let measuredUnit = unit;
+    let portionSize = null;
+    let portionSizeUnit = '';
+
+    if (unit === 'portion') {
+      if (!activeWasteItem.key || !activeWasteItem.name) {
+        setFormMessage('Choose or enter the wasted item before saving a portion size.');
+        return;
+      }
+
+      if (!Number.isFinite(portionAmountValue) || portionAmountValue <= 0) {
+        setFormMessage('Enter what one portion equals.');
+        return;
+      }
+
+      portionSize = portionAmountValue;
+      portionSizeUnit = portionUnit;
+      measuredQuantity = qtyMultiplier * portionAmountValue;
+      measuredUnit = portionUnit;
+    }
+
+    if (formType === 'recipe' && unit !== 'portion' && !cost) {
+      setFormMessage('Enter the cost loss for this measured menu-item waste.');
+      return;
+    }
 
     if (!staff) {
-      alert('Please select the responsible staff member.');
+      setFormMessage('Select the responsible staff member.');
       return;
     }
 
     const actualReason = reason === 'Other' ? customReason.trim() : reason;
     if (reason === 'Other' && !actualReason) {
-      alert('Please provide a custom reason.');
+      setFormMessage('Provide a custom reason.');
       return;
     }
 
@@ -95,6 +318,11 @@ function WasteForm({ onAddEntry, recipes, menuItems, staffList, onAddStaff, onDe
         ...finalEntry,
         name,
         quantity,
+        unit,
+        measuredQuantity,
+        measuredUnit,
+        portionSize,
+        portionSizeUnit,
         category,
         cost: parseFloat(cost) || 0,
         isRecipe: false,
@@ -103,26 +331,32 @@ function WasteForm({ onAddEntry, recipes, menuItems, staffList, onAddStaff, onDe
     } else {
       const activeRecipe = recipes[selectedRecipeKey];
       const activeMenuItem = safeMenuItems.find((item) => item.key === selectedRecipeKey);
-      const qtyMultiplier = parseFloat(quantity) || 1;
       const recipeTotal = Array.isArray(activeRecipe?.ingredients)
         ? activeRecipe.ingredients.reduce((sum, ing) => sum + (Number(ing.cost) || 0), 0)
         : 0;
       const menuItemCost = Number(activeMenuItem?.menuPrice ?? recipeTotal) || 0;
+      const finalCost = parseFloat(cost) || 0;
+      const targetCost = unit === 'portion' ? menuItemCost * qtyMultiplier : finalCost;
       const parsedIngredients = Array.isArray(activeRecipe?.ingredients)
         ? recipeTotal > 0
           ? activeRecipe.ingredients.map((ing) => ({
             ...ing,
-            cost: (Number(ing.cost) || 0) * (menuItemCost / recipeTotal) * qtyMultiplier,
+            cost: (Number(ing.cost) || 0) * (targetCost / recipeTotal),
           }))
-          : splitCostAcrossIngredients(menuItemCost * qtyMultiplier, activeRecipe.ingredients)
+          : splitCostAcrossIngredients(targetCost, activeRecipe.ingredients)
         : [];
 
       finalEntry = {
         ...finalEntry,
         name: activeMenuItem?.name || activeRecipe?.name || selectedRecipeKey,
         quantity,
+        unit,
+        measuredQuantity,
+        measuredUnit,
+        portionSize,
+        portionSizeUnit,
         category: activeRecipe ? 'Menu Recipe' : 'Menu Item',
-        cost: parseFloat(cost) || 0,
+        cost: finalCost,
         isRecipe: Boolean(activeRecipe),
         recipeKey: selectedRecipeKey,
         ingredients: parsedIngredients,
@@ -130,37 +364,27 @@ function WasteForm({ onAddEntry, recipes, menuItems, staffList, onAddStaff, onDe
     }
 
     onAddEntry(finalEntry);
+    setFormMessage(`Logged ${finalEntry.name} for R${(Number(finalEntry.cost) || 0).toFixed(2)}.`);
+    if (unit === 'portion') {
+      onSavePortionProfile?.({
+        key: activeWasteItem.key,
+        name: activeWasteItem.name,
+        amount: portionSize,
+        unit: portionSizeUnit,
+      });
+    }
     setName('');
     setQuantity('1');
+    setUnit(formType === 'recipe' ? 'portion' : 'g');
+    if (formType === 'single') {
+      setPortionAmount('');
+      setPortionUnit('g');
+    }
     setStaff('');
     setReason('Passed Expiration Date');
     setCustomReason('');
     setWasteDate(getTodayYMD());
     if (formType === 'single') setCost('');
-  };
-
-  const handleAddStaffMember = () => {
-    const trimmedName = newStaffName.trim();
-    const trimmedRole = newStaffRole.trim();
-
-    if (!trimmedName) {
-      alert('Please enter a staff name.');
-      return;
-    }
-
-    if (!trimmedRole) {
-      alert('Please enter a role for this staff member.');
-      return;
-    }
-
-    if (safeStaffList.some((s) => s.name.toLowerCase() === trimmedName.toLowerCase())) {
-      alert('A staff member with this name already exists.');
-      return;
-    }
-
-    onAddStaff({ name: trimmedName, role: trimmedRole });
-    setNewStaffName('');
-    setNewStaffRole('');
   };
 
   return (
@@ -177,14 +401,14 @@ function WasteForm({ onAddEntry, recipes, menuItems, staffList, onAddStaff, onDe
         <div className="segmented-control" aria-label="Waste entry type" style={{ marginBottom: '16px' }}>
           <button
             type="button"
-            onClick={() => setFormType('single')}
+            onClick={() => handleFormTypeChange('single')}
             className={`segment-button${formType === 'single' ? ' is-active' : ''}`}
           >
             Ingredient
           </button>
           <button
             type="button"
-            onClick={() => setFormType('recipe')}
+            onClick={() => handleFormTypeChange('recipe')}
             className={`segment-button${formType === 'recipe' ? ' is-active' : ''}`}
           >
             Menu item
@@ -201,20 +425,50 @@ function WasteForm({ onAddEntry, recipes, menuItems, staffList, onAddStaff, onDe
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="e.g. Cheddar block"
+                list="known-waste-items"
                 className="input"
               />
+              {itemNameOptions.length > 0 && (
+                <datalist id="known-waste-items">
+                  {itemNameOptions.map((itemName) => (
+                    <option key={itemName} value={itemName} />
+                  ))}
+                </datalist>
+              )}
             </div>
 
             <div className="field">
               <label htmlFor="food-category">Category</label>
               <select id="food-category" value={category} onChange={(e) => setCategory(e.target.value)} className="select">
-                <option value="Produce">Produce</option>
-                <option value="Dairy">Dairy & Eggs</option>
-                <option value="Bakery">Bakery & Grains</option>
-                <option value="Meat/Poultry">Meat & Poultry</option>
-                <option value="Pantry">Pantry Goods</option>
+                {CATEGORY_OPTIONS.map((categoryOption) => (
+                  <option key={categoryOption.value} value={categoryOption.value}>
+                    {categoryOption.label}
+                  </option>
+                ))}
               </select>
             </div>
+
+            {matchingProfiles.length > 0 && (
+              <div className="smart-panel">
+                <div className="smart-panel__header">
+                  <span className="breakdown-title">Recent matches</span>
+                  <span className="badge">{matchingProfiles.length}</span>
+                </div>
+                <div className="suggestion-row">
+                  {matchingProfiles.map((profile) => (
+                    <button
+                      key={`${profile.id}-${profile.name}`}
+                      type="button"
+                      onClick={() => applyProfile(profile)}
+                      className="suggestion-button"
+                    >
+                      <span>{profile.name}</span>
+                      <strong>R{(Number(profile.cost) || 0).toFixed(2)}</strong>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </>
         ) : (
           <div className="field">
@@ -233,18 +487,29 @@ function WasteForm({ onAddEntry, recipes, menuItems, staffList, onAddStaff, onDe
           </div>
         )}
 
-        <div className="field-grid">
+        <div className="field-grid field-grid--three">
           <div className="field">
-            <label htmlFor="quantity">Portions</label>
+            <label htmlFor="quantity">Quantity</label>
             <input
               id="quantity"
               type="number"
-              min="0.5"
-              step="0.5"
+              min="0.01"
+              step="0.01"
               value={quantity}
               onChange={(e) => setQuantity(e.target.value)}
               className="input"
             />
+          </div>
+
+          <div className="field">
+            <label htmlFor="quantity-unit">Unit</label>
+            <select id="quantity-unit" value={unit} onChange={(e) => setUnit(e.target.value)} className="select">
+              {WASTE_UNITS.map((unitOption) => (
+                <option key={unitOption.value} value={unitOption.value}>
+                  {unitOption.label}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="field">
@@ -255,31 +520,60 @@ function WasteForm({ onAddEntry, recipes, menuItems, staffList, onAddStaff, onDe
               step="0.01"
               value={cost}
               onChange={(e) => setCost(e.target.value)}
-              disabled={formType === 'recipe'}
+              disabled={formType === 'recipe' && unit === 'portion'}
               placeholder="R"
               className="input"
             />
           </div>
         </div>
 
-        <div className="field">
-          <div className="manager-row" style={{ marginBottom: '8px' }}>
-            <label className="field-label" htmlFor="responsible-staff">Responsible staff member</label>
-            <button
-              type="button"
-              onClick={() => setShowStaffManager(!showStaffManager)}
-              className={`ghost-button${showStaffManager ? ' is-warning' : ''}`}
-            >
-              {showStaffManager ? 'Close staff' : 'Manage staff'}
-            </button>
+        {unit === 'portion' && (
+          <div className="budget-panel portion-panel">
+            <h3 className="breakdown-title">Portion size</h3>
+            <div className="field-grid">
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label htmlFor="portion-amount">1 portion equals</label>
+                <input
+                  id="portion-amount"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={portionAmount}
+                  onChange={(e) => setPortionAmount(e.target.value)}
+                  placeholder="150"
+                  className="input"
+                />
+              </div>
+
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label htmlFor="portion-unit">Measured unit</label>
+                <select id="portion-unit" value={portionUnit} onChange={(e) => setPortionUnit(e.target.value)} className="select">
+                  {PORTION_SIZE_UNITS.map((unitOption) => (
+                    <option key={unitOption.value} value={unitOption.value}>
+                      {unitOption.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="budget-row" style={{ marginTop: '12px' }}>
+              <span className="small-text">
+                {activePortionProfile ? `Remembered for ${activePortionProfile.name}` : 'New portion size'}
+              </span>
+              <span className="badge is-green">
+                {measuredAmount ? `${formatNumber(quantityValue)} portions = ${formatNumber(measuredAmount)} ${portionUnit}` : 'Enter size'}
+              </span>
+            </div>
           </div>
+        )}
+
+        <div className="field">
+          <label htmlFor="responsible-staff">Responsible staff member</label>
 
           {safeStaffList.length === 0 ? (
             <div className="muted-box">
-              <p className="small-text" style={{ margin: '0 0 10px' }}>No staff members added yet.</p>
-              <button type="button" onClick={() => setShowStaffManager(true)} className="ghost-button is-warning">
-                Add first staff member
-              </button>
+              <p className="small-text" style={{ margin: 0 }}>Add staff members in Settings before logging waste.</p>
             </div>
           ) : (
             <select id="responsible-staff" value={staff} onChange={(e) => setStaff(e.target.value)} className="select">
@@ -290,52 +584,6 @@ function WasteForm({ onAddEntry, recipes, menuItems, staffList, onAddStaff, onDe
                 </option>
               ))}
             </select>
-          )}
-
-          {showStaffManager && (
-            <div className="budget-panel" style={{ marginTop: '12px' }}>
-              <h3 className="breakdown-title">Staff manager</h3>
-
-              <div className="field-grid">
-                <input
-                  type="text"
-                  value={newStaffName}
-                  onChange={(e) => setNewStaffName(e.target.value)}
-                  placeholder="Name"
-                  className="input"
-                />
-                <input
-                  type="text"
-                  value={newStaffRole}
-                  onChange={(e) => setNewStaffRole(e.target.value)}
-                  placeholder="Role"
-                  className="input"
-                />
-              </div>
-
-              <button type="button" onClick={handleAddStaffMember} className="ghost-button is-warning" style={{ marginTop: '10px' }}>
-                Add staff member
-              </button>
-
-              {safeStaffList.length > 0 && (
-                <div className="staff-list" style={{ marginTop: '12px' }}>
-                  {safeStaffList.map((member) => (
-                    <div key={member.id} className="staff-card item-row">
-                      <div>
-                        <strong>{member.name}</strong>
-                        <span className="badge" style={{ marginLeft: '8px' }}>{member.role}</span>
-                        {member.isCsvSeed && <span className="badge" style={{ marginLeft: '8px' }}>CSV</span>}
-                      </div>
-                      {!member.isCsvSeed && (
-                        <button type="button" onClick={() => onDeleteStaff(member.id)} className="delete-button" title={`Remove ${member.name}`}>
-                          x
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
           )}
         </div>
 
@@ -359,6 +607,18 @@ function WasteForm({ onAddEntry, recipes, menuItems, staffList, onAddStaff, onDe
             <option value="Kitchen Prep Mistake">Kitchen prep mistake</option>
             <option value="Other">Other</option>
           </select>
+          {suggestedReason && suggestedReason !== reason && (
+            <button
+              type="button"
+              onClick={() => {
+                setReason(suggestedReason);
+                setCustomReason('');
+              }}
+              className="ghost-button compact-action"
+            >
+              Use {suggestedReason}
+            </button>
+          )}
           {reason === 'Other' && (
             <input
               type="text"
@@ -371,9 +631,28 @@ function WasteForm({ onAddEntry, recipes, menuItems, staffList, onAddStaff, onDe
           )}
         </div>
 
+        <div className="entry-preview">
+          <div className="budget-row">
+            <span className="small-text">{activeWasteItem.name || 'Entry preview'}</span>
+            <span className={Number.isFinite(previewCost) ? 'price' : 'badge'}>
+              {previewCostLabel}
+            </span>
+          </div>
+          <div className="small-text">
+            {previewQuantityLabel}
+            {formType === 'recipe' && selectedMenuItemCost <= 0 ? ' - add a price or ingredient costs in Settings' : ''}
+          </div>
+        </div>
+
         <button type="submit" disabled={formType === 'recipe' && safeMenuItems.length === 0} className="primary-button">
           Log waste
         </button>
+
+        {formMessage && (
+          <div className="inline-message" role="status">
+            {formMessage}
+          </div>
+        )}
       </div>
     </form>
   );

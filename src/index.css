@@ -154,6 +154,10 @@ button:disabled {
 }
 
 .nav-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   min-height: 36px;
   padding: 8px 12px;
   background: transparent;
@@ -161,11 +165,29 @@ button:disabled {
   font-size: 0.9rem;
 }
 
+.nav-count {
+  display: inline-grid;
+  min-width: 20px;
+  height: 20px;
+  place-items: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(40, 211, 161, 0.14);
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
 .nav-button.is-active {
   background: #e9f9f4;
   border-color: #e9f9f4;
   color: #12201c;
   font-weight: 800;
+}
+
+.nav-button.is-active .nav-count {
+  background: rgba(18, 32, 28, 0.1);
+  color: #12201c;
 }
 
 .panel {
@@ -320,6 +342,11 @@ button:disabled {
   border-color: rgba(67, 196, 118, 0.24);
 }
 
+.notice-panel--warning {
+  background: rgba(219, 164, 77, 0.08);
+  border-color: rgba(219, 164, 77, 0.24);
+}
+
 .notice-list {
   display: flex;
   flex-wrap: wrap;
@@ -391,6 +418,93 @@ button:disabled {
   font-size: 0.84rem;
 }
 
+.smart-panel,
+.entry-preview,
+.undo-banner {
+  padding: 14px;
+  margin: 14px 0;
+  background: #141719;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.smart-panel__header,
+.undo-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.smart-panel__header .breakdown-title {
+  margin-bottom: 0;
+}
+
+.suggestion-row,
+.import-summary-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.suggestion-row .badge,
+.import-summary-grid .badge,
+.notice-list .badge,
+.smart-panel__header .badge {
+  margin-left: 0;
+}
+
+.suggestion-row {
+  margin-top: 10px;
+}
+
+.suggestion-button {
+  display: flex;
+  flex: 1 1 160px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  padding: 9px 11px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.suggestion-button strong {
+  color: var(--amber);
+  white-space: nowrap;
+}
+
+.suggestion-button:disabled {
+  opacity: 0.5;
+}
+
+.entry-preview {
+  display: grid;
+  gap: 7px;
+}
+
+.inline-message {
+  padding: 12px;
+  margin-top: 12px;
+  color: var(--muted);
+  background: rgba(40, 211, 161, 0.08);
+  border: 1px solid rgba(40, 211, 161, 0.2);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.compact-action {
+  width: auto;
+  min-height: 32px;
+  margin-top: 10px;
+  padding: 6px 10px;
+  font-size: 0.78rem;
+}
+
 .database-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -435,6 +549,17 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.field-grid--three {
+  grid-template-columns: minmax(100px, 0.8fr) minmax(140px, 1fr) minmax(130px, 1fr);
+}
+
+.recipe-ingredient-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) minmax(110px, 0.8fr) minmax(110px, 0.8fr) minmax(150px, 1fr) 32px;
+  gap: 10px;
+  align-items: center;
 }
 
 .field {
@@ -544,6 +669,7 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   min-height: 24px;
+  margin-left: 6px;
   padding: 3px 8px;
   border-radius: 999px;
   background: #2a2f33;
@@ -598,6 +724,9 @@ button:disabled {
 }
 
 .pill-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   background: #151719;
   color: var(--muted);
   border-color: var(--border-soft);
@@ -605,10 +734,25 @@ button:disabled {
   white-space: nowrap;
 }
 
+.pill-count {
+  display: inline-grid;
+  min-width: 20px;
+  height: 20px;
+  place-items: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 0.68rem;
+}
+
 .pill-button.is-active {
   background: var(--accent);
   border-color: var(--accent);
   color: #0d1714;
+}
+
+.pill-button.is-active .pill-count {
+  background: rgba(13, 23, 20, 0.12);
 }
 
 .log-list {
@@ -722,6 +866,15 @@ button:disabled {
   gap: 16px;
 }
 
+.settings-page {
+  display: grid;
+  gap: 16px;
+}
+
+.settings-tabs {
+  align-self: start;
+}
+
 .inventory-heading {
   margin-bottom: 9px;
 }
@@ -768,7 +921,9 @@ button:disabled {
   .budget-row,
   .item-row,
   .manager-row,
-  .inventory-heading {
+  .inventory-heading,
+  .smart-panel__header,
+  .undo-banner {
     align-items: stretch;
     flex-direction: column;
   }
@@ -776,6 +931,8 @@ button:disabled {
   .metrics-grid,
   .insight-strip,
   .field-grid,
+  .field-grid--three,
+  .recipe-ingredient-grid,
   .toolbar,
   .breakdown-grid--three,
   .action-panel,

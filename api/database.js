@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { get, list, put } from '@vercel/blob';
 
 const LEGACY_DATABASE_PATH = 'wasteshift/database.json';
@@ -28,7 +29,7 @@ const readJsonBody = (request) => {
 
 const createSnapshotPath = (updatedAt) => {
   const timestamp = updatedAt.replace(/[:.]/g, '-');
-  const id = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const id = randomUUID();
 
   return `${DATABASE_FOLDER}${timestamp}-${id}.json`;
 };
