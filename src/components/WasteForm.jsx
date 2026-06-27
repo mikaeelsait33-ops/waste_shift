@@ -17,6 +17,9 @@ const WASTE_UNITS = [
 ];
 
 const PORTION_SIZE_UNITS = WASTE_UNITS.filter((unitOption) => unitOption.value !== 'portion');
+const MAX_PHOTO_INPUT_BYTES = 8 * 1024 * 1024;
+const MAX_PHOTO_DIMENSION = 1200;
+const PHOTO_QUALITY = 0.72;
 
 const CATEGORY_OPTIONS = [
   { value: 'Produce', label: 'Produce' },
@@ -51,6 +54,50 @@ const formatNumber = (value) => {
   return Number.isInteger(numericValue) ? String(numericValue) : numericValue.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
 };
 
+const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(reader.result);
+  reader.onerror = () => reject(new Error('Unable to read image file.'));
+  reader.readAsDataURL(file);
+});
+
+const loadImage = (src) => new Promise((resolve, reject) => {
+  const image = new Image();
+  image.onload = () => resolve(image);
+  image.onerror = () => reject(new Error('Unable to load image file.'));
+  image.src = src;
+});
+
+const compressWastePhoto = async (file) => {
+  if (!file.type.startsWith('image/')) {
+    throw new Error('Choose an image file for the waste photo.');
+  }
+
+  if (file.size > MAX_PHOTO_INPUT_BYTES) {
+    throw new Error('Choose a photo under 8 MB.');
+  }
+
+  const dataUrl = await readFileAsDataUrl(file);
+  const image = await loadImage(dataUrl);
+  const scale = Math.min(1, MAX_PHOTO_DIMENSION / Math.max(image.width, image.height));
+  const width = Math.max(1, Math.round(image.width * scale));
+  const height = Math.max(1, Math.round(image.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext('2d');
+  if (!context) {
+    throw new Error('Unable to prepare this photo.');
+  }
+
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, width, height);
+  context.drawImage(image, 0, 0, width, height);
+
+  return canvas.toDataURL('image/jpeg', PHOTO_QUALITY);
+};
+
 function WasteForm({
   onAddEntry,
   wasteItems,
@@ -75,6 +122,9 @@ function WasteForm({
   const [selectedStaffId, setSelectedStaffId] = useState(activeStaffId || '');
   const [cost, setCost] = useState('');
   const [formMessage, setFormMessage] = useState('');
+  const [photoPreview, setPhotoPreview] = useState('');
+  const [photoName, setPhotoName] = useState('');
+  const [isProcessingPhoto, setIsProcessingPhoto] = useState(false);
 
   const getTodayYMD = () => new Date().toISOString().split('T')[0];
   const [wasteDate, setWasteDate] = useState(getTodayYMD());
@@ -308,10 +358,36 @@ function WasteForm({
       createdAt: now.toISOString(),
       status: 'logged',
       repeatedFromId: lastEntry.id,
+      photoUrl: '',
+      photoName: '',
+      photoCapturedAt: '',
     };
 
     onAddEntry(repeatedEntry);
     setFormMessage(`Repeated ${lastEntry.name} for R${getEntryFoodCostLost(repeatedEntry).toFixed(2)}.`);
+  };
+
+  const handlePhotoChange = async (event) => {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    setIsProcessingPhoto(true);
+    setFormMessage('');
+
+    try {
+      const compressedPhoto = await compressWastePhoto(file);
+      setPhotoPreview(compressedPhoto);
+      setPhotoName(file.name);
+    } catch (error) {
+      setPhotoPreview('');
+      setPhotoName('');
+      setFormMessage(error.message || 'Unable to attach this photo.');
+    } finally {
+      setIsProcessingPhoto(false);
+    }
   };
 
   const handleSubmit = (e) => {
@@ -394,6 +470,9 @@ function WasteForm({
       createdBy: selectedStaffMember.name,
       lastEditedBy: selectedStaffMember.name,
       status: 'logged',
+      photoUrl: photoPreview,
+      photoName,
+      photoCapturedAt: photoPreview ? now.toISOString() : '',
     };
 
     if (formType === 'single') {
@@ -473,6 +552,8 @@ function WasteForm({
     setReason('Expired');
     setCustomReason('');
     setWasteDate(getTodayYMD());
+    setPhotoPreview('');
+    setPhotoName('');
     if (formType === 'single') setCost('');
   };
 
@@ -807,6 +888,50 @@ function WasteForm({
               style={{ marginTop: '10px' }}
             />
           )}
+        </div>
+
+        <div className="field">
+          <span className="field-label">Waste photo</span>
+          <div className="photo-upload">
+            {photoPreview ? (
+              <img src={photoPreview} alt="Waste preview" className="photo-upload__image" />
+            ) : (
+              <div className="photo-upload__placeholder">
+                <span>Add photo</span>
+              </div>
+            )}
+            <div className="photo-upload__controls">
+              <label className="ghost-button photo-upload__button" htmlFor="waste-photo">
+                {photoPreview ? 'Change photo' : 'Add photo'}
+              </label>
+              <input
+                id="waste-photo"
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onClick={(event) => {
+                  event.currentTarget.value = '';
+                }}
+                onChange={handlePhotoChange}
+                className="visually-hidden"
+              />
+              {photoPreview && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPhotoPreview('');
+                    setPhotoName('');
+                  }}
+                  className="ghost-button"
+                >
+                  Remove
+                </button>
+              )}
+              <span className="small-text">
+                {isProcessingPhoto ? 'Preparing photo...' : photoName || 'Optional evidence for this entry'}
+              </span>
+            </div>
+          </div>
         </div>
 
         <div className="entry-preview">

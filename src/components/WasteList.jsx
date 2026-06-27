@@ -158,6 +158,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
       'Gross Profit Lost',
       'Food Cost Percentage',
       'Status',
+      'Photo Attached',
       'Ingredients',
     ];
     const rows = filteredItems.map((item) => [
@@ -179,6 +180,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
       getEntryGrossProfitLost(item).toFixed(2),
       item.foodCostPercentage ?? '',
       item.status || '',
+      item.photoUrl ? 'Yes' : 'No',
       Array.isArray(item.ingredients)
         ? item.ingredients.map((ingredient) => `${ingredient.name}${ingredient.quantity ? ` ${ingredient.quantity}` : ''} (${ingredient.category})`).join('; ')
         : '',
@@ -360,6 +362,19 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
                     )}
                     {item.costStatus === 'needs_ingredient_costs' && <span className="badge is-red">Needs ingredient costs</span>}
                   </div>
+                )}
+
+                {item.photoUrl && (
+                  <a
+                    href={item.photoUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="log-photo-link"
+                    aria-label={`View full waste photo for ${item.name}`}
+                  >
+                    <img src={item.photoUrl} alt={`Waste photo for ${item.name}`} className="log-photo" />
+                    <span className="small-text">{item.photoName || 'Waste photo'}</span>
+                  </a>
                 )}
 
                 {item.isRecipe && item.ingredients && (
