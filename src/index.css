@@ -158,6 +158,31 @@ button:disabled {
   text-transform: uppercase;
 }
 
+.operator-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 7px 10px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  box-shadow: var(--shadow-soft);
+}
+
+.operator-chip.is-muted {
+  color: var(--muted);
+  background: rgba(247, 249, 251, 0.8);
+}
+
+.operator-chip__label {
+  color: var(--muted-2);
+  font-size: 0.68rem;
+  font-weight: 820;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .nav-links {
   display: flex;
   justify-content: flex-end;
@@ -792,6 +817,24 @@ button:disabled {
   padding: 11px 12px;
 }
 
+.permission-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.permission-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
 .inventory-card {
   margin-bottom: 14px;
 }
@@ -1156,6 +1199,11 @@ button:disabled {
     width: 100%;
   }
 
+  .operator-chip {
+    width: 100%;
+    justify-content: space-between;
+  }
+
   .nav-links {
     justify-content: stretch;
     width: 100%;
@@ -1196,6 +1244,10 @@ button:disabled {
   .invoice-importer,
   .invoice-result-row,
   .section-ring-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .permission-grid {
     grid-template-columns: 1fr;
   }
 

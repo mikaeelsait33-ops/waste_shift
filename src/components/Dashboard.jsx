@@ -19,7 +19,7 @@ const getMetricRows = (metricsObj, totalValue) => (
     }))
 );
 
-function Dashboard({ items, budget, settings, staffList }) {
+function Dashboard({ items, budget, settings, staffList, accessProfile }) {
   const [timeframe, setTimeframe] = useState('all');
   const [sectionDate, setSectionDate] = useState(() => {
     const date = new Date();
@@ -28,6 +28,11 @@ function Dashboard({ items, budget, settings, staffList }) {
   });
 
   const safeItems = Array.isArray(items) ? items : [];
+  const canViewFinancials = Boolean(accessProfile?.canViewFinancials);
+  const formatMoney = (value) => (canViewFinancials ? `R${Number(value || 0).toFixed(2)}` : 'Restricted');
+  const metricValueClass = (isDanger = false) => (
+    `metric-value${canViewFinancials && isDanger ? ' is-danger' : ''}`
+  );
   const safeStaffList = useMemo(() => (Array.isArray(staffList) ? staffList : []), [staffList]);
   const staffByName = useMemo(() => {
     const lookup = new Map();
@@ -235,10 +240,10 @@ function Dashboard({ items, budget, settings, staffList }) {
   const timeframeLabel = timeframe === 'all' ? 'All Time' : timeframe === 'day' ? 'Today' : `This ${timeframe}`;
   const attentionItems = [
     budget > 0 && projectedBudgetGap > 0
-      ? `Projected month-end loss is R${projectedBudgetGap.toFixed(2)} over the monthly limit.`
+      ? `Projected month-end loss is ${formatMoney(projectedBudgetGap)} over the monthly limit.`
       : null,
     dailyValueLimit > 0 && todayLoss > dailyValueLimit
-      ? `Today's waste value is R${(todayLoss - dailyValueLimit).toFixed(2)} over the daily value limit.`
+      ? `Today's waste value is ${formatMoney(todayLoss - dailyValueLimit)} over the daily value limit.`
       : null,
     dailyEntryLimit > 0 && todayItems.length > dailyEntryLimit
       ? `Today's entry count is ${todayItems.length - dailyEntryLimit} over the daily entry limit.`
@@ -250,7 +255,7 @@ function Dashboard({ items, budget, settings, staffList }) {
     topCategory ? `${topCategory[0]} carries the highest category loss. Review par levels before the next order.` : null,
     topDepartment ? `${topDepartment[0]} is the highest department contributor in this view. Check shift handover notes.` : null,
     budgetUsagePercent > 85 ? 'Monthly loss is near the limit. Add an end-of-shift review before closing.' : null,
-    currentDailyAverage > dailyBudgetPace && dailyBudgetPace > 0 ? `Current daily loss average is R${(currentDailyAverage - dailyBudgetPace).toFixed(2)} above budget pace.` : null,
+    currentDailyAverage > dailyBudgetPace && dailyBudgetPace > 0 ? `Current daily loss average is ${formatMoney(currentDailyAverage - dailyBudgetPace)} above budget pace.` : null,
   ].filter(Boolean).slice(0, 4);
 
   return (
@@ -301,17 +306,28 @@ function Dashboard({ items, budget, settings, staffList }) {
           </div>
         )}
 
+        {!canViewFinancials && (
+          <div className="notice-panel notice-panel--warning">
+            <div>
+              <h3 className="breakdown-title">Financial analytics restricted</h3>
+              <p className="small-text" style={{ margin: 0 }}>
+                Select an owner or manager in Settings &gt; Security to view waste cost, revenue loss, exports, and protected actions.
+              </p>
+            </div>
+          </div>
+        )}
+
         <div className="metrics-grid">
           <div className="metric-card">
-            <span className={`metric-value${dailyValueLimit > 0 && todayLoss > dailyValueLimit ? ' is-danger' : ''}`}>R{todayLoss.toFixed(2)}</span>
+            <span className={metricValueClass(dailyValueLimit > 0 && todayLoss > dailyValueLimit)}>{formatMoney(todayLoss)}</span>
             <span className="metric-label">Today&apos;s food cost lost</span>
           </div>
           <div className="metric-card">
-            <span className="metric-value is-danger">R{weekLoss.toFixed(2)}</span>
+            <span className={metricValueClass(true)}>{formatMoney(weekLoss)}</span>
             <span className="metric-label">This week&apos;s food cost lost</span>
           </div>
           <div className="metric-card">
-            <span className={`metric-value${budget > 0 && currentMonthLoss > budget ? ' is-danger' : ''}`}>R{currentMonthLoss.toFixed(2)}</span>
+            <span className={metricValueClass(budget > 0 && currentMonthLoss > budget)}>{formatMoney(currentMonthLoss)}</span>
             <span className="metric-label">This month&apos;s food cost lost</span>
           </div>
           <div className="metric-card">
@@ -319,19 +335,19 @@ function Dashboard({ items, budget, settings, staffList }) {
             <span className="metric-label">Incidents in {timeframeLabel.toLowerCase()}</span>
           </div>
           <div className="metric-card">
-            <span className="metric-value is-danger">R{totalPotentialRevenueLost.toFixed(2)}</span>
+            <span className={metricValueClass(true)}>{formatMoney(totalPotentialRevenueLost)}</span>
             <span className="metric-label">Potential revenue lost</span>
           </div>
           <div className="metric-card">
-            <span className={totalGrossProfitLost > 0 ? 'metric-value is-danger' : 'metric-value'}>R{totalGrossProfitLost.toFixed(2)}</span>
+            <span className={metricValueClass(totalGrossProfitLost > 0)}>{formatMoney(totalGrossProfitLost)}</span>
             <span className="metric-label">Gross profit lost</span>
           </div>
           <div className="metric-card">
-            <span className="metric-value">R{averageLoss.toFixed(2)}</span>
+            <span className="metric-value">{formatMoney(averageLoss)}</span>
             <span className="metric-label">Average food cost per entry</span>
           </div>
           <div className="metric-card">
-            <span className={`metric-value${budget > 0 && projectedMonthLoss > budget ? ' is-danger' : ''}`}>R{projectedMonthLoss.toFixed(2)}</span>
+            <span className={metricValueClass(budget > 0 && projectedMonthLoss > budget)}>{formatMoney(projectedMonthLoss)}</span>
             <span className="metric-label">Projected month-end food cost</span>
           </div>
         </div>
@@ -366,7 +382,7 @@ function Dashboard({ items, budget, settings, staffList }) {
             <div>
               <h3 className="breakdown-title">Daily restaurant section rings</h3>
               <p className="small-text" style={{ margin: 0 }}>
-                {sectionDateItems.length} entr{sectionDateItems.length === 1 ? 'y' : 'ies'} worth R{sectionDateLoss.toFixed(2)} on {formatSectionDate(sectionDate).toLowerCase()}
+                {sectionDateItems.length} entr{sectionDateItems.length === 1 ? 'y' : 'ies'} worth {formatMoney(sectionDateLoss)} on {formatSectionDate(sectionDate).toLowerCase()}
               </p>
             </div>
             <div className="date-actions">
@@ -406,7 +422,7 @@ function Dashboard({ items, budget, settings, staffList }) {
                     <span className={`badge staff-section-badge staff-section-badge--${section.key}`}>
                       {section.label}
                     </span>
-                    <div className="section-ring-value">R{section.loss.toFixed(2)}</div>
+                    <div className="section-ring-value">{formatMoney(section.loss)}</div>
                     <div className="small-text">
                       {section.entries} entr{section.entries === 1 ? 'y' : 'ies'}
                       {isLeading ? ' - highest today' : ''}
@@ -421,7 +437,7 @@ function Dashboard({ items, budget, settings, staffList }) {
         <div className="budget-panel">
           <div className="budget-row">
             <span className="field-label">Monthly loss limit</span>
-            <span className="badge">R{budget.toFixed(2)}</span>
+            <span className="badge">{formatMoney(budget)}</span>
           </div>
 
           <div className="progress-track">
@@ -430,7 +446,7 @@ function Dashboard({ items, budget, settings, staffList }) {
               style={{ width: `${budgetUsagePercent}%` }}
             />
           </div>
-          <span className="small-text">R{remainingBudget.toFixed(2)} remaining before threshold breach</span>
+          <span className="small-text">{formatMoney(remainingBudget)} remaining before threshold breach</span>
         </div>
 
         {(dailyValueLimit > 0 || dailyEntryLimit > 0) && (
@@ -440,7 +456,7 @@ function Dashboard({ items, budget, settings, staffList }) {
               <div className="breakdown-item">
                 <div className="breakdown-label">
                   <span>Waste value</span>
-                  <span>R{todayLoss.toFixed(2)} / R{dailyValueLimit.toFixed(2)}</span>
+                  <span>{formatMoney(todayLoss)} / {formatMoney(dailyValueLimit)}</span>
                 </div>
                 <div className="progress-track">
                   <div className={`progress-fill${todayLoss > dailyValueLimit ? ' is-danger' : ''}`} style={{ width: `${dailyValueUsagePercent}%` }} />
@@ -473,7 +489,7 @@ function Dashboard({ items, budget, settings, staffList }) {
               </div>
             </div>
             <div className="metric-card">
-              <span className="metric-value is-danger">R{preventableLoss.toFixed(2)}</span>
+              <span className={metricValueClass(true)}>{formatMoney(preventableLoss)}</span>
               <span className="metric-label">Preventable loss in this view ({preventablePercent}%)</span>
             </div>
           </div>
@@ -487,7 +503,7 @@ function Dashboard({ items, budget, settings, staffList }) {
                   <div key={row.label} className="breakdown-item">
                     <div className="breakdown-label">
                       <span>{row.label}</span>
-                      <span>R{row.value.toFixed(2)} ({row.pct}%)</span>
+                      <span>{formatMoney(row.value)} ({row.pct}%)</span>
                     </div>
                     <div className="progress-track">
                       <div className="progress-fill" style={{ width: `${row.pct}%` }} />
@@ -511,7 +527,7 @@ function Dashboard({ items, budget, settings, staffList }) {
                           {staffSection.shortLabel}
                         </span>
                       </span>
-                      <span>R{row.value.toFixed(2)}</span>
+                      <span>{formatMoney(row.value)}</span>
                     </div>
                     <div className="progress-track">
                       <div className="progress-fill" style={{ width: `${row.pct}%` }} />
@@ -527,7 +543,7 @@ function Dashboard({ items, budget, settings, staffList }) {
                   <div key={row.label} className="breakdown-item">
                     <div className="breakdown-label">
                       <span>{row.label}</span>
-                      <span>R{row.value.toFixed(2)} ({row.pct}%)</span>
+                      <span>{formatMoney(row.value)} ({row.pct}%)</span>
                     </div>
                     <div className="progress-track">
                       <div className="progress-fill" style={{ width: `${row.pct}%` }} />
@@ -542,7 +558,7 @@ function Dashboard({ items, budget, settings, staffList }) {
                   <div key={row.label} className="breakdown-item">
                     <div className="breakdown-label">
                       <span>{row.label}</span>
-                      <span>R{row.value.toFixed(2)} ({row.pct}%)</span>
+                      <span>{formatMoney(row.value)} ({row.pct}%)</span>
                     </div>
                     <div className="progress-track">
                       <div className="progress-fill" style={{ width: `${row.pct}%` }} />

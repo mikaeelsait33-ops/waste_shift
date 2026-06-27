@@ -5,7 +5,7 @@ const navItems = [
   { key: 'settings', label: 'Settings' },
 ];
 
-function Navbar({ activePage, onNavigate, wasteCount = 0 }) {
+function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, accessProfile }) {
   return (
     <nav className="navbar">
       <div className="brand">
@@ -14,6 +14,12 @@ function Navbar({ activePage, onNavigate, wasteCount = 0 }) {
           <h1 className="brand-name">WasteShift</h1>
           <p className="brand-subtitle">Kitchen intelligence</p>
         </div>
+      </div>
+
+      <div className={`operator-chip${accessProfile?.hasOperator ? '' : ' is-muted'}`}>
+        <span className="operator-chip__label">Operator</span>
+        <strong>{activeStaffMember?.name || 'Not selected'}</strong>
+        <span className="badge">{accessProfile?.roleLabel || 'Unassigned'}</span>
       </div>
 
       <div className="nav-links" aria-label="Primary navigation">

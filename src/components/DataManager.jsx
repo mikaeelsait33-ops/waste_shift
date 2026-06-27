@@ -1,8 +1,9 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getEntryFoodCostLost } from '../utils/wasteCalculations';
 
 const DATABASE_NAME = 'WasteShift Local Database';
 const DATABASE_VERSION = 1;
+const MAX_BACKUP_FILE_BYTES = 5 * 1024 * 1024;
 
 function DataManager({
   wasteItems,
@@ -17,13 +18,17 @@ function DataManager({
   activeStaffId,
   inventoryMovements,
   auditLog,
+  syncAccessKey,
+  accessProfile,
   serverSync,
   onSaveToServer,
+  onSaveSyncAccessKey,
   lastSavedAt,
   onRestoreDatabase,
 }) {
   const fileInputRef = useRef(null);
   const [message, setMessage] = useState('');
+  const [draftSyncAccessKey, setDraftSyncAccessKey] = useState(syncAccessKey || '');
   const [lastExportAt, setLastExportAt] = useState(() => localStorage.getItem('wasteShiftLastExportAt') || '');
   const [importPreview, setImportPreview] = useState(null);
 
@@ -67,9 +72,16 @@ function DataManager({
   };
   const serverNoticeClass = ['ready', 'synced'].includes(serverSync?.status)
     ? ' notice-panel--success'
-    : ['checking', 'saving', 'local'].includes(serverSync?.status)
+    : ['checking', 'saving', 'local', 'locked'].includes(serverSync?.status)
       ? ' notice-panel--warning'
       : '';
+  const canExportData = Boolean(accessProfile?.canExportData);
+  const canManageServerSync = Boolean(accessProfile?.canManageServerSync);
+  const canRestoreDatabase = Boolean(accessProfile?.canRestoreDatabase);
+
+  useEffect(() => {
+    setDraftSyncAccessKey(syncAccessKey || '');
+  }, [syncAccessKey]);
 
   const createSnapshot = () => ({
     name: DATABASE_NAME,
@@ -91,6 +103,11 @@ function DataManager({
   });
 
   const exportDatabase = () => {
+    if (!canExportData) {
+      setMessage('Only an owner or manager can export a database backup.');
+      return;
+    }
+
     const snapshot = createSnapshot();
     const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -131,6 +148,16 @@ function DataManager({
 
   const importDatabase = (file) => {
     if (!file) return;
+
+    if (!canRestoreDatabase) {
+      setMessage('Only an owner can restore a database backup.');
+      return;
+    }
+
+    if (file.size > MAX_BACKUP_FILE_BYTES) {
+      setMessage(`That backup is too large. Maximum size is ${(MAX_BACKUP_FILE_BYTES / (1024 * 1024)).toFixed(0)} MB.`);
+      return;
+    }
 
     const reader = new FileReader();
     reader.onload = () => {
@@ -173,6 +200,16 @@ function DataManager({
     reader.readAsText(file);
   };
 
+  const saveSyncAccessKey = () => {
+    if (!canManageServerSync) {
+      setMessage('Only an owner can manage the server sync access key.');
+      return;
+    }
+
+    onSaveSyncAccessKey?.(draftSyncAccessKey.trim());
+    setMessage(draftSyncAccessKey.trim() ? 'Server sync access key saved on this device.' : 'Server sync access key removed from this device.');
+  };
+
   return (
     <section className="panel">
       <div className="panel-body">
@@ -211,11 +248,35 @@ function DataManager({
               type="button"
               onClick={onSaveToServer}
               className="ghost-button is-warning"
-              disabled={serverSync?.status === 'saving'}
+              disabled={serverSync?.status === 'saving' || !canManageServerSync}
             >
-              {serverSync?.status === 'saving' ? 'Saving...' : 'Save to server'}
+              {serverSync?.status === 'saving' ? 'Saving...' : canManageServerSync ? 'Save to server' : 'Owner only'}
             </button>
           </div>
+        </div>
+
+        <div className="database-card">
+          <h3 className="breakdown-title">Server sync access key</h3>
+          <p className="small-text">
+            If the deployment has `WASTESHIFT_SYNC_SECRET` set, this device must send the matching key before it can load or save the server database.
+          </p>
+          <div className="field-grid">
+            <input
+              type="password"
+              value={draftSyncAccessKey}
+              onChange={(event) => setDraftSyncAccessKey(event.target.value)}
+              placeholder="Access key"
+              className="input"
+              disabled={!canManageServerSync}
+              aria-label="Server sync access key"
+            />
+            <button type="button" onClick={saveSyncAccessKey} className="ghost-button is-warning" disabled={!canManageServerSync}>
+              Save key
+            </button>
+          </div>
+          <span className={`badge${syncAccessKey ? ' is-green' : ''}`}>
+            {syncAccessKey ? 'Key saved on this device' : 'No key saved'}
+          </span>
         </div>
 
         <div className="notice-panel notice-panel--warning">
@@ -259,8 +320,8 @@ function DataManager({
           <div className="database-card">
             <h3 className="breakdown-title">Backup database</h3>
             <p className="small-text">Downloads one JSON file containing waste logs, recipes, portion sizes, staff, menu prices, and budget settings.</p>
-            <button type="button" onClick={exportDatabase} className="primary-button">
-              Export backup
+            <button type="button" onClick={exportDatabase} className="primary-button" disabled={!canExportData}>
+              {canExportData ? 'Export backup' : 'Manager only'}
             </button>
           </div>
 
@@ -275,8 +336,8 @@ function DataManager({
               className="input"
               style={{ display: 'none' }}
             />
-            <button type="button" onClick={() => fileInputRef.current?.click()} className="primary-button">
-              Choose backup file
+            <button type="button" onClick={() => fileInputRef.current?.click()} className="primary-button" disabled={!canRestoreDatabase}>
+              {canRestoreDatabase ? 'Choose backup file' : 'Owner only'}
             </button>
           </div>
         </div>

@@ -5,6 +5,7 @@ import { STAFF_SECTIONS, getStaffSectionMeta, inferStaffSection } from '../utils
 import { getEntryFoodCostLost } from '../utils/wasteCalculations';
 
 const settingsSections = [
+  { key: 'security', label: 'Security' },
   { key: 'limits', label: 'Limits' },
   { key: 'staff', label: 'Staff' },
   { key: 'items', label: 'Menu & Recipes' },
@@ -34,7 +35,7 @@ const getTodayItems = (items) => {
   });
 };
 
-function StaffSettings({ staffList, onAddStaff, onDeleteStaff }) {
+function StaffSettings({ staffList, onAddStaff, onDeleteStaff, accessProfile }) {
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
   const [staffSection, setStaffSection] = useState('kitchen');
@@ -157,8 +158,8 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff }) {
             </div>
           </div>
 
-          <button type="submit" className="primary-button">
-            Save staff member
+          <button type="submit" className="primary-button" disabled={!accessProfile?.canManageStaff}>
+            {accessProfile?.canManageStaff ? 'Save staff member' : 'Manager only'}
           </button>
         </form>
 
@@ -208,7 +209,13 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff }) {
                 {member.isCsvSeed && <span className="badge">CSV</span>}
               </div>
               {!member.isCsvSeed && (
-                <button type="button" onClick={() => handleDeleteClick(member)} className="delete-button" title={`Remove ${member.name}`}>
+                <button
+                  type="button"
+                  onClick={() => handleDeleteClick(member)}
+                  className="delete-button"
+                  title={`Remove ${member.name}`}
+                  disabled={!accessProfile?.canManageStaff}
+                >
                   x
                 </button>
               )}
@@ -218,6 +225,81 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function SecurityPanel({ staffList, activeStaffId, activeStaffMember, accessProfile, onActiveStaffChange }) {
+  const safeStaffList = Array.isArray(staffList) ? staffList : [];
+  const permissionRows = [
+    ['Log waste', accessProfile?.canLogWaste],
+    ['View financial analytics', accessProfile?.canViewFinancials],
+    ['Delete or restore entries', accessProfile?.canDeleteEntries],
+    ['Export reports/backups', accessProfile?.canExportData],
+    ['Manage staff', accessProfile?.canManageStaff],
+    ['Manage menu and recipes', accessProfile?.canManageMenu],
+    ['Manage server sync', accessProfile?.canManageServerSync],
+    ['Restore or clear database', accessProfile?.canRestoreDatabase && accessProfile?.canClearData],
+  ];
+
+  return (
+    <section className="panel">
+      <div className="panel-body">
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">Access control</p>
+            <h2 className="title">Security & Safety</h2>
+            <p className="subtitle">Choose the current operator for this device and review which actions are unlocked.</p>
+          </div>
+          <span className={`badge${accessProfile?.canManageServerSync ? ' is-green' : ''}`}>
+            {accessProfile?.roleLabel || 'Unassigned'}
+          </span>
+        </div>
+
+        <div className="notice-panel notice-panel--warning">
+          <div>
+            <h3 className="breakdown-title">Local role safety</h3>
+            <p className="small-text" style={{ margin: 0 }}>
+              This protects day-to-day actions inside the app. Server sync can also be protected with a deployment secret in the Database tab.
+            </p>
+          </div>
+        </div>
+
+        <div className="field-grid">
+          <div className="field">
+            <label htmlFor="active-operator">Current operator</label>
+            <select
+              id="active-operator"
+              value={activeStaffId}
+              onChange={(event) => onActiveStaffChange?.(event.target.value)}
+              className="select"
+            >
+              <option value="">Choose staff member</option>
+              {safeStaffList.map((member) => (
+                <option key={member.id} value={member.id}>
+                  {member.name} - {member.role}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="metric-card">
+            <span className="metric-value">{activeStaffMember?.name || 'None'}</span>
+            <span className="metric-label">Active operator on this device</span>
+          </div>
+        </div>
+
+        <div className="permission-grid">
+          {permissionRows.map(([label, allowed]) => (
+            <div key={label} className="permission-card">
+              <span>{label}</span>
+              <span className={`badge${allowed ? ' is-green' : ' is-red'}`}>
+                {allowed ? 'Allowed' : 'Restricted'}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -337,8 +419,12 @@ function Settings({
   customMenuItems,
   portionProfiles,
   activeStaffId,
+  activeStaffMember,
+  accessProfile,
+  onActiveStaffChange,
   inventoryMovements,
   auditLog,
+  syncAccessKey,
   serverSync,
   lastSavedAt,
   onSaveSettings,
@@ -350,9 +436,10 @@ function Settings({
   onSaveMenuItem,
   onRemoveCustomMenuItem,
   onSaveToServer,
+  onSaveSyncAccessKey,
   onRestoreDatabase,
 }) {
-  const [activeSection, setActiveSection] = useState('limits');
+  const [activeSection, setActiveSection] = useState('security');
   const [draftBudget, setDraftBudget] = useState(String(budget || 0));
   const [dailyWasteValueLimit, setDailyWasteValueLimit] = useState(String(settings?.dailyWasteValueLimit || ''));
   const [dailyWasteEntryLimit, setDailyWasteEntryLimit] = useState(String(settings?.dailyWasteEntryLimit || ''));
@@ -554,8 +641,8 @@ function Settings({
               </div>
             )}
 
-            <button type="submit" className="primary-button">
-              Save limits
+            <button type="submit" className="primary-button" disabled={!accessProfile?.canManageLimits}>
+              {accessProfile?.canManageLimits ? 'Save limits' : 'Manager only'}
             </button>
 
             {message && (
@@ -567,11 +654,22 @@ function Settings({
         </form>
       )}
 
+      {activeSection === 'security' && (
+        <SecurityPanel
+          staffList={staffList}
+          activeStaffId={activeStaffId}
+          activeStaffMember={activeStaffMember}
+          accessProfile={accessProfile}
+          onActiveStaffChange={onActiveStaffChange}
+        />
+      )}
+
       {activeSection === 'staff' && (
         <StaffSettings
           staffList={staffList}
           onAddStaff={onAddStaff}
           onDeleteStaff={onDeleteStaff}
+          accessProfile={accessProfile}
         />
       )}
 
@@ -601,8 +699,11 @@ function Settings({
           activeStaffId={activeStaffId}
           inventoryMovements={inventoryMovements}
           auditLog={auditLog}
+          syncAccessKey={syncAccessKey}
+          accessProfile={accessProfile}
           serverSync={serverSync}
           onSaveToServer={onSaveToServer}
+          onSaveSyncAccessKey={onSaveSyncAccessKey}
           lastSavedAt={lastSavedAt}
           onRestoreDatabase={onRestoreDatabase}
         />
@@ -635,8 +736,8 @@ function Settings({
               </div>
               <div className="manager-row">
                 <span className="badge is-red">{wasteItems.length} entries</span>
-                <button type="button" onClick={onClearAllWaste} className="danger-button" disabled={wasteItems.length === 0}>
-                  Clear all waste
+                <button type="button" onClick={onClearAllWaste} className="danger-button" disabled={wasteItems.length === 0 || !accessProfile?.canClearData}>
+                  {accessProfile?.canClearData ? 'Clear all waste' : 'Owner only'}
                 </button>
               </div>
             </div>

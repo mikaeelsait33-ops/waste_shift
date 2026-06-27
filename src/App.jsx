@@ -8,6 +8,7 @@ import defaultRecipes from './data/defaultRecipes';
 import menuItemsCsv from './data/menuItems.csv?raw';
 import staffMembersCsv from './data/staffMembers.csv?raw';
 import { inferStaffSection } from './utils/staffSections';
+import { getAccessProfile, requirePermission } from './utils/accessControl';
 import { createInventoryMovementsFromEntry, getEntryFoodCostLost } from './utils/wasteCalculations';
 
 // Seed recipes from the bundled menu catalog.
@@ -391,6 +392,7 @@ function App() {
     message: 'Checking for server database...',
     lastSavedAt: '',
   });
+  const [syncAccessKey, setSyncAccessKey] = useState(() => localStorage.getItem('wasteShiftSyncAccessKey') || '');
 
   const [wasteItems, setWasteItems] = useState(() => {
     try {
@@ -502,6 +504,18 @@ function App() {
   const staffList = useMemo(() => (
     mergeStaffMembers(baseStaffList, customStaffList)
   ), [baseStaffList, customStaffList]);
+  const activeStaffMember = useMemo(() => (
+    staffList.find((member) => member.id === activeStaffId) || null
+  ), [activeStaffId, staffList]);
+  const accessProfile = useMemo(() => getAccessProfile(activeStaffMember), [activeStaffMember]);
+  const getSyncHeaders = useCallback((extraHeaders = {}) => {
+    const trimmedAccessKey = syncAccessKey.trim();
+
+    return {
+      ...extraHeaders,
+      ...(trimmedAccessKey ? { 'x-wasteshift-sync-secret': trimmedAccessKey } : {}),
+    };
+  }, [syncAccessKey]);
 
   const buildDatabaseData = useCallback(() => ({
     wasteItems,
@@ -531,6 +545,17 @@ function App() {
   }, []);
 
   const saveDatabaseToServer = useCallback(async (mode = 'manual') => {
+    const permission = requirePermission(accessProfile, 'canManageServerSync', 'sync the server database');
+
+    if (!permission.ok) {
+      setServerSync(prev => ({
+        ...prev,
+        status: 'locked',
+        message: permission.message,
+      }));
+      return false;
+    }
+
     setServerSync(prev => ({
       ...prev,
       status: 'saving',
@@ -540,7 +565,7 @@ function App() {
     try {
       const response = await fetch(SERVER_DATABASE_ENDPOINT, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: getSyncHeaders({ 'content-type': 'application/json' }),
         body: JSON.stringify({ data: buildDatabaseData() }),
       });
       const payload = await response.json().catch(() => ({}));
@@ -566,7 +591,7 @@ function App() {
 
       return false;
     }
-  }, [buildDatabaseData]);
+  }, [accessProfile, buildDatabaseData, getSyncHeaders]);
 
   useEffect(() => {
     localStorage.setItem('wasteItems', JSON.stringify(wasteItems));
@@ -579,6 +604,17 @@ function App() {
   useEffect(() => {
     localStorage.setItem('wasteShiftSettings', JSON.stringify(settings));
   }, [settings]);
+
+  useEffect(() => {
+    const trimmedAccessKey = syncAccessKey.trim();
+
+    if (trimmedAccessKey) {
+      localStorage.setItem('wasteShiftSyncAccessKey', trimmedAccessKey);
+      return;
+    }
+
+    localStorage.removeItem('wasteShiftSyncAccessKey');
+  }, [syncAccessKey]);
 
   useEffect(() => {
     if (activeStaffId) {
@@ -626,13 +662,19 @@ function App() {
 
     const loadServerDatabase = async () => {
       try {
-        const response = await fetch(SERVER_DATABASE_ENDPOINT, { cache: 'no-store' });
+        const response = await fetch(SERVER_DATABASE_ENDPOINT, {
+          cache: 'no-store',
+          headers: getSyncHeaders(),
+        });
+        const payload = await response.json().catch(() => ({}));
 
         if (!response.ok) {
-          throw new Error('Server database route is not available.');
-        }
+          if (response.status === 401 || response.status === 403) {
+            throw new Error(payload.message || 'Server sync is protected. Add the server sync access key in Settings.');
+          }
 
-        const payload = await response.json();
+          throw new Error(payload.message || 'Server database route is not available.');
+        }
 
         if (payload?.ok === false) {
           throw new Error(payload.message || 'Server database is not configured.');
@@ -660,16 +702,17 @@ function App() {
           message: 'Server database is ready. No server data has been saved yet.',
           lastSavedAt: '',
         });
-      } catch {
+      } catch (error) {
         if (isCancelled) {
           return;
         }
 
         setServerSyncEnabled(false);
         setServerLoadComplete(false);
+        const message = error?.message || 'Using browser storage. Deploy to Vercel with Blob storage to enable server sync.';
         setServerSync({
-          status: 'local',
-          message: 'Using browser storage. Deploy to Vercel with Blob storage to enable server sync.',
+          status: /protected|access key|unauthorized|forbidden/i.test(message) ? 'locked' : 'local',
+          message,
           lastSavedAt: '',
         });
       }
@@ -680,7 +723,7 @@ function App() {
     return () => {
       isCancelled = true;
     };
-  }, [applyDatabaseData]);
+  }, [applyDatabaseData, getSyncHeaders]);
 
   useEffect(() => {
     if (!serverSyncEnabled || !serverLoadComplete) {
@@ -695,6 +738,12 @@ function App() {
   }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, settings, activeStaffId, inventoryMovements, auditLog, serverSyncEnabled, serverLoadComplete, saveDatabaseToServer]);
 
   const handleAddStaff = (newStaffMember) => {
+    const permission = requirePermission(accessProfile, 'canManageStaff', 'manage staff');
+    if (!permission.ok) {
+      alert(permission.message);
+      return;
+    }
+
     setCustomStaffList(prev => {
       const nextStaffMember = {
         ...newStaffMember,
@@ -715,6 +764,12 @@ function App() {
   };
 
   const handleDeleteStaff = (staffId) => {
+    const permission = requirePermission(accessProfile, 'canManageStaff', 'remove staff');
+    if (!permission.ok) {
+      alert(permission.message);
+      return;
+    }
+
     setCustomStaffList(prev => prev.filter(s => s.id !== staffId));
   };
 
@@ -763,6 +818,12 @@ function App() {
   };
 
   const handleSaveSettings = ({ budget: nextBudget, dailyWasteValueLimit, dailyWasteEntryLimit }) => {
+    const permission = requirePermission(accessProfile, 'canManageLimits', 'change waste limits');
+    if (!permission.ok) {
+      alert(permission.message);
+      return;
+    }
+
     const previousSettings = { budget, ...settings };
 
     setBudget(parseFloat(nextBudget) || 0);
@@ -787,6 +848,12 @@ function App() {
   };
 
   const handleAddNewRecipe = (key, recipeObject) => {
+    const permission = requirePermission(accessProfile, 'canManageMenu', 'manage menu items and recipes');
+    if (!permission.ok) {
+      alert(permission.message);
+      return;
+    }
+
     setRecipes(prev => ({
       ...prev,
       [key]: recipeObject
@@ -794,6 +861,12 @@ function App() {
   };
 
   const handleUpsertMenuItem = ({ key: requestedKey, name, price }) => {
+    const permission = requirePermission(accessProfile, 'canManageMenu', 'manage menu items and recipes');
+    if (!permission.ok) {
+      alert(permission.message);
+      return;
+    }
+
     const trimmedName = name.trim();
     const key = requestedKey || createMenuItemKey(trimmedName);
 
@@ -819,10 +892,22 @@ function App() {
   };
 
   const handleDeleteCustomMenuItem = (menuItemKey) => {
+    const permission = requirePermission(accessProfile, 'canManageMenu', 'remove menu items');
+    if (!permission.ok) {
+      alert(permission.message);
+      return;
+    }
+
     setCustomMenuItems(prevItems => prevItems.filter((item) => item.key !== menuItemKey));
   };
 
   const handleDeleteEntry = (idToDelete) => {
+    const permission = requirePermission(accessProfile, 'canDeleteEntries', 'delete waste entries');
+    if (!permission.ok) {
+      alert(permission.message);
+      return;
+    }
+
     const entryToDelete = wasteItems.find((item) => item.id === idToDelete);
 
     setWasteItems(prevItems => prevItems.filter(item => item.id !== idToDelete));
@@ -846,6 +931,12 @@ function App() {
   };
 
   const handleRestoreEntry = (entryToRestore) => {
+    const permission = requirePermission(accessProfile, 'canDeleteEntries', 'restore deleted waste entries');
+    if (!permission.ok) {
+      alert(permission.message);
+      return;
+    }
+
     if (!entryToRestore?.id) {
       return;
     }
@@ -874,6 +965,12 @@ function App() {
   };
 
   const handleClearAll = () => {
+    const permission = requirePermission(accessProfile, 'canClearData', 'clear all waste data');
+    if (!permission.ok) {
+      alert(permission.message);
+      return;
+    }
+
     const typedConfirmation = window.prompt('Type CLEAR WASTE to permanently clear the entire waste log.');
 
     if (typedConfirmation === 'CLEAR WASTE') {
@@ -896,6 +993,12 @@ function App() {
 
   // Completely wipes out browser storage cache memory for custom recipes
   const handleClearRecipes = () => {
+    const permission = requirePermission(accessProfile, 'canClearData', 'clear the recipe database');
+    if (!permission.ok) {
+      alert(permission.message);
+      return;
+    }
+
     if (window.confirm('Are you sure you want to completely clear out your entire recipe database? This cannot be undone.')) {
       setRecipes({});
       localStorage.setItem('customRecipes', JSON.stringify({}));
@@ -904,16 +1007,28 @@ function App() {
   };
 
   const handleRestoreDatabase = (databaseData) => {
+    const permission = requirePermission(accessProfile, 'canRestoreDatabase', 'restore a database backup');
+    if (!permission.ok) {
+      alert(permission.message);
+      return;
+    }
+
     applyDatabaseData(databaseData);
   };
 
   return (
     <div className="app-shell">
-      <Navbar activePage={activeTab} onNavigate={setActiveTab} wasteCount={wasteItems.length} />
+      <Navbar
+        activePage={activeTab}
+        onNavigate={setActiveTab}
+        wasteCount={wasteItems.length}
+        activeStaffMember={activeStaffMember}
+        accessProfile={accessProfile}
+      />
 
       <main className={`app-page${activeTab === 'dashboard' || activeTab === 'wasteLog' || activeTab === 'settings' ? ' app-page--wide' : ''}`}>
         {activeTab === 'dashboard' && (
-          <Dashboard items={wasteItems} budget={budget} settings={settings} staffList={staffList} />
+          <Dashboard items={wasteItems} budget={budget} settings={settings} staffList={staffList} accessProfile={accessProfile} />
         )}
 
         {activeTab === 'logWaste' && (
@@ -935,6 +1050,7 @@ function App() {
             items={wasteItems}
             onDeleteEntry={handleDeleteEntry}
             onRestoreEntry={handleRestoreEntry}
+            accessProfile={accessProfile}
           />
         )}
 
@@ -950,8 +1066,12 @@ function App() {
             customMenuItems={customMenuItems}
             portionProfiles={portionProfiles}
             activeStaffId={activeStaffId}
+            activeStaffMember={activeStaffMember}
+            accessProfile={accessProfile}
+            onActiveStaffChange={setActiveStaffId}
             inventoryMovements={inventoryMovements}
             auditLog={auditLog}
+            syncAccessKey={syncAccessKey}
             serverSync={serverSync}
             lastSavedAt={lastSavedAt}
             onSaveSettings={handleSaveSettings}
@@ -963,6 +1083,7 @@ function App() {
             onSaveMenuItem={handleUpsertMenuItem}
             onRemoveCustomMenuItem={handleDeleteCustomMenuItem}
             onSaveToServer={() => saveDatabaseToServer('manual')}
+            onSaveSyncAccessKey={setSyncAccessKey}
             onRestoreDatabase={handleRestoreDatabase}
           />
         )}

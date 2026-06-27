@@ -6,7 +6,7 @@ import {
   getEntryPotentialRevenueLost,
 } from '../utils/wasteCalculations';
 
-function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
+function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile }) {
   const [activeFilter, setActiveFilter] = useState('All');
   const [searchTerm, setSearchTerm] = useState('');
   const [sortMode, setSortMode] = useState('newest');
@@ -17,6 +17,8 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
     d.setHours(0, 0, 0, 0);
     return d;
   });
+  const canViewFinancials = Boolean(accessProfile?.canViewFinancials);
+  const formatMoney = (value) => (canViewFinancials ? `R${Number(value || 0).toFixed(2)}` : 'Restricted');
 
   const parseDate = (dateStr) => {
     if (!dateStr) return new Date(0);
@@ -126,6 +128,10 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
   };
 
   const exportFilteredItems = () => {
+    if (!accessProfile?.canExportData) {
+      return;
+    }
+
     const headers = [
       'Date',
       'Time',
@@ -184,12 +190,18 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
   };
 
   const handleDeleteClick = (item) => {
+    if (!accessProfile?.canDeleteEntries) {
+      return;
+    }
+
     onDeleteEntry(item.id);
     setDeletedEntry(item);
   };
 
   const handleUndoDelete = () => {
     if (!deletedEntry) return;
+    if (!accessProfile?.canDeleteEntries) return;
+
     onRestoreEntry?.(deletedEntry);
     setDeletedEntry(null);
   };
@@ -229,8 +241,8 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
           <option value="highestCost">Highest cost</option>
           <option value="name">Item name</option>
         </select>
-        <button type="button" onClick={exportFilteredItems} className="ghost-button is-warning" disabled={filteredItems.length === 0}>
-          Export CSV
+        <button type="button" onClick={exportFilteredItems} className="ghost-button is-warning" disabled={filteredItems.length === 0 || !accessProfile?.canExportData}>
+          {accessProfile?.canExportData ? 'Export CSV' : 'Manager only'}
         </button>
       </div>
 
@@ -241,7 +253,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
           </span>
           <div className="manager-row">
             <button type="button" onClick={handleUndoDelete} className="ghost-button is-warning">
-              Undo
+              {accessProfile?.canDeleteEntries ? 'Undo' : 'Manager only'}
             </button>
             <button type="button" onClick={() => setDeletedEntry(null)} className="ghost-button">
               Dismiss
@@ -256,11 +268,11 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
             <span className="small-text">
               <strong>{hasActiveFilters ? filteredItems.length : totalCount}</strong> item{(hasActiveFilters ? filteredItems.length : totalCount) !== 1 ? 's' : ''} shown
             </span>
-            <span className="price">R{(hasActiveFilters ? filteredCost : totalCost).toFixed(2)}</span>
+            <span className="price">{formatMoney(hasActiveFilters ? filteredCost : totalCost)}</span>
           </div>
           {hasActiveFilters && (
             <div className="small-text">
-              Scope total: {totalCount} item{totalCount !== 1 ? 's' : ''} worth R{totalCost.toFixed(2)}
+              Scope total: {totalCount} item{totalCount !== 1 ? 's' : ''} worth {formatMoney(totalCost)}
             </div>
           )}
         </div>
@@ -318,8 +330,14 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
                   </div>
 
                   <div className="manager-row">
-                    <span className="price">R{itemCost.toFixed(2)}</span>
-                    <button type="button" onClick={() => handleDeleteClick(item)} className="delete-button" title={`Delete ${item.name}`}>
+                    <span className="price">{formatMoney(itemCost)}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteClick(item)}
+                      className="delete-button"
+                      title={`Delete ${item.name}`}
+                      disabled={!accessProfile?.canDeleteEntries}
+                    >
                       x
                     </button>
                   </div>
@@ -327,9 +345,9 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
 
                 {item.isRecipe && (
                   <div className="import-summary-grid log-financials">
-                    <span className="badge">Food cost R{itemCost.toFixed(2)}</span>
-                    <span className="badge">Revenue R{revenueLost.toFixed(2)}</span>
-                    <span className={grossProfitLost > 0 ? 'badge is-red' : 'badge'}>Gross R{grossProfitLost.toFixed(2)}</span>
+                    <span className="badge">Food cost {formatMoney(itemCost)}</span>
+                    <span className="badge">Revenue {formatMoney(revenueLost)}</span>
+                    <span className={canViewFinancials && grossProfitLost > 0 ? 'badge is-red' : 'badge'}>Gross {formatMoney(grossProfitLost)}</span>
                     {item.foodCostPercentage !== null && item.foodCostPercentage !== undefined && (
                       <span className="badge">{Number(item.foodCostPercentage).toFixed(1)}% food cost</span>
                     )}
@@ -348,7 +366,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
                             {ing.quantity && <span className="badge">{ing.quantity}</span>}
                             <span className="badge">{ing.category}</span>
                           </span>
-                          <span className="price">R{(Number(ing.cost) || 0).toFixed(2)}</span>
+                          <span className="price">{formatMoney(Number(ing.cost) || 0)}</span>
                         </div>
                       ))}
                     </div>
