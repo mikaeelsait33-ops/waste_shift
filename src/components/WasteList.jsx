@@ -6,7 +6,7 @@ import {
   getEntryPotentialRevenueLost,
 } from '../utils/wasteCalculations';
 
-function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile }) {
+function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, activeStaffMember }) {
   const [activeFilter, setActiveFilter] = useState('All');
   const [searchTerm, setSearchTerm] = useState('');
   const [sortMode, setSortMode] = useState('newest');
@@ -17,8 +17,15 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile }) {
     d.setHours(0, 0, 0, 0);
     return d;
   });
+  const safeItems = Array.isArray(items) ? items : [];
   const canViewFinancials = Boolean(accessProfile?.canViewFinancials);
   const formatMoney = (value) => (canViewFinancials ? `R${Number(value || 0).toFixed(2)}` : 'Restricted');
+  const visibleItems = canViewFinancials
+    ? safeItems
+    : safeItems.filter((item) => (
+      item?.staffId === activeStaffMember?.id
+      || String(item?.staff || '').trim().toLowerCase() === String(activeStaffMember?.name || '').trim().toLowerCase()
+    ));
 
   const parseDate = (dateStr) => {
     if (!dateStr) return new Date(0);
@@ -30,7 +37,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile }) {
     return new Date(dateStr);
   };
 
-  const dateFilteredItems = items.filter((item) => {
+  const dateFilteredItems = visibleItems.filter((item) => {
     if (viewMode === 'all') return true;
 
     const itemDate = parseDate(item?.date);

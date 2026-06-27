@@ -96,6 +96,32 @@ button:disabled {
   color: var(--text);
 }
 
+.auth-screen {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+}
+
+.auth-panel {
+  width: min(100%, 460px);
+  padding: 24px;
+  background: var(--surface);
+  border: 1px solid rgba(220, 227, 235, 0.9);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px) saturate(1.16);
+}
+
+.auth-brand {
+  margin-bottom: 22px;
+}
+
+.auth-form {
+  display: grid;
+  gap: 14px;
+}
+
 .app-page {
   width: min(100% - 36px, 760px);
   margin: 0 auto;

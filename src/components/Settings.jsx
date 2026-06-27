@@ -228,8 +228,19 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, accessProfile }) 
   );
 }
 
-function SecurityPanel({ staffList, activeStaffId, activeStaffMember, accessProfile, onActiveStaffChange }) {
-  const safeStaffList = Array.isArray(staffList) ? staffList : [];
+function SecurityPanel({
+  activeStaffMember,
+  accessProfile,
+  authSettings,
+  authSession,
+  onSavePinSettings,
+  onLogout,
+}) {
+  const [staffPin, setStaffPin] = useState('');
+  const [managementPin, setManagementPin] = useState('');
+  const [confirmManagementPin, setConfirmManagementPin] = useState('');
+  const [pinMessage, setPinMessage] = useState('');
+  const [isSavingPins, setIsSavingPins] = useState(false);
   const permissionRows = [
     ['Log waste', accessProfile?.canLogWaste],
     ['View financial analytics', accessProfile?.canViewFinancials],
@@ -240,6 +251,43 @@ function SecurityPanel({ staffList, activeStaffId, activeStaffMember, accessProf
     ['Manage server sync', accessProfile?.canManageServerSync],
     ['Restore or clear database', accessProfile?.canRestoreDatabase && accessProfile?.canClearData],
   ];
+  const handlePinSubmit = async (event) => {
+    event.preventDefault();
+
+    if (!accessProfile?.canManagePins) {
+      setPinMessage('Management access is required to change PINs.');
+      return;
+    }
+
+    if (!staffPin && !managementPin) {
+      setPinMessage('Enter a new staff PIN or management PIN.');
+      return;
+    }
+
+    if (managementPin && managementPin !== confirmManagementPin) {
+      setPinMessage('Management PINs do not match.');
+      return;
+    }
+
+    setIsSavingPins(true);
+    setPinMessage('');
+
+    try {
+      const result = await onSavePinSettings?.({ staffPin, managementPin });
+
+      if (!result?.ok) {
+        setPinMessage(result?.message || 'Could not save PINs.');
+        return;
+      }
+
+      setStaffPin('');
+      setManagementPin('');
+      setConfirmManagementPin('');
+      setPinMessage('PINs updated.');
+    } finally {
+      setIsSavingPins(false);
+    }
+  };
 
   return (
     <section className="panel">
@@ -248,7 +296,7 @@ function SecurityPanel({ staffList, activeStaffId, activeStaffMember, accessProf
           <div>
             <p className="eyebrow">Access control</p>
             <h2 className="title">Security & Safety</h2>
-            <p className="subtitle">Choose the current operator for this device and review which actions are unlocked.</p>
+            <p className="subtitle">Review the active PIN session and rotate staff or management PINs.</p>
           </div>
           <span className={`badge${accessProfile?.canManageServerSync ? ' is-green' : ''}`}>
             {accessProfile?.roleLabel || 'Unassigned'}
@@ -259,34 +307,93 @@ function SecurityPanel({ staffList, activeStaffId, activeStaffMember, accessProf
           <div>
             <h3 className="breakdown-title">Local role safety</h3>
             <p className="small-text" style={{ margin: 0 }}>
-              This protects day-to-day actions inside the app. Server sync can also be protected with a deployment secret in the Database tab.
+              Staff PIN opens fast waste logging. Management PIN unlocks reports, settings, exports, backup restore, and protected actions.
             </p>
           </div>
         </div>
 
         <div className="field-grid">
-          <div className="field">
-            <label htmlFor="active-operator">Current operator</label>
-            <select
-              id="active-operator"
-              value={activeStaffId}
-              onChange={(event) => onActiveStaffChange?.(event.target.value)}
-              className="select"
-            >
-              <option value="">Choose staff member</option>
-              {safeStaffList.map((member) => (
-                <option key={member.id} value={member.id}>
-                  {member.name} - {member.role}
-                </option>
-              ))}
-            </select>
-          </div>
-
           <div className="metric-card">
             <span className="metric-value">{activeStaffMember?.name || 'None'}</span>
-            <span className="metric-label">Active operator on this device</span>
+            <span className="metric-label">Active operator</span>
+          </div>
+          <div className="metric-card">
+            <span className="metric-value">{authSession?.mode === 'management' ? 'Management' : 'Staff'}</span>
+            <span className="metric-label">Current access level</span>
           </div>
         </div>
+
+        <div className="smart-panel">
+          <div className="smart-panel__header">
+            <span className="breakdown-title">PIN status</span>
+            <button type="button" onClick={onLogout} className="ghost-button is-warning">
+              Lock app
+            </button>
+          </div>
+          <div className="import-summary-grid">
+            <span className={`badge${authSettings?.staffPin ? ' is-green' : ' is-red'}`}>Staff PIN {authSettings?.staffPin ? 'set' : 'missing'}</span>
+            <span className={`badge${authSettings?.managementPin ? ' is-green' : ' is-red'}`}>Management PIN {authSettings?.managementPin ? 'set' : 'missing'}</span>
+            {authSettings?.updatedAt && <span className="badge">Updated {new Date(authSettings.updatedAt).toLocaleString()}</span>}
+          </div>
+        </div>
+
+        <form onSubmit={handlePinSubmit} className="budget-panel">
+          <h3 className="breakdown-title">Change PINs</h3>
+          <div className="field-grid">
+            <div className="field">
+              <label htmlFor="change-staff-pin">New staff PIN</label>
+              <input
+                id="change-staff-pin"
+                type="password"
+                inputMode="numeric"
+                autoComplete="new-password"
+                value={staffPin}
+                onChange={(event) => setStaffPin(event.target.value)}
+                placeholder="Leave blank to keep current"
+                className="input"
+                disabled={!accessProfile?.canManagePins}
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor="change-management-pin">New management PIN</label>
+              <input
+                id="change-management-pin"
+                type="password"
+                inputMode="numeric"
+                autoComplete="new-password"
+                value={managementPin}
+                onChange={(event) => setManagementPin(event.target.value)}
+                placeholder="Leave blank to keep current"
+                className="input"
+                disabled={!accessProfile?.canManagePins}
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor="confirm-management-pin">Confirm management PIN</label>
+              <input
+                id="confirm-management-pin"
+                type="password"
+                inputMode="numeric"
+                autoComplete="new-password"
+                value={confirmManagementPin}
+                onChange={(event) => setConfirmManagementPin(event.target.value)}
+                placeholder="Required when changing management PIN"
+                className="input"
+                disabled={!accessProfile?.canManagePins}
+              />
+            </div>
+          </div>
+          <button type="submit" className="primary-button" disabled={!accessProfile?.canManagePins || isSavingPins}>
+            {isSavingPins ? 'Saving...' : accessProfile?.canManagePins ? 'Save PIN changes' : 'Management only'}
+          </button>
+          {pinMessage && (
+            <div className="inline-message" role="status">
+              {pinMessage}
+            </div>
+          )}
+        </form>
 
         <div className="permission-grid">
           {permissionRows.map(([label, allowed]) => (
@@ -421,7 +528,8 @@ function Settings({
   activeStaffId,
   activeStaffMember,
   accessProfile,
-  onActiveStaffChange,
+  authSettings,
+  authSession,
   inventoryMovements,
   auditLog,
   syncAccessKey,
@@ -437,6 +545,8 @@ function Settings({
   onRemoveCustomMenuItem,
   onSaveToServer,
   onSaveSyncAccessKey,
+  onSavePinSettings,
+  onLogout,
   onRestoreDatabase,
 }) {
   const [activeSection, setActiveSection] = useState('security');
@@ -656,11 +766,12 @@ function Settings({
 
       {activeSection === 'security' && (
         <SecurityPanel
-          staffList={staffList}
-          activeStaffId={activeStaffId}
           activeStaffMember={activeStaffMember}
           accessProfile={accessProfile}
-          onActiveStaffChange={onActiveStaffChange}
+          authSettings={authSettings}
+          authSession={authSession}
+          onSavePinSettings={onSavePinSettings}
+          onLogout={onLogout}
         />
       )}
 
@@ -697,6 +808,7 @@ function Settings({
           customMenuItems={customMenuItems}
           portionProfiles={portionProfiles}
           activeStaffId={activeStaffId}
+          authSettings={authSettings}
           inventoryMovements={inventoryMovements}
           auditLog={auditLog}
           syncAccessKey={syncAccessKey}

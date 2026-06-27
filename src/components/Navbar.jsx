@@ -5,7 +5,11 @@ const navItems = [
   { key: 'settings', label: 'Settings' },
 ];
 
-function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, accessProfile }) {
+function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, accessProfile, onLogout }) {
+  const visibleNavItems = navItems.filter((item) => (
+    accessProfile?.canViewFinancials || item.key === 'logWaste' || item.key === 'wasteLog'
+  ));
+
   return (
     <nav className="navbar">
       <div className="brand">
@@ -23,7 +27,7 @@ function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, acc
       </div>
 
       <div className="nav-links" aria-label="Primary navigation">
-        {navItems.map((item) => {
+        {visibleNavItems.map((item) => {
           const isActive = activePage === item.key;
 
           return (
@@ -41,6 +45,13 @@ function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, acc
             </button>
           );
         })}
+        <button
+          type="button"
+          className="nav-button"
+          onClick={onLogout}
+        >
+          Lock
+        </button>
       </div>
     </nav>
   );

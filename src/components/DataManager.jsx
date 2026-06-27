@@ -16,6 +16,7 @@ function DataManager({
   customMenuItems,
   portionProfiles,
   activeStaffId,
+  authSettings,
   inventoryMovements,
   auditLog,
   syncAccessKey,
@@ -65,6 +66,7 @@ function DataManager({
       portionProfiles: data.portionProfiles && typeof data.portionProfiles === 'object' && !Array.isArray(data.portionProfiles)
         ? Object.keys(data.portionProfiles).length
         : 0,
+      authConfigured: Boolean(data.authSettings?.staffPin && data.authSettings?.managementPin),
       inventoryMovements: Array.isArray(data.inventoryMovements) ? data.inventoryMovements.length : 0,
       auditLog: Array.isArray(data.auditLog) ? data.auditLog.length : 0,
       budget: Number(data.budget) || 0,
@@ -97,6 +99,7 @@ function DataManager({
       customMenuItems,
       portionProfiles,
       activeStaffId,
+      authSettings,
       inventoryMovements,
       auditLog,
     },
@@ -140,6 +143,11 @@ function DataManager({
       typeof snapshot.data.portionProfiles !== 'object'
       || snapshot.data.portionProfiles === null
       || Array.isArray(snapshot.data.portionProfiles)
+    )) return false;
+    if (snapshot.data.authSettings !== undefined && (
+      typeof snapshot.data.authSettings !== 'object'
+      || snapshot.data.authSettings === null
+      || Array.isArray(snapshot.data.authSettings)
     )) return false;
     if (snapshot.data.inventoryMovements !== undefined && !Array.isArray(snapshot.data.inventoryMovements)) return false;
     if (snapshot.data.auditLog !== undefined && !Array.isArray(snapshot.data.auditLog)) return false;
@@ -355,6 +363,9 @@ function DataManager({
               <span className="badge">{importPreview.staff} staff</span>
               <span className="badge">{importPreview.customMenuItems} custom prices</span>
               <span className="badge">{importPreview.portionProfiles} portions</span>
+              <span className={`badge${importPreview.authConfigured ? ' is-green' : ' is-red'}`}>
+                PINs {importPreview.authConfigured ? 'configured' : 'missing'}
+              </span>
               <span className="badge">{importPreview.inventoryMovements} movements</span>
               <span className="badge">{importPreview.auditLog} audit events</span>
             </div>
@@ -373,6 +384,12 @@ function DataManager({
           <div className="budget-row" style={{ marginTop: '10px' }}>
             <span className="small-text">Remembered portion sizes</span>
             <span className="badge">{portionProfileCount}</span>
+          </div>
+          <div className="budget-row" style={{ marginTop: '10px' }}>
+            <span className="small-text">PIN login configured</span>
+            <span className={`badge${authSettings?.staffPin && authSettings?.managementPin ? ' is-green' : ' is-red'}`}>
+              {authSettings?.staffPin && authSettings?.managementPin ? 'Yes' : 'No'}
+            </span>
           </div>
           <div className="budget-row" style={{ marginTop: '10px' }}>
             <span className="small-text">Inventory movements</span>

@@ -6,6 +6,7 @@ import {
   scaleQuantityLabel,
 } from '../src/utils/wasteCalculations.js';
 import { getAccessProfile, requirePermission } from '../src/utils/accessControl.js';
+import { createPinRecord, validatePin, verifyPin } from '../src/utils/pinAuth.js';
 
 const recipe = {
   name: 'Chicken Burger',
@@ -71,16 +72,25 @@ assert.equal(movements[2].changeLabel, '40g');
 assert.equal(movements[2].costImpact, 4);
 
 const ownerAccess = getAccessProfile({ id: 'staff_owner', name: 'Rizwana', role: 'Owner' });
+const managerAccess = getAccessProfile({ id: 'staff_manager', name: 'Nadia', role: 'Manager' });
 const waiterAccess = getAccessProfile({ id: 'staff_waiter', name: 'Mikaeel', role: 'waiter' });
 const unassignedAccess = getAccessProfile(null);
 
 assert.equal(ownerAccess.canManageServerSync, true);
 assert.equal(ownerAccess.canClearData, true);
+assert.equal(managerAccess.canManageServerSync, true);
+assert.equal(managerAccess.canClearData, true);
 assert.equal(waiterAccess.canLogWaste, true);
 assert.equal(waiterAccess.canViewFinancials, false);
 assert.equal(waiterAccess.canExportData, false);
 assert.equal(unassignedAccess.canLogWaste, false);
 assert.deepEqual(requirePermission(ownerAccess, 'canClearData', 'clear data'), { ok: true, message: '' });
 assert.equal(requirePermission(waiterAccess, 'canClearData', 'clear data').ok, false);
+
+assert.equal(validatePin('123'), 'Use a 4 to 8 digit PIN.');
+assert.equal(validatePin('1234'), '');
+const pinRecord = await createPinRecord('4931');
+assert.equal(await verifyPin('4931', pinRecord), true);
+assert.equal(await verifyPin('1111', pinRecord), false);
 
 console.log('waste calculation tests passed');

@@ -99,7 +99,7 @@ const validateDatabaseData = (data) => {
   }
 
   const arrayFields = ['wasteItems', 'staffList', 'customStaffList', 'customMenuItems', 'inventoryMovements', 'auditLog'];
-  const objectFields = ['recipes', 'portionProfiles', 'settings'];
+  const objectFields = ['recipes', 'portionProfiles', 'settings', 'authSettings'];
 
   for (const field of arrayFields) {
     if (data[field] !== undefined && !Array.isArray(data[field])) {

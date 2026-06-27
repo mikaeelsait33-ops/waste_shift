@@ -4,11 +4,19 @@ import Dashboard from './components/Dashboard';
 import WasteForm from './components/WasteForm';
 import WasteList from './components/WasteList';
 import Settings from './components/Settings';
+import AuthGate from './components/AuthGate';
 import defaultRecipes from './data/defaultRecipes';
 import menuItemsCsv from './data/menuItems.csv?raw';
 import staffMembersCsv from './data/staffMembers.csv?raw';
 import { inferStaffSection } from './utils/staffSections';
-import { getAccessProfile, requirePermission } from './utils/accessControl';
+import { getAccessProfile, inferRoleKey, requirePermission } from './utils/accessControl';
+import {
+  DEFAULT_AUTH_SETTINGS,
+  authPinsAreConfigured,
+  createPinRecord,
+  sanitizeAuthSettings,
+  verifyPin,
+} from './utils/pinAuth';
 import { createInventoryMovementsFromEntry, getEntryFoodCostLost } from './utils/wasteCalculations';
 
 // Seed recipes from the bundled menu catalog.
@@ -16,9 +24,33 @@ const DEFAULT_RECIPES = defaultRecipes;
 const DEFAULT_RECIPE_SEED_VERSION = 'makeline-guide-recipes-v5';
 const SERVER_DATABASE_ENDPOINT = '/api/database';
 const OLD_DEFAULT_COST_BASIS = 'Menu price from menuItems.csv split evenly across listed ingredients.';
+const DEFAULT_STAFF_PIN = '1904';
+const DEFAULT_MANAGEMENT_PIN = '1905';
+const DEFAULT_PIN_PRESET_VERSION = 'shared-default-1904-1905-v1';
 const DEFAULT_SETTINGS = {
   dailyWasteValueLimit: 0,
   dailyWasteEntryLimit: 0,
+};
+
+const sanitizeAuthSession = (session) => {
+  if (!session || typeof session !== 'object' || Array.isArray(session)) {
+    return null;
+  }
+
+  const mode = session.mode === 'management' ? 'management' : 'staff';
+  const staffId = String(session.staffId || '');
+
+  if (!staffId) {
+    return null;
+  }
+
+  return {
+    mode,
+    staffId,
+    staffName: String(session.staffName || ''),
+    roleKey: String(session.roleKey || ''),
+    startedAt: String(session.startedAt || ''),
+  };
 };
 
 const createAuditLogEntry = ({ action, user, relatedItem, beforeValue = null, afterValue = null }) => ({
@@ -30,6 +62,12 @@ const createAuditLogEntry = ({ action, user, relatedItem, beforeValue = null, af
   afterValue,
   relatedItem: relatedItem || '',
 });
+
+const STAFF_SECTION_ROLE_LABELS = {
+  kitchen: 'Kitchen Staff',
+  waiters: 'Waiter',
+  barista: 'Barista',
+};
 
 const isRecipeMap = (value) => (
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -393,6 +431,15 @@ function App() {
     lastSavedAt: '',
   });
   const [syncAccessKey, setSyncAccessKey] = useState(() => localStorage.getItem('wasteShiftSyncAccessKey') || '');
+  const [authSession, setAuthSession] = useState(() => {
+    try {
+      const savedSession = sessionStorage.getItem('wasteShiftAuthSession');
+      return savedSession ? sanitizeAuthSession(JSON.parse(savedSession)) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [isPreparingAuth, setIsPreparingAuth] = useState(false);
 
   const [wasteItems, setWasteItems] = useState(() => {
     try {
@@ -418,6 +465,17 @@ function App() {
     } catch (e) {
       console.error("Corrupted settings in storage, resetting.", e);
       return DEFAULT_SETTINGS;
+    }
+  });
+
+  const [authSettings, setAuthSettings] = useState(() => {
+    try {
+      const savedAuthSettings = localStorage.getItem('wasteShiftAuthSettings');
+      const parsed = savedAuthSettings ? JSON.parse(savedAuthSettings) : DEFAULT_AUTH_SETTINGS;
+      return sanitizeAuthSettings(parsed);
+    } catch (e) {
+      console.error("Corrupted auth settings in storage, resetting.", e);
+      return DEFAULT_AUTH_SETTINGS;
     }
   });
 
@@ -526,10 +584,11 @@ function App() {
     customMenuItems,
     portionProfiles,
     settings,
+    authSettings,
     activeStaffId,
     inventoryMovements,
     auditLog,
-  }), [wasteItems, budget, recipes, staffList, customStaffList, customMenuItems, portionProfiles, settings, activeStaffId, inventoryMovements, auditLog]);
+  }), [wasteItems, budget, recipes, staffList, customStaffList, customMenuItems, portionProfiles, settings, authSettings, activeStaffId, inventoryMovements, auditLog]);
 
   const applyDatabaseData = useCallback((databaseData) => {
     setWasteItems(Array.isArray(databaseData.wasteItems) ? databaseData.wasteItems : []);
@@ -539,13 +598,18 @@ function App() {
     setCustomMenuItems(sanitizeMenuItems(databaseData.customMenuItems));
     setPortionProfiles(sanitizePortionProfiles(databaseData.portionProfiles));
     setSettings(sanitizeSettings(databaseData.settings));
+    if (databaseData.authSettings !== undefined) {
+      setAuthSettings(sanitizeAuthSettings(databaseData.authSettings));
+    }
     setActiveStaffId(String(databaseData.activeStaffId || ''));
     setInventoryMovements(Array.isArray(databaseData.inventoryMovements) ? databaseData.inventoryMovements : []);
     setAuditLog(Array.isArray(databaseData.auditLog) ? databaseData.auditLog : []);
   }, []);
 
   const saveDatabaseToServer = useCallback(async (mode = 'manual') => {
-    const permission = requirePermission(accessProfile, 'canManageServerSync', 'sync the server database');
+    const permission = mode === 'manual'
+      ? requirePermission(accessProfile, 'canManageServerSync', 'sync the server database')
+      : requirePermission(accessProfile, 'canLogWaste', 'sync the server database');
 
     if (!permission.ok) {
       setServerSync(prev => ({
@@ -606,6 +670,19 @@ function App() {
   }, [settings]);
 
   useEffect(() => {
+    localStorage.setItem('wasteShiftAuthSettings', JSON.stringify(authSettings));
+  }, [authSettings]);
+
+  useEffect(() => {
+    if (authSession) {
+      sessionStorage.setItem('wasteShiftAuthSession', JSON.stringify(authSession));
+      return;
+    }
+
+    sessionStorage.removeItem('wasteShiftAuthSession');
+  }, [authSession]);
+
+  useEffect(() => {
     const trimmedAccessKey = syncAccessKey.trim();
 
     if (trimmedAccessKey) {
@@ -655,7 +732,7 @@ function App() {
     const timestamp = new Date().toISOString();
     localStorage.setItem('wasteShiftLastSavedAt', timestamp);
     setLastSavedAt(timestamp);
-  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, settings, activeStaffId, inventoryMovements, auditLog]);
+  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, settings, authSettings, activeStaffId, inventoryMovements, auditLog]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -735,7 +812,177 @@ function App() {
     }, 900);
 
     return () => window.clearTimeout(timeoutId);
-  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, settings, activeStaffId, inventoryMovements, auditLog, serverSyncEnabled, serverLoadComplete, saveDatabaseToServer]);
+  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, settings, authSettings, activeStaffId, inventoryMovements, auditLog, serverSyncEnabled, serverLoadComplete, saveDatabaseToServer]);
+
+  const handleSavePinSettings = useCallback(async ({ staffPin, managementPin, pinPresetVersion = 'custom' }) => {
+    const nextAuthSettings = { ...authSettings };
+    const trimmedStaffPin = String(staffPin || '').trim();
+    const trimmedManagementPin = String(managementPin || '').trim();
+
+    try {
+      if (trimmedStaffPin) {
+        nextAuthSettings.staffPin = await createPinRecord(trimmedStaffPin);
+      }
+
+      if (trimmedManagementPin) {
+        nextAuthSettings.managementPin = await createPinRecord(trimmedManagementPin);
+      }
+
+      if (!nextAuthSettings.staffPin || !nextAuthSettings.managementPin) {
+        return { ok: false, message: 'Create both a staff PIN and a management PIN.' };
+      }
+
+      nextAuthSettings.updatedAt = new Date().toISOString();
+      nextAuthSettings.pinPresetVersion = pinPresetVersion;
+      setAuthSettings(sanitizeAuthSettings(nextAuthSettings));
+      setAuditLog(prevLog => [
+        createAuditLogEntry({
+          action: 'PIN settings changed',
+          user: activeStaffMember?.name || 'System',
+          relatedItem: 'Access PINs',
+          afterValue: {
+            staffPinConfigured: Boolean(nextAuthSettings.staffPin),
+            managementPinConfigured: Boolean(nextAuthSettings.managementPin),
+          },
+        }),
+        ...prevLog,
+      ].slice(0, 500));
+
+      return { ok: true, message: 'PIN settings saved.' };
+    } catch (error) {
+      return { ok: false, message: error?.message || 'Could not save PIN settings.' };
+    }
+  }, [activeStaffMember?.name, authSettings]);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const ensureDefaultPins = async () => {
+      if (authPinsAreConfigured(authSettings) && authSettings.pinPresetVersion) {
+        setIsPreparingAuth(false);
+        return;
+      }
+
+      setIsPreparingAuth(true);
+      const result = await handleSavePinSettings({
+        staffPin: DEFAULT_STAFF_PIN,
+        managementPin: DEFAULT_MANAGEMENT_PIN,
+        pinPresetVersion: DEFAULT_PIN_PRESET_VERSION,
+      });
+
+      if (!isCancelled && !result?.ok) {
+        console.error(result?.message || 'Could not prepare default PINs.');
+      }
+
+      if (!isCancelled) {
+        setIsPreparingAuth(false);
+      }
+    };
+
+    ensureDefaultPins();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [authSettings, handleSavePinSettings]);
+
+  const upsertLoginAccount = useCallback(({ mode, name, staffSection }) => {
+    const trimmedName = String(name || '').trim();
+    const accountId = createStaffMemberId(trimmedName);
+    const existingMember = staffList.find((member) => member.id === accountId);
+    const nextMember = mode === 'management'
+      ? {
+        id: accountId,
+        name: trimmedName,
+        role: 'Manager',
+        staffSection: 'management',
+        isCsvSeed: false,
+      }
+      : {
+        id: accountId,
+        name: trimmedName,
+        role: STAFF_SECTION_ROLE_LABELS[staffSection] || 'Team',
+        staffSection: staffSection || 'kitchen',
+        isCsvSeed: false,
+      };
+
+    setCustomStaffList(prevStaffList => {
+      const existingIndex = prevStaffList.findIndex((member) => member.id === accountId);
+
+      if (existingIndex === -1) {
+        return [...prevStaffList, nextMember];
+      }
+
+      return prevStaffList.map((member, index) => (
+        index === existingIndex ? { ...member, ...nextMember } : member
+      ));
+    });
+
+    return { ...existingMember, ...nextMember };
+  }, [staffList]);
+
+  const handleLogin = useCallback(async ({ mode, name, staffSection, pin }) => {
+    const trimmedName = String(name || '').trim();
+
+    if (!trimmedName) {
+      return { ok: false, message: mode === 'management' ? 'Enter your management name.' : 'Enter your staff name.' };
+    }
+
+    const pinRecord = mode === 'management' ? authSettings.managementPin : authSettings.staffPin;
+    const pinMatches = await verifyPin(pin, pinRecord);
+
+    if (!pinMatches) {
+      return { ok: false, message: 'Incorrect PIN.' };
+    }
+
+    const staffMember = upsertLoginAccount({
+      mode,
+      name: trimmedName,
+      staffSection,
+    });
+    const roleKey = inferRoleKey(staffMember.role);
+    const nextSession = {
+      mode,
+      staffId: staffMember.id,
+      staffName: staffMember.name,
+      roleKey,
+      startedAt: new Date().toISOString(),
+    };
+
+    setAuthSession(nextSession);
+    setActiveStaffId(staffMember.id);
+    setActiveTab(mode === 'management' ? 'dashboard' : 'logWaste');
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: `${mode === 'management' ? 'Management' : 'Staff'} login`,
+        user: staffMember.name,
+        relatedItem: 'PIN login',
+        afterValue: { role: staffMember.role },
+      }),
+      ...prevLog,
+    ].slice(0, 500));
+
+    return { ok: true, message: 'Login successful.' };
+  }, [authSettings.managementPin, authSettings.staffPin, upsertLoginAccount]);
+
+  const handleLogout = useCallback(() => {
+    const previousSession = authSession;
+
+    setAuthSession(null);
+    setActiveStaffId('');
+    setActiveTab('dashboard');
+
+    if (previousSession?.staffName) {
+      setAuditLog(prevLog => [
+        createAuditLogEntry({
+          action: 'Logout',
+          user: previousSession.staffName,
+          relatedItem: 'PIN session',
+        }),
+        ...prevLog,
+      ].slice(0, 500));
+    }
+  }, [authSession]);
 
   const handleAddStaff = (newStaffMember) => {
     const permission = requirePermission(accessProfile, 'canManageStaff', 'manage staff');
@@ -1016,6 +1263,17 @@ function App() {
     applyDatabaseData(databaseData);
   };
 
+  const appIsLocked = !authSession || !authPinsAreConfigured(authSettings);
+
+  if (appIsLocked) {
+    return (
+      <AuthGate
+        isPreparingAuth={isPreparingAuth}
+        onLogin={handleLogin}
+      />
+    );
+  }
+
   return (
     <div className="app-shell">
       <Navbar
@@ -1024,6 +1282,7 @@ function App() {
         wasteCount={wasteItems.length}
         activeStaffMember={activeStaffMember}
         accessProfile={accessProfile}
+        onLogout={handleLogout}
       />
 
       <main className={`app-page${activeTab === 'dashboard' || activeTab === 'wasteLog' || activeTab === 'settings' ? ' app-page--wide' : ''}`}>
@@ -1051,6 +1310,7 @@ function App() {
             onDeleteEntry={handleDeleteEntry}
             onRestoreEntry={handleRestoreEntry}
             accessProfile={accessProfile}
+            activeStaffMember={activeStaffMember}
           />
         )}
 
@@ -1068,10 +1328,11 @@ function App() {
             activeStaffId={activeStaffId}
             activeStaffMember={activeStaffMember}
             accessProfile={accessProfile}
-            onActiveStaffChange={setActiveStaffId}
             inventoryMovements={inventoryMovements}
             auditLog={auditLog}
             syncAccessKey={syncAccessKey}
+            authSettings={authSettings}
+            authSession={authSession}
             serverSync={serverSync}
             lastSavedAt={lastSavedAt}
             onSaveSettings={handleSaveSettings}
@@ -1084,6 +1345,8 @@ function App() {
             onRemoveCustomMenuItem={handleDeleteCustomMenuItem}
             onSaveToServer={() => saveDatabaseToServer('manual')}
             onSaveSyncAccessKey={setSyncAccessKey}
+            onSavePinSettings={handleSavePinSettings}
+            onLogout={handleLogout}
             onRestoreDatabase={handleRestoreDatabase}
           />
         )}

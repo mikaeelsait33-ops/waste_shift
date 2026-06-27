@@ -36,9 +36,10 @@ export const getAccessProfile = (staffMember) => {
     canManageStaff: isTrustedOperator,
     canManageMenu: isTrustedOperator || isChefOrBarista,
     canViewAuditLog: isTrustedOperator,
-    canManageServerSync: isOwner,
-    canRestoreDatabase: isOwner,
-    canClearData: isOwner,
+    canManagePins: isTrustedOperator,
+    canManageServerSync: isTrustedOperator,
+    canRestoreDatabase: isTrustedOperator,
+    canClearData: isTrustedOperator,
   };
 };
 
