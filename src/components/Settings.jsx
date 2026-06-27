@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import DataManager from './DataManager';
 import RecipeManager from './RecipeManager';
+import { STAFF_SECTIONS, getStaffSectionMeta, inferStaffSection } from '../utils/staffSections';
 
 const settingsSections = [
   { key: 'limits', label: 'Limits' },
@@ -34,6 +35,7 @@ const getTodayItems = (items) => {
 function StaffSettings({ staffList, onAddStaff, onDeleteStaff }) {
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
+  const [staffSection, setStaffSection] = useState('kitchen');
   const [message, setMessage] = useState('');
   const [staffSearch, setStaffSearch] = useState('');
   const safeStaffList = useMemo(() => (Array.isArray(staffList) ? staffList : []), [staffList]);
@@ -45,10 +47,20 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff }) {
     }
 
     return safeStaffList.filter((member) => (
-      [member.name, member.role].some((part) => String(part || '').toLowerCase().includes(searchValue))
+      [
+        member.name,
+        member.role,
+        getStaffSectionMeta(member.staffSection || inferStaffSection(member.role)).label,
+      ].some((part) => String(part || '').toLowerCase().includes(searchValue))
     ));
   }, [safeStaffList, staffSearch]);
   const customStaffCount = safeStaffList.filter((member) => !member.isCsvSeed).length;
+  const sectionCounts = STAFF_SECTIONS.map((section) => ({
+    ...section,
+    count: safeStaffList.filter((member) => (
+      (member.staffSection || inferStaffSection(member.role)) === section.key
+    )).length,
+  }));
 
   const handleDeleteClick = (member) => {
     if (window.confirm(`Remove ${member.name} from staff options?`)) {
@@ -73,9 +85,10 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff }) {
       return;
     }
 
-    onAddStaff({ name: trimmedName, role: trimmedRole });
+    onAddStaff({ name: trimmedName, role: trimmedRole, staffSection });
     setName('');
     setRole('');
+    setStaffSection('kitchen');
     setMessage('Staff member saved.');
   };
 
@@ -92,7 +105,7 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff }) {
         </div>
 
         <form onSubmit={handleSubmit}>
-          <div className="field-grid">
+          <div className="staff-form-grid">
             <div className="field">
               <label htmlFor="staff-name">Name</label>
               <input
@@ -120,7 +133,25 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff }) {
                 <option value="Manager" />
                 <option value="Front of house" />
                 <option value="Bar" />
+                <option value="Barista" />
+                <option value="Waiter" />
               </datalist>
+            </div>
+
+            <div className="field">
+              <label htmlFor="staff-section">Section</label>
+              <select
+                id="staff-section"
+                value={staffSection}
+                onChange={(event) => setStaffSection(event.target.value)}
+                className="select"
+              >
+                {STAFF_SECTIONS.map((section) => (
+                  <option key={section.key} value={section.key}>
+                    {section.label}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 
@@ -148,16 +179,30 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff }) {
         <div className="notice-list" style={{ marginBottom: '12px' }}>
           <span className="badge">{customStaffCount} app-added</span>
           <span className="badge">{safeStaffList.length - customStaffCount} CSV</span>
+          {sectionCounts.map((section) => (
+            <span
+              key={section.key}
+              className={`badge staff-section-badge staff-section-badge--${section.key}`}
+            >
+              {section.shortLabel}: {section.count}
+            </span>
+          ))}
         </div>
 
         <div className="staff-list" style={{ marginTop: '16px' }}>
           {filteredStaffList.length === 0 ? (
             <div className="empty-state">No staff members match the current search.</div>
-          ) : filteredStaffList.map((member) => (
+          ) : filteredStaffList.map((member) => {
+            const section = getStaffSectionMeta(member.staffSection || inferStaffSection(member.role));
+
+            return (
             <div key={member.id} className="staff-card item-row">
               <div>
                 <strong>{member.name}</strong>
                 <span className="badge">{member.role}</span>
+                <span className={`badge staff-section-badge staff-section-badge--${section.key}`}>
+                  {section.label}
+                </span>
                 {member.isCsvSeed && <span className="badge">CSV</span>}
               </div>
               {!member.isCsvSeed && (
@@ -166,7 +211,8 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff }) {
                 </button>
               )}
             </div>
-          ))}
+          );
+          })}
         </div>
       </div>
     </div>

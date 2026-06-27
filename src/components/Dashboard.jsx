@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { STAFF_SECTIONS, getStaffSectionMeta, inferStaffSection } from '../utils/staffSections';
 
 const timeframes = ['all', 'day', 'week', 'month', 'year'];
 
@@ -18,10 +19,25 @@ const getMetricRows = (metricsObj, totalValue) => (
     }))
 );
 
-function Dashboard({ items, budget, settings }) {
+function Dashboard({ items, budget, settings, staffList }) {
   const [timeframe, setTimeframe] = useState('all');
+  const [sectionDate, setSectionDate] = useState(() => {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    return date;
+  });
 
   const safeItems = Array.isArray(items) ? items : [];
+  const safeStaffList = useMemo(() => (Array.isArray(staffList) ? staffList : []), [staffList]);
+  const staffByName = useMemo(() => {
+    const lookup = new Map();
+
+    safeStaffList.forEach((member) => {
+      lookup.set(String(member?.name || '').trim().toLowerCase(), member);
+    });
+
+    return lookup;
+  }, [safeStaffList]);
 
   const parseDate = (dateStr) => {
     if (!dateStr) return new Date(0);
@@ -35,6 +51,39 @@ function Dashboard({ items, budget, settings }) {
 
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const isSameDay = (firstDate, secondDate) => {
+    const first = new Date(firstDate);
+    const second = new Date(secondDate);
+
+    first.setHours(0, 0, 0, 0);
+    second.setHours(0, 0, 0, 0);
+    return first.getTime() === second.getTime();
+  };
+  const formatSectionDate = (date) => {
+    const activeDate = new Date(date);
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    if (isSameDay(activeDate, today)) return 'Today';
+    if (isSameDay(activeDate, yesterday)) return 'Yesterday';
+    return activeDate.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+  };
+  const navigateSectionDate = (direction) => {
+    const nextDate = new Date(sectionDate);
+    nextDate.setDate(nextDate.getDate() + direction);
+    nextDate.setHours(0, 0, 0, 0);
+
+    if (nextDate <= today) {
+      setSectionDate(nextDate);
+    }
+  };
+  const canGoForwardSectionDate = !isSameDay(sectionDate, today);
+  const getItemStaffSection = (item) => {
+    const staffName = String(item?.staff || '').trim().toLowerCase();
+    const staffMember = staffByName.get(staffName);
+
+    return staffMember?.staffSection || inferStaffSection(staffMember?.role || item?.staff);
+  };
 
   const filteredItems = safeItems.filter((item) => {
     if (timeframe === 'all') return true;
@@ -75,6 +124,23 @@ function Dashboard({ items, budget, settings }) {
     return itemDate.getTime() === today.getTime();
   });
   const todayLoss = todayItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+  const sectionDateItems = safeItems.filter((item) => isSameDay(parseDate(item?.date), sectionDate));
+  const sectionDateLoss = sectionDateItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+  const sectionRings = STAFF_SECTIONS.map((section) => {
+    const sectionItems = sectionDateItems.filter((item) => getItemStaffSection(item) === section.key);
+    const sectionLoss = sectionItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+    const percent = sectionDateLoss > 0 ? Math.round((sectionLoss / sectionDateLoss) * 100) : 0;
+
+    return {
+      ...section,
+      entries: sectionItems.length,
+      loss: sectionLoss,
+      percent,
+    };
+  });
+  const leadingSection = sectionRings.reduce((leader, section) => (
+    section.loss > (leader?.loss || 0) ? section : leader
+  ), null);
   const dailyValueLimit = Number(settings?.dailyWasteValueLimit) || 0;
   const dailyEntryLimit = Number(settings?.dailyWasteEntryLimit) || 0;
   const dailyValueUsagePercent = dailyValueLimit > 0 ? Math.min(100, (todayLoss / dailyValueLimit) * 100) : 0;
@@ -248,6 +314,63 @@ function Dashboard({ items, budget, settings }) {
           </div>
         )}
 
+        <div className="section-rings-panel">
+          <div className="section-rings-header">
+            <div>
+              <h3 className="breakdown-title">Daily restaurant section rings</h3>
+              <p className="small-text" style={{ margin: 0 }}>
+                {sectionDateItems.length} entr{sectionDateItems.length === 1 ? 'y' : 'ies'} worth R{sectionDateLoss.toFixed(2)} on {formatSectionDate(sectionDate).toLowerCase()}
+              </p>
+            </div>
+            <div className="date-actions">
+              <button type="button" onClick={() => navigateSectionDate(-1)} className="icon-button" title="Previous day">
+                {'<'}
+              </button>
+              <span className="section-date-pill">{formatSectionDate(sectionDate)}</span>
+              <button
+                type="button"
+                onClick={() => navigateSectionDate(1)}
+                className="icon-button"
+                title="Next day"
+                disabled={!canGoForwardSectionDate}
+              >
+                {'>'}
+              </button>
+            </div>
+          </div>
+
+          <div className="section-ring-grid">
+            {sectionRings.map((section) => {
+              const isLeading = leadingSection?.key === section.key && section.loss > 0;
+
+              return (
+                <div key={section.key} className={`section-ring-card${isLeading ? ' is-leading' : ''}`}>
+                  <div
+                    className="section-ring-visual"
+                    style={{
+                      '--ring-color': section.color,
+                      '--ring-fill': `${section.percent}%`,
+                    }}
+                    aria-label={`${section.label}: ${section.percent}% of selected day waste`}
+                  >
+                    <span>{section.percent}%</span>
+                  </div>
+                  <div>
+                    <span className={`badge staff-section-badge staff-section-badge--${section.key}`}>
+                      {section.label}
+                    </span>
+                    <div className="section-ring-value">R{section.loss.toFixed(2)}</div>
+                    <div className="small-text">
+                      {section.entries} entr{section.entries === 1 ? 'y' : 'ies'}
+                      {isLeading ? ' - highest today' : ''}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="budget-panel">
           <div className="budget-row">
             <span className="field-label">Monthly loss limit</span>
@@ -328,17 +451,27 @@ function Dashboard({ items, budget, settings }) {
 
             <div>
               <h3 className="breakdown-title">Staff accountability</h3>
-              {staffRows.map((row) => (
+              {staffRows.map((row) => {
+                const staffMember = staffByName.get(String(row.label || '').trim().toLowerCase());
+                const staffSection = getStaffSectionMeta(staffMember?.staffSection || inferStaffSection(staffMember?.role || row.label));
+
+                return (
                   <div key={row.label} className="breakdown-item">
                     <div className="breakdown-label">
-                      <span>{row.label}</span>
+                      <span>
+                        {row.label}
+                        <span className={`badge staff-section-badge staff-section-badge--${staffSection.key}`}>
+                          {staffSection.shortLabel}
+                        </span>
+                      </span>
                       <span>R{row.value.toFixed(2)}</span>
                     </div>
                     <div className="progress-track">
                       <div className="progress-fill" style={{ width: `${row.pct}%` }} />
                     </div>
                   </div>
-              ))}
+                );
+              })}
             </div>
 
             <div>

@@ -7,6 +7,7 @@ import Settings from './components/Settings';
 import defaultRecipes from './data/defaultRecipes';
 import menuItemsCsv from './data/menuItems.csv?raw';
 import staffMembersCsv from './data/staffMembers.csv?raw';
+import { inferStaffSection } from './utils/staffSections';
 
 // Seed recipes from the bundled menu catalog.
 const DEFAULT_RECIPES = defaultRecipes;
@@ -301,6 +302,7 @@ const createStaffMembersFromCsv = (csvText) => {
         id,
         name,
         role: roleColumnIndex === -1 ? 'Team' : row[roleColumnIndex]?.trim() || 'Team',
+        staffSection: inferStaffSection(roleColumnIndex === -1 ? 'Team' : row[roleColumnIndex]?.trim() || 'Team'),
         isCsvSeed: true,
       };
     })
@@ -336,6 +338,7 @@ const sanitizeStaffMembers = (members) => {
         id,
         name,
         role,
+        staffSection: inferStaffSection(member?.staffSection || member?.section || role),
         isCsvSeed: false,
       };
     })
@@ -631,6 +634,7 @@ function App() {
       const nextStaffMember = {
         ...newStaffMember,
         id: createStaffMemberId(newStaffMember.name),
+        staffSection: inferStaffSection(newStaffMember.staffSection || newStaffMember.role),
         isCsvSeed: false,
       };
       const existingIndex = prev.findIndex((member) => member.id === nextStaffMember.id);
@@ -762,7 +766,7 @@ function App() {
 
       <main className={`app-page${activeTab === 'wasteLog' || activeTab === 'settings' ? ' app-page--wide' : ''}`}>
         {activeTab === 'dashboard' && (
-          <Dashboard items={wasteItems} budget={budget} settings={settings} />
+          <Dashboard items={wasteItems} budget={budget} settings={settings} staffList={staffList} />
         )}
 
         {activeTab === 'logWaste' && (
