@@ -144,7 +144,7 @@ function AuthGate({
                 autoComplete="current-password"
                 value={pin}
                 onChange={(event) => setPin(event.target.value)}
-                placeholder={mode === 'management' ? '1905' : '1904'}
+                placeholder="Enter PIN"
                 className="input"
               />
             </div>
