@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import InvoicePriceImporter from './InvoicePriceImporter';
 
 const CATEGORY_OPTIONS = [
   { value: 'Produce', label: 'Produce' },
@@ -401,6 +402,13 @@ function RecipeManager({
           )}
         </div>
       </form>
+
+      <InvoicePriceImporter
+        recipes={safeRecipes}
+        catalogEntries={catalogEntries}
+        onAddRecipe={onAddRecipe}
+        onSaveMenuItem={onSaveMenuItem}
+      />
 
       <div className="panel">
         <div className="panel-body">
