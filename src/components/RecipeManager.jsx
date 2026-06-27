@@ -2,9 +2,22 @@ import { useState } from 'react';
 
 function RecipeManager({ recipes, onAddRecipe, onClearRecipes }) {
   const [recipeName, setRecipeName] = useState('');
+  const [recipeSearch, setRecipeSearch] = useState('');
   const [ingredients, setIngredients] = useState([
-    { name: '', cost: '', category: 'Produce', stock: 50 },
+    { name: '', cost: '', category: 'Produce' },
   ]);
+
+  const recipeEntries = Object.entries(recipes);
+  const recipeSearchValue = recipeSearch.trim().toLowerCase();
+  const filteredRecipeEntries = recipeEntries.filter(([, recipe]) => {
+    if (!recipeSearchValue) return true;
+
+    return [
+      recipe.name,
+      ...recipe.ingredients.map((ingredient) => ingredient.name),
+      ...recipe.ingredients.map((ingredient) => ingredient.category),
+    ].some((part) => String(part || '').toLowerCase().includes(recipeSearchValue));
+  });
 
   const handleIngredientChange = (index, field, value) => {
     const updated = [...ingredients];
@@ -13,7 +26,7 @@ function RecipeManager({ recipes, onAddRecipe, onClearRecipes }) {
   };
 
   const addIngredientRow = () => {
-    setIngredients([...ingredients, { name: '', cost: '', category: 'Produce', stock: 50 }]);
+    setIngredients([...ingredients, { name: '', cost: '', category: 'Produce' }]);
   };
 
   const removeIngredientRow = (index) => {
@@ -34,7 +47,6 @@ function RecipeManager({ recipes, onAddRecipe, onClearRecipes }) {
       name: ing.name,
       cost: parseFloat(ing.cost) || 0,
       category: ing.category,
-      stock: parseInt(ing.stock, 10) || 0,
     }));
 
     onAddRecipe(recipeKey, {
@@ -43,7 +55,7 @@ function RecipeManager({ recipes, onAddRecipe, onClearRecipes }) {
     });
 
     setRecipeName('');
-    setIngredients([{ name: '', cost: '', category: 'Produce', stock: 50 }]);
+    setIngredients([{ name: '', cost: '', category: 'Produce' }]);
     alert(`"${recipeName}" has been added to your recipe database.`);
   };
 
@@ -53,9 +65,9 @@ function RecipeManager({ recipes, onAddRecipe, onClearRecipes }) {
         <div className="panel-body">
           <div className="section-header">
             <div>
-              <p className="eyebrow">Stockroom</p>
-              <h2 className="title">Recipe & Stock Creator</h2>
-              <p className="subtitle">Build recipes with ingredient costs and stock counts.</p>
+              <p className="eyebrow">Recipes</p>
+              <h2 className="title">Recipe Cost Creator</h2>
+              <p className="subtitle">Build menu items with ingredient categories and cost breakdowns.</p>
             </div>
           </div>
 
@@ -93,7 +105,7 @@ function RecipeManager({ recipes, onAddRecipe, onClearRecipes }) {
                   />
                 </div>
 
-                <div className="field-grid" style={{ marginTop: '10px' }}>
+                <div className="manager-row" style={{ marginTop: '10px' }}>
                   <select
                     value={ing.category}
                     onChange={(e) => handleIngredientChange(idx, 'category', e.target.value)}
@@ -106,20 +118,11 @@ function RecipeManager({ recipes, onAddRecipe, onClearRecipes }) {
                     <option value="Pantry">Pantry Goods</option>
                   </select>
 
-                  <div className="manager-row">
-                    <input
-                      type="number"
-                      placeholder="Stock"
-                      value={ing.stock}
-                      onChange={(e) => handleIngredientChange(idx, 'stock', e.target.value)}
-                      className="input"
-                    />
-                    {ingredients.length > 1 && (
-                      <button type="button" onClick={() => removeIngredientRow(idx)} className="delete-button" title="Remove ingredient">
-                        x
-                      </button>
-                    )}
-                  </div>
+                  {ingredients.length > 1 && (
+                    <button type="button" onClick={() => removeIngredientRow(idx)} className="delete-button" title="Remove ingredient">
+                      x
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -139,22 +142,35 @@ function RecipeManager({ recipes, onAddRecipe, onClearRecipes }) {
         <div className="panel-body">
           <div className="section-header">
             <div>
-              <p className="eyebrow">Inventory</p>
-              <h2 className="title">Live Stockroom</h2>
-              <p className="subtitle">Ingredient values and stock levels by recipe.</p>
+              <p className="eyebrow">Recipe catalog</p>
+              <h2 className="title">Saved Recipes</h2>
+              <p className="subtitle">Ingredient values used when logging menu-item waste.</p>
             </div>
-            {Object.keys(recipes).length > 0 && (
+            {recipeEntries.length > 0 && (
               <button type="button" onClick={onClearRecipes} className="danger-button">
                 Wipe recipes
               </button>
             )}
           </div>
 
-          {Object.keys(recipes).length === 0 ? (
-            <div className="empty-state">Your stockroom database is empty. Create a custom item above.</div>
+          {recipeEntries.length > 0 && (
+            <div className="toolbar toolbar--single">
+              <input
+                type="search"
+                value={recipeSearch}
+                onChange={(e) => setRecipeSearch(e.target.value)}
+                placeholder="Search recipes or ingredients"
+                className="input"
+              />
+            </div>
+          )}
+
+          {recipeEntries.length === 0 ? (
+            <div className="empty-state">Your recipe database is empty. Create a custom item above.</div>
+          ) : filteredRecipeEntries.length === 0 ? (
+            <div className="empty-state">No recipes match the current search.</div>
           ) : (
-            Object.keys(recipes).map((key) => {
-              const recipe = recipes[key];
+            filteredRecipeEntries.map(([key, recipe]) => {
               const recipeTotal = Number(recipe.menuPrice ?? recipe.ingredients.reduce((sum, ing) => sum + (Number(ing.cost) || 0), 0));
 
               return (
@@ -170,12 +186,7 @@ function RecipeManager({ recipes, onAddRecipe, onClearRecipes }) {
                         <span className="small-text">
                           {ing.name} <span className="badge">{ing.category}</span>
                         </span>
-                        <div className="manager-row">
-                          <span className="price">R{(Number(ing.cost) || 0).toFixed(2)}</span>
-                          <span className={`badge${ing.stock <= 5 ? ' is-red' : ' is-green'}`}>
-                            Stock: {ing.stock}
-                          </span>
-                        </div>
+                        <span className="price">R{(Number(ing.cost) || 0).toFixed(2)}</span>
                       </div>
                     ))}
                   </div>

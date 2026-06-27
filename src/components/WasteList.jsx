@@ -3,6 +3,8 @@ import DateNavigator from './DateNavigator';
 
 function WasteList({ items, onDeleteEntry, onClearAll }) {
   const [activeFilter, setActiveFilter] = useState('All');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [sortMode, setSortMode] = useState('newest');
   const [viewMode, setViewMode] = useState('day');
   const [selectedDate, setSelectedDate] = useState(() => {
     const d = new Date();
@@ -39,15 +41,64 @@ function WasteList({ items, onDeleteEntry, onClearAll }) {
     return true;
   });
 
+  const searchValue = searchTerm.trim().toLowerCase();
+
   const filteredItems = dateFilteredItems.filter((item) => {
     if (activeFilter === 'All') return true;
     if (item.isRecipe) return item.ingredients.some((ing) => ing.category === activeFilter);
     return item.category === activeFilter;
+  }).filter((item) => {
+    if (!searchValue) return true;
+
+    const searchableParts = [
+      item?.name,
+      item?.reason,
+      item?.staff,
+      item?.category,
+      ...(Array.isArray(item?.ingredients) ? item.ingredients.map((ingredient) => ingredient.name) : []),
+    ];
+
+    return searchableParts.some((part) => String(part || '').toLowerCase().includes(searchValue));
+  }).sort((a, b) => {
+    if (sortMode === 'highestCost') return (Number(b?.cost) || 0) - (Number(a?.cost) || 0);
+    if (sortMode === 'name') return String(a?.name || '').localeCompare(String(b?.name || ''));
+    return parseDate(b?.date).getTime() - parseDate(a?.date).getTime();
   });
 
   const totalCost = dateFilteredItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
   const totalCount = dateFilteredItems.length;
   const filterCategories = ['All', 'Produce', 'Dairy', 'Bakery', 'Meat/Poultry', 'Pantry', 'Other'];
+
+  const escapeCsv = (value) => {
+    const text = String(value ?? '');
+    return `"${text.replace(/"/g, '""')}"`;
+  };
+
+  const exportFilteredItems = () => {
+    const headers = ['Date', 'Item', 'Quantity', 'Type', 'Category', 'Reason', 'Staff', 'Cost', 'Ingredients'];
+    const rows = filteredItems.map((item) => [
+      item.date,
+      item.name,
+      item.quantity,
+      item.isRecipe ? 'Recipe' : 'Ingredient',
+      item.category,
+      item.reason,
+      item.staff || '',
+      (Number(item.cost) || 0).toFixed(2),
+      Array.isArray(item.ingredients) ? item.ingredients.map((ingredient) => `${ingredient.name} (${ingredient.category})`).join('; ') : '',
+    ]);
+
+    const csv = [headers, ...rows].map((row) => row.map(escapeCsv).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `wasteshift-log-${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <section className="list-page">
@@ -70,6 +121,24 @@ function WasteList({ items, onDeleteEntry, onClearAll }) {
         viewMode={viewMode}
         onViewModeChange={setViewMode}
       />
+
+      <div className="toolbar">
+        <input
+          type="search"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="Search item, staff, reason, or ingredient"
+          className="input"
+        />
+        <select value={sortMode} onChange={(e) => setSortMode(e.target.value)} className="select">
+          <option value="newest">Newest first</option>
+          <option value="highestCost">Highest cost</option>
+          <option value="name">Item name</option>
+        </select>
+        <button type="button" onClick={exportFilteredItems} className="ghost-button is-warning" disabled={filteredItems.length === 0}>
+          Export CSV
+        </button>
+      </div>
 
       {viewMode !== 'all' && (
         <div className="budget-panel" style={{ marginBottom: '14px' }}>
@@ -97,7 +166,9 @@ function WasteList({ items, onDeleteEntry, onClearAll }) {
 
       {filteredItems.length === 0 ? (
         <div className="empty-state">
-          {viewMode === 'all'
+          {searchValue
+            ? 'No items match your search.'
+            : viewMode === 'all'
             ? 'No items found under this scope.'
             : viewMode === 'day'
               ? 'No waste was logged on this day.'

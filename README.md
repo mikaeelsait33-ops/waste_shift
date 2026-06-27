@@ -1,16 +1,27 @@
-# React + Vite
+# WasteShift
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Food waste tracking app with local browser persistence and optional Vercel server sync.
 
-Currently, two official plugins are available:
+## Local Development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm.cmd install
+npm.cmd run dev
+```
 
-## React Compiler
+Local data is saved in browser storage. Database backups can still be exported from the Database page.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Vercel Server Sync
 
-## Expanding the Oxlint configuration
+The app includes a Vercel serverless API at `api/database.js`. It saves one JSON database snapshot to Vercel Blob at `wasteshift/database.json`.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+To enable it on Vercel:
+
+1. Deploy the project to Vercel.
+2. Add Vercel Blob storage to the project.
+3. Make sure `BLOB_READ_WRITE_TOKEN` is available in the project environment variables.
+4. Redeploy.
+
+After that, the Database page will show server sync status and the app will auto-save to the server. Browser storage remains as a fallback.
+
+Important: protect the Vercel deployment if this data is private, because the sync API is same-origin but not user-authenticated.

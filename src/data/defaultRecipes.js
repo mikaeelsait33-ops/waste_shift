@@ -1,140 +1,93 @@
-const rawDefaultRecipes = {
-  oatmeal: {
-    name: 'Oatmeal',
-    ingredients: [
-      { name: 'Raw Oatmeal (70g)', cost: 0.0, category: 'Bakery', stock: 50 },
-      { name: 'Full Cream Milk (300ml)', cost: 0.0, category: 'Dairy', stock: 50 },
-      { name: 'Banana (60g)', cost: 0.0, category: 'Produce', stock: 50 },
-      { name: 'Dried Cranberry (15g)', cost: 0.0, category: 'Pantry', stock: 50 },
-      { name: 'Roasted Hazelnut (15g)', cost: 0.0, category: 'Pantry', stock: 50 },
-      { name: 'Honey (15ml)', cost: 0.0, category: 'Pantry', stock: 50 },
-    ],
-  },
-  avo_hummus_toast: {
-    name: 'Avo & Hummus Toast',
-    ingredients: [
-      { name: 'Bread slices (2)', cost: 0.0, category: 'Bakery', stock: 50 },
-      { name: 'Avocado (1)', cost: 0.0, category: 'Produce', stock: 50 },
-      { name: 'Hummus (60g)', cost: 0.0, category: 'Pantry', stock: 50 },
-      { name: 'Cherry Tomato (20g)', cost: 0.0, category: 'Produce', stock: 50 },
-      { name: 'Seeds (10g)', cost: 0.0, category: 'Pantry', stock: 50 },
-      { name: 'Chia Seeds (5g)', cost: 0.0, category: 'Pantry', stock: 50 },
-      { name: 'Lemon Wedge (1)', cost: 0.0, category: 'Produce', stock: 50 },
-      { name: 'Micro Greens (garnish)', cost: 0.0, category: 'Produce', stock: 50 },
-    ],
-  },
-  berry_bliss_french_toast: {
-    name: 'Berry Bliss French Toast',
-    ingredients: [
-      { name: 'Brioche loaf slices (2)', cost: 0.0, category: 'Bakery', stock: 50 },
-      { name: 'Eggs (2)', cost: 0.0, category: 'Dairy', stock: 50 },
-      { name: 'Milk (20ml)', cost: 0.0, category: 'Dairy', stock: 50 },
-      { name: 'Vanilla Essence (2ml)', cost: 0.0, category: 'Pantry', stock: 50 },
-      { name: 'Banana (100g)', cost: 0.0, category: 'Produce', stock: 50 },
-      { name: 'Blueberry Compote (50g)', cost: 0.0, category: 'Pantry', stock: 50 },
-      { name: 'Maple Syrup (25g)', cost: 0.0, category: 'Pantry', stock: 50 },
-      { name: 'Icing Sugar (5g)', cost: 0.0, category: 'Pantry', stock: 50 },
-    ],
-  },
-  sunrise_croissant: {
-    name: 'Sunrise Croissant',
-    ingredients: [
-      { name: 'Croissant (1)', cost: 0.0, category: 'Bakery', stock: 50 },
-      { name: 'Eggs (2)', cost: 0.0, category: 'Dairy', stock: 50 },
-      { name: 'Butter (1 portion)', cost: 0.0, category: 'Dairy', stock: 50 },
-      { name: 'Shoulder Bacon/Macon (60g)', cost: 0.0, category: 'Meat/Poultry', stock: 50 },
-      { name: 'Tomato Chilli Jam (20g)', cost: 0.0, category: 'Pantry', stock: 50 },
-      { name: 'Spring Onion (5g)', cost: 0.0, category: 'Produce', stock: 50 },
-    ],
-  },
-  scrambled_egg_avo_toast: {
-    name: 'Scrambled Egg, Avo & Toast',
-    ingredients: [
-      { name: 'Bread slice (1)', cost: 0.0, category: 'Bakery', stock: 50 },
-      { name: 'Eggs (3)', cost: 0.0, category: 'Dairy', stock: 50 },
-      { name: 'Full Cream Milk (20ml)', cost: 0.0, category: 'Dairy', stock: 50 },
-      { name: 'Micro Greens (5g)', cost: 0.0, category: 'Produce', stock: 50 },
-      { name: 'Avocado half (0.85g)', cost: 0.0, category: 'Produce', stock: 50 },
-      { name: 'Butter (1 portion)', cost: 0.0, category: 'Dairy', stock: 50 },
-    ],
-  },
-  salmon_benedict: {
-    name: 'Salmon Benedict',
-    ingredients: [
-      { name: 'Poached Eggs (2)', cost: 0.0, category: 'Dairy', stock: 50 },
-      { name: 'English Muffin (1)', cost: 0.0, category: 'Bakery', stock: 50 },
-      { name: 'Hollandaise Sauce (75ml)', cost: 0.0, category: 'Dairy', stock: 50 },
-      { name: 'Salmon (1 portion)', cost: 0.0, category: 'Meat/Poultry', stock: 50 },
-      { name: 'Lemon Wedge (1)', cost: 0.0, category: 'Produce', stock: 50 },
-      { name: 'Capers (5g)', cost: 0.0, category: 'Pantry', stock: 50 },
-      { name: 'Cream Cheese (30g)', cost: 0.0, category: 'Dairy', stock: 50 },
-      { name: 'Micro Green Herbs (5g)', cost: 0.0, category: 'Produce', stock: 50 },
-      { name: 'Avocado half (0.85g)', cost: 0.0, category: 'Produce', stock: 50 },
-    ],
-  },
-  benedict_florentine: {
-    name: 'Benedict Florentine',
-    ingredients: [
-      { name: 'Poached Eggs (2)', cost: 0.0, category: 'Dairy', stock: 50 },
-      { name: 'English Muffin (1)', cost: 0.0, category: 'Bakery', stock: 50 },
-      { name: 'Hollandaise Sauce (75ml)', cost: 0.0, category: 'Dairy', stock: 50 },
-      { name: 'Mushroom (80g)', cost: 0.0, category: 'Produce', stock: 50 },
-      { name: 'Spinach (30g)', cost: 0.0, category: 'Produce', stock: 50 },
-      { name: 'Micro Green Herbs (5g)', cost: 0.0, category: 'Produce', stock: 50 },
-    ],
-  },
-  low_carb_benedict: {
-    name: 'Low Carb Benedict',
-    ingredients: [
-      { name: 'Poached Eggs (2)', cost: 0.0, category: 'Dairy', stock: 50 },
-      { name: 'Hollandaise Sauce (75ml)', cost: 0.0, category: 'Dairy', stock: 50 },
-      { name: 'Shoulder Bacon/Macon (60g)', cost: 0.0, category: 'Meat/Poultry', stock: 50 },
-      { name: 'Rocket (20g)', cost: 0.0, category: 'Produce', stock: 50 },
-      { name: 'Mushrooms (80g)', cost: 0.0, category: 'Produce', stock: 50 },
-      { name: 'Micro Green Herbs (5g)', cost: 0.0, category: 'Produce', stock: 50 },
-      { name: 'Avocado full (0.85g)', cost: 0.0, category: 'Produce', stock: 50 },
-    ],
-  },
-  classic_benedict: {
-    name: 'Classic Benedict',
-    ingredients: [
-      { name: 'English Muffin (1)', cost: 0.0, category: 'Bakery', stock: 50 },
-      { name: 'Bacon/Macon (60g)', cost: 0.0, category: 'Meat/Poultry', stock: 50 },
-      { name: 'Poached Eggs (2)', cost: 0.0, category: 'Dairy', stock: 50 },
-      { name: 'Hollandaise Sauce (75ml)', cost: 0.0, category: 'Dairy', stock: 50 },
-      { name: 'Chives (1g)', cost: 0.0, category: 'Produce', stock: 50 },
-      { name: 'Smoked Paprika (1g)', cost: 0.0, category: 'Pantry', stock: 50 },
-    ],
-  },
-  berry_bliss_yogurt_bowl: {
-    name: 'Berry Bliss Yogurt Bowl',
-    ingredients: [
-      { name: 'Plain Yogurt (200g)', cost: 0.0, category: 'Dairy', stock: 50 },
-      { name: 'Vanilla (5ml)', cost: 0.0, category: 'Pantry', stock: 50 },
-      { name: 'Honey (15g)', cost: 0.0, category: 'Pantry', stock: 50 },
-      { name: 'Strawberry (30g)', cost: 0.0, category: 'Produce', stock: 50 },
-      { name: 'Raspberry (30g)', cost: 0.0, category: 'Produce', stock: 50 },
-      { name: 'Blueberry (30g)', cost: 0.0, category: 'Produce', stock: 50 },
-      { name: 'Granola (75g)', cost: 0.0, category: 'Bakery', stock: 50 },
-      { name: 'Mint (1g)', cost: 0.0, category: 'Produce', stock: 50 },
-    ],
-  },
+import menuItemsCsv from './menuItems.csv?raw';
+import rawDefaultRecipes from './rawRecipeCatalog.js';
+
+const createMenuItemKey = (name) => String(name || '')
+  .trim()
+  .toLowerCase()
+  .replace(/&/g, ' ')
+  .replace(/[^a-z0-9]+/g, '_')
+  .replace(/^_+|_+$/g, '');
+
+const parsePriceValue = (value) => {
+  const cleanedValue = String(value ?? '').replace(/[^0-9.-]/g, '');
+  const parsedValue = Number.parseFloat(cleanedValue);
+
+  return Number.isFinite(parsedValue) ? parsedValue : null;
 };
 
-const menuPrices = {
-  oatmeal: 95,
-  avo_hummus_toast: 105,
-  berry_bliss_french_toast: 115,
-  sunrise_croissant: 125,
-  scrambled_egg_avo_toast: 92,
-  salmon_benedict: 175,
-  benedict_florentine: 155,
-  low_carb_benedict: 139,
-  classic_benedict: 120,
-  berry_bliss_yogurt_bowl: 119,
+const parseCsvRows = (csvText) => {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let isInsideQuotes = false;
+
+  for (let i = 0; i < csvText.length; i += 1) {
+    const char = csvText[i];
+    const nextChar = csvText[i + 1];
+
+    if (char === '"' && isInsideQuotes && nextChar === '"') {
+      field += '"';
+      i += 1;
+    } else if (char === '"') {
+      isInsideQuotes = !isInsideQuotes;
+    } else if (char === ',' && !isInsideQuotes) {
+      row.push(field);
+      field = '';
+    } else if ((char === '\n' || char === '\r') && !isInsideQuotes) {
+      if (char === '\r' && nextChar === '\n') {
+        i += 1;
+      }
+
+      row.push(field);
+      if (row.some((cell) => cell.trim())) {
+        rows.push(row);
+      }
+
+      row = [];
+      field = '';
+    } else {
+      field += char;
+    }
+  }
+
+  row.push(field);
+  if (row.some((cell) => cell.trim())) {
+    rows.push(row);
+  }
+
+  return rows;
+};
+
+const createMenuPriceMap = (csvText) => {
+  const rows = parseCsvRows(csvText);
+  const [headers = [], ...dataRows] = rows;
+  const nameColumnIndex = headers.findIndex((header) => header.trim().toLowerCase() === 'name');
+  const priceColumnIndex = headers.findIndex((header) => {
+    const normalizedHeader = header.trim().toLowerCase().replace(/\s+/g, '_');
+    return normalizedHeader === 'price' || normalizedHeader === 'menu_price';
+  });
+
+  if (nameColumnIndex === -1 || priceColumnIndex === -1) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    dataRows
+      .map((row) => {
+        const key = createMenuItemKey(row[nameColumnIndex]);
+        const price = parsePriceValue(row[priceColumnIndex]);
+
+        return [key, price];
+      })
+      .filter(([key, price]) => key && price !== null)
+  );
 };
 
 const splitMenuPriceAcrossIngredients = (menuPrice, ingredients) => {
+  if (!Array.isArray(ingredients) || ingredients.length === 0) {
+    return [];
+  }
+
   const totalCents = Math.round(menuPrice * 100);
   const baseCents = Math.floor(totalCents / ingredients.length);
   const remainderCents = totalCents - (baseCents * ingredients.length);
@@ -144,6 +97,8 @@ const splitMenuPriceAcrossIngredients = (menuPrice, ingredients) => {
     cost: (baseCents + (index < remainderCents ? 1 : 0)) / 100,
   }));
 };
+
+const menuPrices = createMenuPriceMap(menuItemsCsv);
 
 const defaultRecipes = Object.fromEntries(
   Object.entries(rawDefaultRecipes).map(([key, recipe]) => {
@@ -158,7 +113,7 @@ const defaultRecipes = Object.fromEntries(
       {
         ...recipe,
         menuPrice,
-        costBasis: 'Menu price from v1/v2 PDF split evenly across listed ingredients.',
+        costBasis: 'Menu price from menuItems.csv split evenly across listed ingredients.',
         ingredients: splitMenuPriceAcrossIngredients(menuPrice, recipe.ingredients),
       },
     ];

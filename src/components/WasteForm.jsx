@@ -1,6 +1,26 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
-function WasteForm({ onAddEntry, recipes, staffList, onAddStaff, onDeleteStaff }) {
+const splitCostAcrossIngredients = (totalCost, ingredients) => {
+  const safeIngredients = Array.isArray(ingredients) ? ingredients : [];
+
+  if (safeIngredients.length === 0 || totalCost <= 0) {
+    return safeIngredients.map((ingredient) => ({
+      ...ingredient,
+      cost: 0,
+    }));
+  }
+
+  const totalCents = Math.round(totalCost * 100);
+  const baseCents = Math.floor(totalCents / safeIngredients.length);
+  const remainderCents = totalCents - (baseCents * safeIngredients.length);
+
+  return safeIngredients.map((ingredient, index) => ({
+    ...ingredient,
+    cost: (baseCents + (index < remainderCents ? 1 : 0)) / 100,
+  }));
+};
+
+function WasteForm({ onAddEntry, recipes, menuItems, staffList, onAddStaff, onDeleteStaff }) {
   const [formType, setFormType] = useState('single');
   const [name, setName] = useState('');
   const [quantity, setQuantity] = useState('1');
@@ -17,25 +37,32 @@ function WasteForm({ onAddEntry, recipes, staffList, onAddStaff, onDeleteStaff }
   const [wasteDate, setWasteDate] = useState(getTodayYMD());
 
   const safeStaffList = Array.isArray(staffList) ? staffList : [];
-  const recipeKeys = Object.keys(recipes);
-  const [selectedRecipeKey, setSelectedRecipeKey] = useState(recipeKeys[0] || '');
+  const safeMenuItems = useMemo(() => (Array.isArray(menuItems) ? menuItems : []), [menuItems]);
+  const [selectedRecipeKey, setSelectedRecipeKey] = useState(safeMenuItems[0]?.key || '');
 
   useEffect(() => {
-    if (recipeKeys.length > 0 && !recipes[selectedRecipeKey]) {
-      setSelectedRecipeKey(recipeKeys[0]);
+    const selectedMenuItemExists = safeMenuItems.some((item) => item.key === selectedRecipeKey);
+
+    if (safeMenuItems.length > 0 && (!selectedRecipeKey || !selectedMenuItemExists)) {
+      setSelectedRecipeKey(safeMenuItems[0].key);
     }
-  }, [recipes, recipeKeys, selectedRecipeKey]);
+  }, [safeMenuItems, selectedRecipeKey]);
 
   useEffect(() => {
-    if (formType === 'recipe' && recipes[selectedRecipeKey]) {
-      const recipe = recipes[selectedRecipeKey];
-      const singleRecipeTotal = recipe.ingredients.reduce((sum, ing) => sum + (Number(ing.cost) || 0), 0);
+    const recipe = recipes[selectedRecipeKey];
+    const menuItem = safeMenuItems.find((item) => item.key === selectedRecipeKey);
+    const recipeTotal = Array.isArray(recipe?.ingredients)
+      ? recipe.ingredients.reduce((sum, ing) => sum + (Number(ing.cost) || 0), 0)
+      : 0;
+    const singleItemCost = Number(menuItem?.menuPrice ?? recipeTotal) || 0;
+
+    if (formType === 'recipe') {
       const qtyMultiplier = parseFloat(quantity) || 1;
-      setCost((singleRecipeTotal * qtyMultiplier).toFixed(2));
+      setCost((singleItemCost * qtyMultiplier).toFixed(2));
     } else if (formType === 'single') {
       setCost('');
     }
-  }, [formType, selectedRecipeKey, quantity, recipes]);
+  }, [formType, selectedRecipeKey, quantity, recipes, safeMenuItems]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -75,19 +102,28 @@ function WasteForm({ onAddEntry, recipes, staffList, onAddStaff, onDeleteStaff }
       };
     } else {
       const activeRecipe = recipes[selectedRecipeKey];
+      const activeMenuItem = safeMenuItems.find((item) => item.key === selectedRecipeKey);
       const qtyMultiplier = parseFloat(quantity) || 1;
-      const parsedIngredients = activeRecipe.ingredients.map((ing) => ({
-        ...ing,
-        cost: ing.cost * qtyMultiplier,
-      }));
+      const recipeTotal = Array.isArray(activeRecipe?.ingredients)
+        ? activeRecipe.ingredients.reduce((sum, ing) => sum + (Number(ing.cost) || 0), 0)
+        : 0;
+      const menuItemCost = Number(activeMenuItem?.menuPrice ?? recipeTotal) || 0;
+      const parsedIngredients = Array.isArray(activeRecipe?.ingredients)
+        ? recipeTotal > 0
+          ? activeRecipe.ingredients.map((ing) => ({
+            ...ing,
+            cost: (Number(ing.cost) || 0) * (menuItemCost / recipeTotal) * qtyMultiplier,
+          }))
+          : splitCostAcrossIngredients(menuItemCost * qtyMultiplier, activeRecipe.ingredients)
+        : [];
 
       finalEntry = {
         ...finalEntry,
-        name: activeRecipe.name,
+        name: activeMenuItem?.name || activeRecipe?.name || selectedRecipeKey,
         quantity,
-        category: 'Menu Recipe',
+        category: activeRecipe ? 'Menu Recipe' : 'Menu Item',
         cost: parseFloat(cost) || 0,
-        isRecipe: true,
+        isRecipe: Boolean(activeRecipe),
         recipeKey: selectedRecipeKey,
         ingredients: parsedIngredients,
       };
@@ -151,7 +187,7 @@ function WasteForm({ onAddEntry, recipes, staffList, onAddStaff, onDeleteStaff }
             onClick={() => setFormType('recipe')}
             className={`segment-button${formType === 'recipe' ? ' is-active' : ''}`}
           >
-            Menu recipe
+            Menu item
           </button>
         </div>
 
@@ -183,12 +219,14 @@ function WasteForm({ onAddEntry, recipes, staffList, onAddStaff, onDeleteStaff }
         ) : (
           <div className="field">
             <label htmlFor="menu-item">Menu item</label>
-            {recipeKeys.length === 0 ? (
-              <div className="muted-box">No recipes found. Create one in the stockroom first.</div>
+            {safeMenuItems.length === 0 ? (
+              <div className="muted-box">No menu items found.</div>
             ) : (
               <select id="menu-item" value={selectedRecipeKey} onChange={(e) => setSelectedRecipeKey(e.target.value)} className="select">
-                {recipeKeys.map((key) => (
-                  <option key={key} value={key}>{recipes[key]?.name}</option>
+                {safeMenuItems.map((item) => (
+                  <option key={item.key} value={item.key}>
+                    {item.name}{item.menuPrice !== null ? ` - R${item.menuPrice.toFixed(2)}` : ''}
+                  </option>
                 ))}
               </select>
             )}
@@ -286,10 +324,13 @@ function WasteForm({ onAddEntry, recipes, staffList, onAddStaff, onDeleteStaff }
                       <div>
                         <strong>{member.name}</strong>
                         <span className="badge" style={{ marginLeft: '8px' }}>{member.role}</span>
+                        {member.isCsvSeed && <span className="badge" style={{ marginLeft: '8px' }}>CSV</span>}
                       </div>
-                      <button type="button" onClick={() => onDeleteStaff(member.id)} className="delete-button" title={`Remove ${member.name}`}>
-                        x
-                      </button>
+                      {!member.isCsvSeed && (
+                        <button type="button" onClick={() => onDeleteStaff(member.id)} className="delete-button" title={`Remove ${member.name}`}>
+                          x
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -330,7 +371,7 @@ function WasteForm({ onAddEntry, recipes, staffList, onAddStaff, onDeleteStaff }
           )}
         </div>
 
-        <button type="submit" disabled={formType === 'recipe' && recipeKeys.length === 0} className="primary-button">
+        <button type="submit" disabled={formType === 'recipe' && safeMenuItems.length === 0} className="primary-button">
           Log waste
         </button>
       </div>

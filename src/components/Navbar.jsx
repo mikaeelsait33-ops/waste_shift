@@ -2,7 +2,9 @@ const navItems = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'logWaste', label: 'Log Waste' },
   { key: 'wasteLog', label: 'Waste Log' },
-  { key: 'stockroom', label: 'Stockroom' },
+  { key: 'recipes', label: 'Recipes' },
+  { key: 'menu', label: 'Menu' },
+  { key: 'database', label: 'Database' },
 ];
 
 function Navbar({ activePage, onNavigate, wasteCount = 0 }) {

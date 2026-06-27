@@ -2,6 +2,12 @@ import { useState } from 'react';
 
 const timeframes = ['all', 'day', 'week', 'month', 'year'];
 
+const preventableReasons = new Set([
+  'Kitchen Prep Mistake',
+  'Passed Expiration Date',
+  'Spoiled/Overripe',
+]);
+
 function Dashboard({ items, budget, setBudget }) {
   const [isEditingBudget, setIsEditingBudget] = useState(false);
   const [tempBudget, setTempBudget] = useState(budget);
@@ -45,8 +51,20 @@ function Dashboard({ items, budget, setBudget }) {
 
   const totalItems = filteredItems.length;
   const totalFinancialLoss = filteredItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+  const averageLoss = totalItems > 0 ? totalFinancialLoss / totalItems : 0;
   const remainingBudget = Math.max(0, budget - totalFinancialLoss);
   const budgetUsagePercent = budget > 0 ? Math.min(100, (totalFinancialLoss / budget) * 100) : 0;
+  const daysElapsed = today.getDate();
+  const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+  const currentMonthItems = safeItems.filter((item) => {
+    const itemDate = parseDate(item?.date);
+    return itemDate.getMonth() === today.getMonth() && itemDate.getFullYear() === today.getFullYear();
+  });
+  const currentMonthLoss = currentMonthItems.reduce((sum, item) => sum + (Number(item?.cost) || 0), 0);
+  const projectedMonthLoss = daysElapsed > 0 ? (currentMonthLoss / daysElapsed) * daysInMonth : 0;
+  const preventableLoss = filteredItems.reduce((sum, item) => (
+    preventableReasons.has(item?.reason) ? sum + (Number(item?.cost) || 0) : sum
+  ), 0);
 
   const reasonMetrics = filteredItems.reduce((acc, item) => {
     const reason = item?.reason || 'Unknown';
@@ -66,6 +84,20 @@ function Dashboard({ items, budget, setBudget }) {
     return acc;
   }, {});
 
+  const categoryMetrics = filteredItems.reduce((acc, item) => {
+    if (item?.isRecipe && Array.isArray(item.ingredients)) {
+      item.ingredients.forEach((ingredient) => {
+        const category = ingredient?.category || 'Other';
+        acc[category] = (acc[category] || 0) + (Number(ingredient?.cost) || 0);
+      });
+      return acc;
+    }
+
+    const category = item?.category || 'Other';
+    acc[category] = (acc[category] || 0) + (Number(item?.cost) || 0);
+    return acc;
+  }, {});
+
   const getTopMetric = (metricsObj) => {
     const entries = Object.entries(metricsObj);
     if (entries.length === 0) return null;
@@ -75,6 +107,7 @@ function Dashboard({ items, budget, setBudget }) {
   const topItem = getTopMetric(itemMetrics);
   const topReason = getTopMetric(reasonMetrics);
   const topStaff = getTopMetric(staffMetrics);
+  const topCategory = getTopMetric(categoryMetrics);
 
   const saveBudget = () => {
     setBudget(parseFloat(tempBudget) || 0);
@@ -82,6 +115,12 @@ function Dashboard({ items, budget, setBudget }) {
   };
 
   const timeframeLabel = timeframe === 'all' ? 'All Time' : timeframe === 'day' ? 'Today' : `This ${timeframe}`;
+  const actionRecommendations = [
+    topReason ? `Focus this week on "${topReason[0]}" - it is currently the largest waste cause.` : null,
+    topItem ? `Add a prep or ordering check for ${topItem[0]}, your highest-loss item in this view.` : null,
+    topCategory ? `Review par levels for ${topCategory[0]}, the category carrying the most loss.` : null,
+    budgetUsagePercent > 85 ? 'You are near the loss limit. Hold a quick end-of-shift review before closing.' : null,
+  ].filter(Boolean).slice(0, 3);
 
   return (
     <section className="panel">
@@ -115,6 +154,14 @@ function Dashboard({ items, budget, setBudget }) {
           <div className="metric-card">
             <span className="metric-value is-danger">R{totalFinancialLoss.toFixed(2)}</span>
             <span className="metric-label">Financial loss</span>
+          </div>
+          <div className="metric-card">
+            <span className="metric-value">R{averageLoss.toFixed(2)}</span>
+            <span className="metric-label">Average loss per entry</span>
+          </div>
+          <div className="metric-card">
+            <span className={`metric-value${projectedMonthLoss > budget ? ' is-danger' : ''}`}>R{projectedMonthLoss.toFixed(2)}</span>
+            <span className="metric-label">Projected month-end loss</span>
           </div>
         </div>
 
@@ -168,7 +215,24 @@ function Dashboard({ items, budget, setBudget }) {
         </div>
 
         {totalItems > 0 && (
-          <div className="breakdown-grid">
+          <div className="action-panel">
+            <div>
+              <h3 className="breakdown-title">Recommended next actions</h3>
+              <div className="action-list">
+                {actionRecommendations.map((recommendation) => (
+                  <div key={recommendation} className="action-card">{recommendation}</div>
+                ))}
+              </div>
+            </div>
+            <div className="metric-card">
+              <span className="metric-value is-danger">R{preventableLoss.toFixed(2)}</span>
+              <span className="metric-label">Preventable loss in this view</span>
+            </div>
+          </div>
+        )}
+
+        {totalItems > 0 && (
+          <div className="breakdown-grid breakdown-grid--three">
             <div>
               <h3 className="breakdown-title">Loss by reason</h3>
               {Object.keys(reasonMetrics).map((reasonKey) => {
@@ -200,6 +264,26 @@ function Dashboard({ items, budget, setBudget }) {
                     <div className="breakdown-label">
                       <span>{staffName}</span>
                       <span>R{cost.toFixed(2)}</span>
+                    </div>
+                    <div className="progress-track">
+                      <div className="progress-fill" style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div>
+              <h3 className="breakdown-title">Cost by category</h3>
+              {Object.keys(categoryMetrics).map((categoryName) => {
+                const cost = categoryMetrics[categoryName] || 0;
+                const pct = totalFinancialLoss > 0 ? ((cost / totalFinancialLoss) * 100).toFixed(0) : 0;
+
+                return (
+                  <div key={categoryName} className="breakdown-item">
+                    <div className="breakdown-label">
+                      <span>{categoryName}</span>
+                      <span>R{cost.toFixed(2)} ({pct}%)</span>
                     </div>
                     <div className="progress-track">
                       <div className="progress-fill" style={{ width: `${pct}%` }} />
