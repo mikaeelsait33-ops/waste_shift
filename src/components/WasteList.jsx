@@ -100,6 +100,10 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
     }
 
     if (itemUnit === 'portion') {
+      if (item?.isRecipe) {
+        return `${itemQuantity} menu item${Number(itemQuantity) === 1 ? '' : 's'}`;
+      }
+
       const suffix = Number(itemQuantity) === 1 ? 'portion' : 'portions';
       const measuredLabel = Number.isFinite(measuredQuantity) && measuredQuantity > 0 && measuredUnit
         ? ` = ${measuredQuantity.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')} ${unitLabels[measuredUnit] || measuredUnit}`
@@ -130,7 +134,9 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
       item.reason,
       item.staff || '',
       (Number(item.cost) || 0).toFixed(2),
-      Array.isArray(item.ingredients) ? item.ingredients.map((ingredient) => `${ingredient.name} (${ingredient.category})`).join('; ') : '',
+      Array.isArray(item.ingredients)
+        ? item.ingredients.map((ingredient) => `${ingredient.name}${ingredient.quantity ? ` ${ingredient.quantity}` : ''} (${ingredient.category})`).join('; ')
+        : '',
     ]);
 
     const csv = [headers, ...rows].map((row) => row.map(escapeCsv).join(',')).join('\n');
@@ -292,7 +298,9 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry }) {
                       {item.ingredients.map((ing, idx) => (
                         <div key={`${ing.name}-${idx}`} className="ingredient-card item-row">
                           <span className="small-text">
-                            {ing.name} <span className="badge">{ing.category}</span>
+                            {ing.name}
+                            {ing.quantity && <span className="badge">{ing.quantity}</span>}
+                            <span className="badge">{ing.category}</span>
                           </span>
                           <span className="price">R{(Number(ing.cost) || 0).toFixed(2)}</span>
                         </div>

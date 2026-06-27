@@ -1,7 +1,7 @@
 const navItems = [
   { key: 'dashboard', label: 'Dashboard' },
-  { key: 'logWaste', label: 'Log Waste' },
-  { key: 'wasteLog', label: 'Waste Log' },
+  { key: 'logWaste', label: 'Log' },
+  { key: 'wasteLog', label: 'History' },
   { key: 'settings', label: 'Settings' },
 ];
 
@@ -12,7 +12,7 @@ function Navbar({ activePage, onNavigate, wasteCount = 0 }) {
         <span className="brand-mark">WS</span>
         <div>
           <h1 className="brand-name">WasteShift</h1>
-          <p className="brand-subtitle">Waste control</p>
+          <p className="brand-subtitle">Kitchen intelligence</p>
         </div>
       </div>
 

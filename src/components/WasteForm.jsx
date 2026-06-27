@@ -115,10 +115,11 @@ function WasteForm({
       key: createWasteItemKey(name),
       name: name.trim(),
     };
-  const activePortionProfile = activeWasteItem.key ? safePortionProfiles[activeWasteItem.key] : null;
+  const activePortionProfile = formType === 'single' && activeWasteItem.key ? safePortionProfiles[activeWasteItem.key] : null;
   const quantityValue = parseFloat(quantity);
   const portionAmountValue = parseFloat(portionAmount);
-  const measuredAmount = unit === 'portion'
+  const measuredAmount = formType === 'single'
+    && unit === 'portion'
     && Number.isFinite(quantityValue)
     && Number.isFinite(portionAmountValue)
     && quantityValue > 0
@@ -154,11 +155,13 @@ function WasteForm({
     ? recentSingleItemProfiles.find((item) => String(item.name || '').toLowerCase() === normalizedName)
     : null;
   const suggestedReason = exactProfile?.reason || COMMON_REASON_BY_CATEGORY[category] || 'Passed Expiration Date';
-  const previewCost = formType === 'recipe' && unit === 'portion'
+  const previewCost = formType === 'recipe'
     ? selectedMenuItemCost * (Number.isFinite(quantityValue) ? quantityValue : 0)
     : parseFloat(cost);
   const previewCostLabel = Number.isFinite(previewCost) ? `R${previewCost.toFixed(2)}` : 'Cost pending';
-  const previewQuantityLabel = unit === 'portion'
+  const previewQuantityLabel = formType === 'recipe'
+    ? `${formatNumber(quantityValue) || '0'} finished menu item${Number(quantityValue) === 1 ? '' : 's'}`
+    : unit === 'portion'
     ? measuredAmount
       ? `${formatNumber(quantityValue)} portions = ${formatNumber(measuredAmount)} ${portionUnit}`
       : 'Portion size pending'
@@ -198,7 +201,7 @@ function WasteForm({
   }, [safeMenuItems, selectedRecipeKey]);
 
   useEffect(() => {
-    if (unit !== 'portion') {
+    if (formType !== 'single' || unit !== 'portion') {
       return;
     }
 
@@ -210,10 +213,10 @@ function WasteForm({
 
     setPortionAmount('');
     setPortionUnit('g');
-  }, [unit, activeWasteItem.key, activePortionProfile]);
+  }, [formType, unit, activeWasteItem.key, activePortionProfile]);
 
   useEffect(() => {
-    if (formType !== 'recipe' || unit !== 'portion') {
+    if (formType !== 'recipe') {
       return;
     }
 
@@ -226,7 +229,7 @@ function WasteForm({
     const qtyMultiplier = parseFloat(quantity) || 1;
 
     setCost((singleItemCost * qtyMultiplier).toFixed(2));
-  }, [formType, selectedRecipeKey, quantity, unit, recipes, safeMenuItems]);
+  }, [formType, selectedRecipeKey, quantity, recipes, safeMenuItems]);
 
   const handleFormTypeChange = (nextFormType) => {
     setFormType(nextFormType);
@@ -270,7 +273,10 @@ function WasteForm({
     let portionSize = null;
     let portionSizeUnit = '';
 
-    if (unit === 'portion') {
+    if (formType === 'recipe') {
+      measuredQuantity = qtyMultiplier;
+      measuredUnit = 'portion';
+    } else if (unit === 'portion') {
       if (!activeWasteItem.key || !activeWasteItem.name) {
         setFormMessage('Choose or enter the wasted item before saving a portion size.');
         return;
@@ -285,11 +291,6 @@ function WasteForm({
       portionSizeUnit = portionUnit;
       measuredQuantity = qtyMultiplier * portionAmountValue;
       measuredUnit = portionUnit;
-    }
-
-    if (formType === 'recipe' && unit !== 'portion' && !cost) {
-      setFormMessage('Enter the cost loss for this measured menu-item waste.');
-      return;
     }
 
     if (!staff) {
@@ -335,8 +336,8 @@ function WasteForm({
         ? activeRecipe.ingredients.reduce((sum, ing) => sum + (Number(ing.cost) || 0), 0)
         : 0;
       const menuItemCost = Number(activeMenuItem?.menuPrice ?? recipeTotal) || 0;
-      const finalCost = parseFloat(cost) || 0;
-      const targetCost = unit === 'portion' ? menuItemCost * qtyMultiplier : finalCost;
+      const finalCost = menuItemCost * qtyMultiplier;
+      const targetCost = finalCost;
       const parsedIngredients = Array.isArray(activeRecipe?.ingredients)
         ? recipeTotal > 0
           ? activeRecipe.ingredients.map((ing) => ({
@@ -350,7 +351,7 @@ function WasteForm({
         ...finalEntry,
         name: activeMenuItem?.name || activeRecipe?.name || selectedRecipeKey,
         quantity,
-        unit,
+        unit: 'portion',
         measuredQuantity,
         measuredUnit,
         portionSize,
@@ -365,7 +366,7 @@ function WasteForm({
 
     onAddEntry(finalEntry);
     setFormMessage(`Logged ${finalEntry.name} for R${(Number(finalEntry.cost) || 0).toFixed(2)}.`);
-    if (unit === 'portion') {
+    if (formType === 'single' && unit === 'portion') {
       onSavePortionProfile?.({
         key: activeWasteItem.key,
         name: activeWasteItem.name,
@@ -487,9 +488,36 @@ function WasteForm({
           </div>
         )}
 
-        <div className="field-grid field-grid--three">
+        {formType === 'recipe' && selectedRecipe && (
+          <div className="smart-panel">
+            <div className="smart-panel__header">
+              <span className="breakdown-title">Recipe breakdown</span>
+              <span className="badge">{Array.isArray(selectedRecipe.ingredients) ? selectedRecipe.ingredients.length : 0} ingredients</span>
+            </div>
+            {Array.isArray(selectedRecipe.ingredients) && selectedRecipe.ingredients.length > 0 ? (
+              <div className="ingredient-list">
+                {selectedRecipe.ingredients.slice(0, 5).map((ingredient, index) => (
+                  <div key={`${ingredient.name}-${index}`} className="ingredient-card item-row">
+                    <span className="small-text">
+                      {ingredient.name}
+                      {ingredient.quantity && <span className="badge">{ingredient.quantity}</span>}
+                      <span className="badge">{ingredient.category || 'Other'}</span>
+                    </span>
+                    <span className="price">R{(Number(ingredient.cost) || 0).toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="muted-box">
+                <p className="small-text" style={{ margin: 0 }}>No ingredient breakdown linked.</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className={`field-grid${formType === 'single' ? ' field-grid--three' : ''}`}>
           <div className="field">
-            <label htmlFor="quantity">Quantity</label>
+            <label htmlFor="quantity">{formType === 'recipe' ? 'Menu items wasted' : 'Quantity'}</label>
             <input
               id="quantity"
               type="number"
@@ -501,33 +529,35 @@ function WasteForm({
             />
           </div>
 
-          <div className="field">
-            <label htmlFor="quantity-unit">Unit</label>
-            <select id="quantity-unit" value={unit} onChange={(e) => setUnit(e.target.value)} className="select">
-              {WASTE_UNITS.map((unitOption) => (
-                <option key={unitOption.value} value={unitOption.value}>
-                  {unitOption.label}
-                </option>
-              ))}
-            </select>
-          </div>
+          {formType === 'single' && (
+            <div className="field">
+              <label htmlFor="quantity-unit">Unit</label>
+              <select id="quantity-unit" value={unit} onChange={(e) => setUnit(e.target.value)} className="select">
+                {WASTE_UNITS.map((unitOption) => (
+                  <option key={unitOption.value} value={unitOption.value}>
+                    {unitOption.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div className="field">
-            <label htmlFor="cost-loss">Cost loss</label>
+            <label htmlFor="cost-loss">{formType === 'recipe' ? 'Calculated cost loss' : 'Cost loss'}</label>
             <input
               id="cost-loss"
               type="number"
               step="0.01"
               value={cost}
               onChange={(e) => setCost(e.target.value)}
-              disabled={formType === 'recipe' && unit === 'portion'}
+              disabled={formType === 'recipe'}
               placeholder="R"
               className="input"
             />
           </div>
         </div>
 
-        {unit === 'portion' && (
+        {formType === 'single' && unit === 'portion' && (
           <div className="budget-panel portion-panel">
             <h3 className="breakdown-title">Portion size</h3>
             <div className="field-grid">
