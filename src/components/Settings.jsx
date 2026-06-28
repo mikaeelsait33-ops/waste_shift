@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import DataManager from './DataManager';
 import ItemPriceManager from './ItemPriceManager';
 import RecipeManager from './RecipeManager';
@@ -565,6 +565,10 @@ function Settings({
   const [dailyWasteValueLimit, setDailyWasteValueLimit] = useState(String(settings?.dailyWasteValueLimit || ''));
   const [dailyWasteEntryLimit, setDailyWasteEntryLimit] = useState(String(settings?.dailyWasteEntryLimit || ''));
   const [message, setMessage] = useState('');
+  const [settingsChromeHidden, setSettingsChromeHidden] = useState(false);
+  const lastScrollYRef = useRef(0);
+  const tickingRef = useRef(false);
+  const scrollFrameRef = useRef(0);
 
   useEffect(() => {
     setDraftBudget(String(budget || 0));
@@ -574,6 +578,46 @@ function Settings({
     setDailyWasteValueLimit(String(settings?.dailyWasteValueLimit || ''));
     setDailyWasteEntryLimit(String(settings?.dailyWasteEntryLimit || ''));
   }, [settings]);
+
+  useEffect(() => {
+    lastScrollYRef.current = window.scrollY || 0;
+
+    const handleScroll = () => {
+      if (tickingRef.current) {
+        return;
+      }
+
+      tickingRef.current = true;
+      scrollFrameRef.current = window.requestAnimationFrame(() => {
+        const currentScrollY = window.scrollY || 0;
+        const scrollDelta = currentScrollY - lastScrollYRef.current;
+
+        if (currentScrollY < 140 || scrollDelta < -8) {
+          setSettingsChromeHidden(false);
+        } else if (scrollDelta > 10) {
+          setSettingsChromeHidden(true);
+        }
+
+        lastScrollYRef.current = currentScrollY;
+        tickingRef.current = false;
+        scrollFrameRef.current = 0;
+      });
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      if (scrollFrameRef.current) {
+        window.cancelAnimationFrame(scrollFrameRef.current);
+        scrollFrameRef.current = 0;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    setSettingsChromeHidden(false);
+  }, [activeSection]);
 
   const todayItems = getTodayItems(wasteItems);
   const todayLoss = todayItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
@@ -608,25 +652,27 @@ function Settings({
 
   return (
     <section className="settings-page">
-      <div className="section-header">
-        <div>
-          <p className="eyebrow">Settings</p>
-          <h2 className="title">Setup & Controls</h2>
-          <p className="subtitle">Manage limits, staff, menu items, database sync, and high-impact actions.</p>
+      <div className={`settings-sticky-controls${settingsChromeHidden ? ' is-hidden' : ''}`}>
+        <div className="section-header settings-page-header">
+          <div>
+            <p className="eyebrow">Settings</p>
+            <h2 className="title">Setup & Controls</h2>
+            <p className="subtitle">Manage limits, staff, menu items, database sync, and high-impact actions.</p>
+          </div>
         </div>
-      </div>
 
-      <div className="segmented-control settings-tabs" aria-label="Settings sections">
-        {settingsSections.map((section) => (
-          <button
-            key={section.key}
-            type="button"
-            onClick={() => setActiveSection(section.key)}
-            className={`segment-button${activeSection === section.key ? ' is-active' : ''}`}
-          >
-            {section.label}
-          </button>
-        ))}
+        <div className="segmented-control settings-tabs" aria-label="Settings sections">
+          {settingsSections.map((section) => (
+            <button
+              key={section.key}
+              type="button"
+              onClick={() => setActiveSection(section.key)}
+              className={`segment-button${activeSection === section.key ? ' is-active' : ''}`}
+            >
+              {section.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {activeSection === 'limits' && (

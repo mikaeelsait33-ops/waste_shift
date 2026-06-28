@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import Navbar from './components/Navbar';
 import Dashboard from './components/Dashboard';
 import WasteForm from './components/WasteForm';
@@ -432,6 +432,9 @@ const mergeStaffMembers = (baseStaffMembers, customStaffMembers) => {
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [navbarHidden, setNavbarHidden] = useState(false);
+  const lastNavbarScrollYRef = useRef(0);
+  const navbarFrameRef = useRef(0);
   const [serverSyncEnabled, setServerSyncEnabled] = useState(false);
   const [serverLoadComplete, setServerLoadComplete] = useState(false);
   const [serverSync, setServerSync] = useState({
@@ -578,6 +581,45 @@ function App() {
   const menuItems = useMemo(() => (
     mergeMenuItems(baseMenuItems, customMenuItems, recipes)
   ), [baseMenuItems, customMenuItems, recipes]);
+
+  useEffect(() => {
+    setNavbarHidden(false);
+    lastNavbarScrollYRef.current = window.scrollY || 0;
+
+    if (activeTab !== 'settings') {
+      return undefined;
+    }
+
+    const handleScroll = () => {
+      if (navbarFrameRef.current) {
+        return;
+      }
+
+      navbarFrameRef.current = window.requestAnimationFrame(() => {
+        const currentScrollY = window.scrollY || 0;
+        const scrollDelta = currentScrollY - lastNavbarScrollYRef.current;
+
+        if (currentScrollY < 120 || scrollDelta < -8) {
+          setNavbarHidden(false);
+        } else if (scrollDelta > 10) {
+          setNavbarHidden(true);
+        }
+
+        lastNavbarScrollYRef.current = currentScrollY;
+        navbarFrameRef.current = 0;
+      });
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      if (navbarFrameRef.current) {
+        window.cancelAnimationFrame(navbarFrameRef.current);
+        navbarFrameRef.current = 0;
+      }
+    };
+  }, [activeTab]);
   const baseStaffList = useMemo(() => createStaffMembersFromCsv(staffMembersCsv), []);
   const staffList = useMemo(() => (
     mergeStaffMembers(baseStaffList, customStaffList)
@@ -1503,13 +1545,14 @@ function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${navbarHidden ? ' app-shell--navbar-hidden' : ''}`}>
       <Navbar
         activePage={activeTab}
         onNavigate={setActiveTab}
         wasteCount={wasteItems.length}
         activeStaffMember={activeStaffMember}
         accessProfile={accessProfile}
+        isHidden={navbarHidden}
         onLogout={handleLogout}
       />
 

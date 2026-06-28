@@ -5,13 +5,13 @@ const navItems = [
   { key: 'settings', label: 'Settings' },
 ];
 
-function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, accessProfile, onLogout }) {
+function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, accessProfile, isHidden = false, onLogout }) {
   const visibleNavItems = navItems.filter((item) => (
     accessProfile?.canViewFinancials || item.key === 'logWaste' || item.key === 'wasteLog'
   ));
 
   return (
-    <nav className="navbar">
+    <nav className={`navbar${isHidden ? ' is-hidden' : ''}`}>
       <div className="brand">
         <span className="brand-mark">WS</span>
         <div>

@@ -42,6 +42,23 @@ const COMMON_REASON_BY_CATEGORY = {
   Other: 'Quality issue',
 };
 
+const DRINK_MENU_TERMS = [
+  'americano',
+  'barista',
+  'beverage',
+  'cappuccino',
+  'chai',
+  'coffee',
+  'drink',
+  'espresso',
+  'juice',
+  'latte',
+  'milkshake',
+  'mocha',
+  'smoothie',
+  'tea',
+];
+
 const createWasteItemKey = (itemName) => String(itemName || '')
   .trim()
   .toLowerCase()
@@ -111,6 +128,23 @@ const compressWastePhoto = async (file) => {
   context.drawImage(image, 0, 0, width, height);
 
   return canvas.toDataURL('image/jpeg', PHOTO_QUALITY);
+};
+
+const getMenuWasteCategory = (menuItem, recipe) => {
+  const ingredientParts = Array.isArray(recipe?.ingredients)
+    ? recipe.ingredients.flatMap((ingredient) => [ingredient?.name, ingredient?.category])
+    : [];
+  const searchableText = [
+    menuItem?.name,
+    recipe?.name,
+    ...ingredientParts,
+  ].join(' ').toLowerCase();
+
+  if (DRINK_MENU_TERMS.some((term) => searchableText.includes(term))) {
+    return 'Drink Menu Item';
+  }
+
+  return recipe ? 'Menu Recipe' : 'Menu Item';
 };
 
 function WasteForm({
@@ -452,7 +486,7 @@ function WasteForm({
     e.preventDefault();
 
     if (formType === 'single' && !name.trim()) {
-      setFormMessage('Enter the food item name before saving.');
+      setFormMessage('Enter the ingredient or stock item before saving.');
       return;
     }
 
@@ -587,7 +621,7 @@ function WasteForm({
         measuredUnit,
         portionSize,
         portionSizeUnit,
-        category: activeRecipe ? 'Menu Recipe' : 'Menu Item',
+        category: getMenuWasteCategory(activeMenuItem, activeRecipe),
         itemType: 'menuItem',
         cost: financials.foodCostLost,
         foodCostLost: financials.foodCostLost,
@@ -639,7 +673,7 @@ function WasteForm({
           <div>
             <p className="eyebrow">Waste entry</p>
             <h2 className="title">Log Waste</h2>
-            <p className="subtitle">Capture ingredients, drinks, or full menu items.</p>
+            <p className="subtitle">Capture raw stock waste or finished menu items.</p>
           </div>
         </div>
 
@@ -649,14 +683,14 @@ function WasteForm({
             onClick={() => handleFormTypeChange('single')}
             className={`segment-button${formType === 'single' ? ' is-active' : ''}`}
           >
-            Ingredient / drink
+            Ingredient / stock
           </button>
           <button
             type="button"
             onClick={() => handleFormTypeChange('recipe')}
             className={`segment-button${formType === 'recipe' ? ' is-active' : ''}`}
           >
-            Menu item
+            Menu item / drink
           </button>
         </div>
 
@@ -691,13 +725,13 @@ function WasteForm({
         {formType === 'single' ? (
           <>
             <div className="field">
-              <label htmlFor="food-name">Item or drink name</label>
+              <label htmlFor="food-name">Ingredient or stock item</label>
               <input
                 id="food-name"
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Cheddar block or latte"
+                placeholder="e.g. Tomato, cheddar block, coffee beans"
                 list="known-waste-items"
                 className="input"
               />
@@ -746,19 +780,19 @@ function WasteForm({
         ) : (
           <>
             <div className="field">
-              <label htmlFor="menu-search">Search menu item or ingredient</label>
+              <label htmlFor="menu-search">Search menu item or drink</label>
               <input
                 id="menu-search"
                 type="search"
                 value={menuSearch}
                 onChange={(e) => setMenuSearch(e.target.value)}
-                placeholder="Start typing a menu item"
+                placeholder="e.g. latte, smoothie, burger"
                 className="input"
               />
             </div>
 
             <div className="field">
-              <label htmlFor="menu-item">Menu item</label>
+              <label htmlFor="menu-item">Menu item / drink</label>
               {safeMenuItems.length === 0 ? (
                 <div className="muted-box">No menu items found.</div>
               ) : menuItemOptions.length === 0 ? (
@@ -855,7 +889,7 @@ function WasteForm({
 
         <div className={`field-grid${formType === 'single' ? ' field-grid--three' : ''}`}>
           <div className="field">
-            <label htmlFor="quantity">{formType === 'recipe' ? 'Menu items wasted' : 'Quantity'}</label>
+            <label htmlFor="quantity">{formType === 'recipe' ? 'Items wasted' : 'Quantity'}</label>
             <input
               id="quantity"
               type="number"

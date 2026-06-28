@@ -161,6 +161,15 @@ button:disabled {
   background: rgba(255, 255, 255, 0.76);
   border-bottom: 1px solid rgba(220, 227, 235, 0.82);
   backdrop-filter: blur(24px) saturate(1.35);
+  transition:
+    opacity 0.18s ease,
+    transform 0.22s ease;
+}
+
+.navbar.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(calc(-100% - 2px));
 }
 
 .brand {
@@ -481,6 +490,21 @@ button:disabled {
   gap: 12px;
 }
 
+.budget-row > *,
+.item-row > *,
+.manager-row > *,
+.inventory-heading > *,
+.smart-panel__header > *,
+.section-header > * {
+  min-width: 0;
+}
+
+.item-row,
+.manager-row,
+.permission-card {
+  flex-wrap: wrap;
+}
+
 .smart-panel__header .breakdown-title {
   margin-bottom: 0;
 }
@@ -587,6 +611,11 @@ button:disabled {
 .suggestion-button strong {
   color: var(--accent-strong);
   white-space: nowrap;
+}
+
+.suggestion-button span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .suggestion-button:disabled {
@@ -1027,6 +1056,8 @@ button:disabled {
   color: var(--muted);
   font-size: 0.7rem;
   font-weight: 820;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .badge.is-green {
@@ -1362,8 +1393,51 @@ button:disabled {
   gap: 16px;
 }
 
+.settings-sticky-controls {
+  position: sticky;
+  top: var(--settings-sticky-top, 76px);
+  z-index: 15;
+  display: grid;
+  gap: 10px;
+  padding-bottom: 10px;
+  background:
+    linear-gradient(180deg, rgba(245, 247, 250, 0.98) 0%, rgba(245, 247, 250, 0.9) 72%, rgba(245, 247, 250, 0) 100%);
+  backdrop-filter: blur(18px) saturate(1.12);
+  transition:
+    opacity 0.18s ease,
+    transform 0.22s ease;
+}
+
+.app-shell--navbar-hidden .settings-sticky-controls {
+  --settings-sticky-top: 12px;
+}
+
+.settings-sticky-controls.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-118%);
+}
+
+.settings-page-header {
+  margin-bottom: 0;
+  padding-top: 2px;
+}
+
+.settings-page-header .subtitle {
+  margin-top: 4px;
+}
+
 .settings-tabs {
   align-self: start;
+  max-width: 100%;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  scrollbar-width: thin;
+}
+
+.settings-tabs .segment-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .inventory-heading {
@@ -1374,6 +1448,12 @@ button:disabled {
   margin: 0;
   color: var(--text);
   font-size: 0.98rem;
+  overflow-wrap: anywhere;
+}
+
+.staff-card strong,
+.log-title {
+  overflow-wrap: anywhere;
 }
 
 .small-text {
@@ -1469,6 +1549,18 @@ button:disabled {
   }
 
   .invoice-primary-action {
+    width: 100%;
+  }
+
+  .settings-sticky-controls {
+    top: var(--settings-sticky-top-mobile, 174px);
+  }
+
+  .app-shell--navbar-hidden .settings-sticky-controls {
+    --settings-sticky-top-mobile: 12px;
+  }
+
+  .settings-tabs {
     width: 100%;
   }
 }
