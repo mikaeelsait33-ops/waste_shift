@@ -35,9 +35,26 @@ const OLD_DEFAULT_COST_BASIS = 'Menu price from menuItems.csv split evenly acros
 const DEFAULT_STAFF_PIN = '1904';
 const DEFAULT_MANAGEMENT_PIN = '1905';
 const DEFAULT_PIN_PRESET_VERSION = 'shared-default-1904-1905-v1';
+const STAFF_FRESH_START_VERSION = 'empty-staff-roster-v1';
 const DEFAULT_SETTINGS = {
   dailyWasteValueLimit: 0,
   dailyWasteEntryLimit: 0,
+};
+
+const staffFreshStartIsPending = () => (
+  localStorage.getItem('wasteShiftStaffFreshStartVersion') !== STAFF_FRESH_START_VERSION
+);
+
+const markStaffFreshStartComplete = () => {
+  localStorage.setItem('wasteShiftStaffFreshStartVersion', STAFF_FRESH_START_VERSION);
+};
+
+const serverStaffFreshStartIsPending = () => (
+  localStorage.getItem('wasteShiftServerStaffFreshStartVersion') !== STAFF_FRESH_START_VERSION
+);
+
+const markServerStaffFreshStartComplete = () => {
+  localStorage.setItem('wasteShiftServerStaffFreshStartVersion', STAFF_FRESH_START_VERSION);
 };
 
 const sanitizeAuthSession = (session) => {
@@ -449,6 +466,11 @@ function App() {
   const [syncAccessKey, setSyncAccessKey] = useState(() => localStorage.getItem('wasteShiftSyncAccessKey') || '');
   const [authSession, setAuthSession] = useState(() => {
     try {
+      if (staffFreshStartIsPending()) {
+        sessionStorage.removeItem('wasteShiftAuthSession');
+        return null;
+      }
+
       const savedSession = sessionStorage.getItem('wasteShiftAuthSession');
       return savedSession ? sanitizeAuthSession(JSON.parse(savedSession)) : null;
     } catch {
@@ -495,7 +517,9 @@ function App() {
     }
   });
 
-  const [activeStaffId, setActiveStaffId] = useState(() => localStorage.getItem('activeStaffId') || '');
+  const [activeStaffId, setActiveStaffId] = useState(() => (
+    staffFreshStartIsPending() ? '' : localStorage.getItem('activeStaffId') || ''
+  ));
 
   const [inventoryMovements, setInventoryMovements] = useState(() => {
     try {
@@ -533,6 +557,15 @@ function App() {
 
   const [customStaffList, setCustomStaffList] = useState(() => {
     try {
+      if (staffFreshStartIsPending()) {
+        localStorage.removeItem('customStaffList');
+        localStorage.removeItem('staffList');
+        localStorage.removeItem('activeStaffId');
+        sessionStorage.removeItem('wasteShiftAuthSession');
+        markStaffFreshStartComplete();
+        return [];
+      }
+
       const savedCustomStaff = localStorage.getItem('customStaffList');
       const savedLegacyStaff = localStorage.getItem('staffList');
       const parsed = savedCustomStaff
@@ -580,6 +613,21 @@ function App() {
       return {};
     }
   });
+
+  useEffect(() => {
+    if (!staffFreshStartIsPending()) {
+      return;
+    }
+
+    localStorage.removeItem('customStaffList');
+    localStorage.removeItem('staffList');
+    localStorage.removeItem('activeStaffId');
+    sessionStorage.removeItem('wasteShiftAuthSession');
+    setCustomStaffList([]);
+    setActiveStaffId('');
+    setAuthSession(null);
+    markStaffFreshStartComplete();
+  }, []);
 
   const baseMenuItems = useMemo(() => createMenuItemsFromCsv(menuItemsCsv, recipes), [recipes]);
   const menuItems = useMemo(() => (
@@ -837,10 +885,26 @@ function App() {
         setServerLoadComplete(true);
 
         if (payload?.snapshot?.data) {
-          applyDatabaseData(payload.snapshot.data);
+          const shouldResetServerStaff = serverStaffFreshStartIsPending();
+          const serverDatabaseData = shouldResetServerStaff
+            ? {
+              ...payload.snapshot.data,
+              staffList: [],
+              customStaffList: [],
+              activeStaffId: '',
+            }
+            : payload.snapshot.data;
+
+          if (shouldResetServerStaff) {
+            markServerStaffFreshStartComplete();
+          }
+
+          applyDatabaseData(serverDatabaseData);
           setServerSync({
             status: 'synced',
-            message: 'Loaded database from server.',
+            message: shouldResetServerStaff
+              ? 'Loaded database from server with a fresh empty staff roster.'
+              : 'Loaded database from server.',
             lastSavedAt: payload.snapshot.updatedAt || payload.snapshot.exportedAt || '',
           });
           return;
