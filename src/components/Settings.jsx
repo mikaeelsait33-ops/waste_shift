@@ -532,6 +532,8 @@ function Settings({
   menuItems,
   customMenuItems,
   itemPriceCatalog,
+  storeRoomItems,
+  storeRoomMovements,
   portionProfiles,
   activeStaffId,
   activeStaffMember,
@@ -874,6 +876,8 @@ function Settings({
           menuItems={menuItems}
           customMenuItems={customMenuItems}
           itemPriceCatalog={itemPriceCatalog}
+          storeRoomItems={storeRoomItems}
+          storeRoomMovements={storeRoomMovements}
           portionProfiles={portionProfiles}
           activeStaffId={activeStaffId}
           authSettings={authSettings}

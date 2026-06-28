@@ -35,6 +35,8 @@ export const getAccessProfile = (staffMember) => {
     canManageLimits: isTrustedOperator,
     canManageStaff: isTrustedOperator,
     canManageMenu: isTrustedOperator || isChefOrBarista,
+    canViewStoreRoom: hasOperator,
+    canManageStoreRoom: isTrustedOperator || isChefOrBarista,
     canViewAuditLog: isTrustedOperator,
     canManagePins: isTrustedOperator,
     canManageServerSync: isTrustedOperator,

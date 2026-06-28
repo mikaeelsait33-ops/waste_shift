@@ -1,9 +1,10 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import Navbar from './components/Navbar';
 import Dashboard from './components/Dashboard';
 import WasteForm from './components/WasteForm';
 import WasteList from './components/WasteList';
 import Settings from './components/Settings';
+import StoreRoom from './components/StoreRoom';
 import AuthGate from './components/AuthGate';
 import defaultRecipes from './data/defaultRecipes';
 import menuItemsCsv from './data/menuItems.csv?raw';
@@ -438,6 +439,89 @@ const sanitizeStaffMembers = (members) => {
     });
 };
 
+const createStoreRoomItemId = (name) => `store_${createMenuItemKey(name)}`;
+
+const sanitizeStoreRoomItems = (items) => {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  const seenIds = new Set();
+
+  return items
+    .map((item) => {
+      const name = String(item?.name || '').trim();
+      const id = item?.id || createStoreRoomItemId(name);
+      const quantity = Number.parseFloat(item?.quantity);
+      const parLevel = Number.parseFloat(item?.parLevel);
+
+      if (!name || !id) {
+        return null;
+      }
+
+      return {
+        id,
+        name,
+        category: String(item?.category || 'Other').trim() || 'Other',
+        unit: String(item?.unit || 'each').trim() || 'each',
+        location: String(item?.location || '').trim(),
+        quantity: Number.isFinite(quantity) && quantity > 0 ? Math.round(quantity * 1000) / 1000 : 0,
+        parLevel: Number.isFinite(parLevel) && parLevel > 0 ? Math.round(parLevel * 1000) / 1000 : 0,
+        notes: String(item?.notes || '').trim(),
+        createdAt: String(item?.createdAt || ''),
+        updatedAt: String(item?.updatedAt || ''),
+        lastMovementAt: String(item?.lastMovementAt || ''),
+      };
+    })
+    .filter(Boolean)
+    .filter((item) => {
+      if (seenIds.has(item.id)) {
+        return false;
+      }
+
+      seenIds.add(item.id);
+      return true;
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+};
+
+const sanitizeStoreRoomMovements = (movements) => {
+  if (!Array.isArray(movements)) {
+    return [];
+  }
+
+  return movements
+    .map((movement) => {
+      const quantity = Number.parseFloat(movement?.quantity);
+      const previousQuantity = Number.parseFloat(movement?.previousQuantity);
+      const nextQuantity = Number.parseFloat(movement?.nextQuantity);
+      const type = ['stock_in', 'stock_out', 'adjustment', 'opening'].includes(movement?.type)
+        ? movement.type
+        : 'adjustment';
+
+      if (!movement?.itemId || !movement?.itemName || !Number.isFinite(quantity)) {
+        return null;
+      }
+
+      return {
+        id: String(movement?.id || `${Date.now()}-${Math.random().toString(36).slice(2)}`),
+        itemId: String(movement.itemId),
+        itemName: String(movement.itemName),
+        type,
+        quantity: Math.abs(Math.round(quantity * 1000) / 1000),
+        unit: String(movement?.unit || '').trim(),
+        previousQuantity: Number.isFinite(previousQuantity) ? Math.round(previousQuantity * 1000) / 1000 : 0,
+        nextQuantity: Number.isFinite(nextQuantity) ? Math.round(nextQuantity * 1000) / 1000 : 0,
+        reason: String(movement?.reason || '').trim(),
+        notes: String(movement?.notes || '').trim(),
+        staffId: String(movement?.staffId || ''),
+        staffName: String(movement?.staffName || 'System'),
+        createdAt: String(movement?.createdAt || new Date().toISOString()),
+      };
+    })
+    .filter(Boolean);
+};
+
 const mergeStaffMembers = (baseStaffMembers, customStaffMembers) => {
   const customById = new Map(customStaffMembers.map((member) => [member.id, member]));
   const baseIds = new Set(baseStaffMembers.map((member) => member.id));
@@ -453,9 +537,6 @@ const mergeStaffMembers = (baseStaffMembers, customStaffMembers) => {
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [navbarHidden, setNavbarHidden] = useState(false);
-  const lastNavbarScrollYRef = useRef(0);
-  const navbarFrameRef = useRef(0);
   const [serverSyncEnabled, setServerSyncEnabled] = useState(false);
   const [serverLoadComplete, setServerLoadComplete] = useState(false);
   const [serverSync, setServerSync] = useState({
@@ -614,6 +695,28 @@ function App() {
     }
   });
 
+  const [storeRoomItems, setStoreRoomItems] = useState(() => {
+    try {
+      const savedItems = localStorage.getItem('storeRoomItems');
+      const parsed = savedItems ? JSON.parse(savedItems) : [];
+      return sanitizeStoreRoomItems(parsed);
+    } catch (e) {
+      console.error("Corrupted store room items in storage, resetting.", e);
+      return [];
+    }
+  });
+
+  const [storeRoomMovements, setStoreRoomMovements] = useState(() => {
+    try {
+      const savedMovements = localStorage.getItem('storeRoomMovements');
+      const parsed = savedMovements ? JSON.parse(savedMovements) : [];
+      return sanitizeStoreRoomMovements(parsed);
+    } catch (e) {
+      console.error("Corrupted store room movements in storage, resetting.", e);
+      return [];
+    }
+  });
+
   useEffect(() => {
     if (!staffFreshStartIsPending()) {
       return;
@@ -633,45 +736,6 @@ function App() {
   const menuItems = useMemo(() => (
     mergeMenuItems(baseMenuItems, customMenuItems, recipes)
   ), [baseMenuItems, customMenuItems, recipes]);
-
-  useEffect(() => {
-    setNavbarHidden(false);
-    lastNavbarScrollYRef.current = window.scrollY || 0;
-
-    if (activeTab !== 'settings') {
-      return undefined;
-    }
-
-    const handleScroll = () => {
-      if (navbarFrameRef.current) {
-        return;
-      }
-
-      navbarFrameRef.current = window.requestAnimationFrame(() => {
-        const currentScrollY = window.scrollY || 0;
-        const scrollDelta = currentScrollY - lastNavbarScrollYRef.current;
-
-        if (currentScrollY < 120 || scrollDelta < -8) {
-          setNavbarHidden(false);
-        } else if (scrollDelta > 10) {
-          setNavbarHidden(true);
-        }
-
-        lastNavbarScrollYRef.current = currentScrollY;
-        navbarFrameRef.current = 0;
-      });
-    };
-
-    window.addEventListener('scroll', handleScroll, { passive: true });
-
-    return () => {
-      window.removeEventListener('scroll', handleScroll);
-      if (navbarFrameRef.current) {
-        window.cancelAnimationFrame(navbarFrameRef.current);
-        navbarFrameRef.current = 0;
-      }
-    };
-  }, [activeTab]);
   const baseStaffList = useMemo(() => createStaffMembersFromCsv(staffMembersCsv), []);
   const staffList = useMemo(() => (
     mergeStaffMembers(baseStaffList, customStaffList)
@@ -698,12 +762,14 @@ function App() {
     customMenuItems,
     portionProfiles,
     itemPriceCatalog,
+    storeRoomItems,
+    storeRoomMovements,
     settings,
     authSettings,
     activeStaffId,
     inventoryMovements,
     auditLog,
-  }), [wasteItems, budget, recipes, staffList, customStaffList, customMenuItems, portionProfiles, itemPriceCatalog, settings, authSettings, activeStaffId, inventoryMovements, auditLog]);
+  }), [wasteItems, budget, recipes, staffList, customStaffList, customMenuItems, portionProfiles, itemPriceCatalog, storeRoomItems, storeRoomMovements, settings, authSettings, activeStaffId, inventoryMovements, auditLog]);
 
   const applyDatabaseData = useCallback((databaseData) => {
     setWasteItems(Array.isArray(databaseData.wasteItems) ? databaseData.wasteItems : []);
@@ -713,6 +779,8 @@ function App() {
     setCustomMenuItems(sanitizeMenuItems(databaseData.customMenuItems));
     setPortionProfiles(sanitizePortionProfiles(databaseData.portionProfiles));
     setItemPriceCatalog(sanitizeItemPriceCatalog(databaseData.itemPriceCatalog));
+    setStoreRoomItems(sanitizeStoreRoomItems(databaseData.storeRoomItems));
+    setStoreRoomMovements(sanitizeStoreRoomMovements(databaseData.storeRoomMovements));
     setSettings(sanitizeSettings(databaseData.settings));
     if (databaseData.authSettings !== undefined) {
       setAuthSettings(sanitizeAuthSettings(databaseData.authSettings));
@@ -841,6 +909,14 @@ function App() {
   }, [itemPriceCatalog]);
 
   useEffect(() => {
+    localStorage.setItem('storeRoomItems', JSON.stringify(storeRoomItems));
+  }, [storeRoomItems]);
+
+  useEffect(() => {
+    localStorage.setItem('storeRoomMovements', JSON.stringify(storeRoomMovements));
+  }, [storeRoomMovements]);
+
+  useEffect(() => {
     localStorage.setItem('inventoryMovements', JSON.stringify(inventoryMovements));
   }, [inventoryMovements]);
 
@@ -852,7 +928,7 @@ function App() {
     const timestamp = new Date().toISOString();
     localStorage.setItem('wasteShiftLastSavedAt', timestamp);
     setLastSavedAt(timestamp);
-  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, itemPriceCatalog, settings, authSettings, activeStaffId, inventoryMovements, auditLog]);
+  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, itemPriceCatalog, storeRoomItems, storeRoomMovements, settings, authSettings, activeStaffId, inventoryMovements, auditLog]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -948,7 +1024,7 @@ function App() {
     }, 900);
 
     return () => window.clearTimeout(timeoutId);
-  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, itemPriceCatalog, settings, authSettings, activeStaffId, inventoryMovements, auditLog, serverSyncEnabled, serverLoadComplete, saveDatabaseToServer]);
+  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, itemPriceCatalog, storeRoomItems, storeRoomMovements, settings, authSettings, activeStaffId, inventoryMovements, auditLog, serverSyncEnabled, serverLoadComplete, saveDatabaseToServer]);
 
   const handleSavePinSettings = useCallback(async ({ staffPin, managementPin, pinPresetVersion = 'custom' }) => {
     const nextAuthSettings = { ...authSettings };
@@ -1454,6 +1530,188 @@ function App() {
     }
   };
 
+  const createStoreRoomMovement = ({ item, type, quantity, previousQuantity, nextQuantity, reason, notes }) => ({
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    itemId: item.id,
+    itemName: item.name,
+    type,
+    quantity: Math.abs(Math.round(quantity * 1000) / 1000),
+    unit: item.unit,
+    previousQuantity: Math.round(previousQuantity * 1000) / 1000,
+    nextQuantity: Math.round(nextQuantity * 1000) / 1000,
+    reason: String(reason || '').trim(),
+    notes: String(notes || '').trim(),
+    staffId: activeStaffMember?.id || '',
+    staffName: activeStaffMember?.name || 'System',
+    createdAt: new Date().toISOString(),
+  });
+
+  const handleSaveStoreRoomItem = (itemDraft) => {
+    const permission = requirePermission(accessProfile, 'canManageStoreRoom', 'manage store room stock');
+    if (!permission.ok) {
+      return { ok: false, message: permission.message };
+    }
+
+    const name = String(itemDraft?.name || '').trim();
+    const id = itemDraft?.id || createStoreRoomItemId(name);
+    const quantity = Number.parseFloat(itemDraft?.quantity);
+    const parLevel = Number.parseFloat(itemDraft?.parLevel);
+
+    if (!name || !id) {
+      return { ok: false, message: 'Enter a stock item name.' };
+    }
+
+    if (!Number.isFinite(quantity) || quantity < 0) {
+      return { ok: false, message: 'Enter a valid current quantity.' };
+    }
+
+    const existingItem = storeRoomItems.find((item) => item.id === id);
+    const now = new Date().toISOString();
+    const nextItem = {
+      id,
+      name,
+      category: String(itemDraft?.category || 'Other').trim() || 'Other',
+      unit: String(itemDraft?.unit || existingItem?.unit || 'each').trim() || 'each',
+      location: String(itemDraft?.location || '').trim(),
+      quantity: Math.round(quantity * 1000) / 1000,
+      parLevel: Number.isFinite(parLevel) && parLevel > 0 ? Math.round(parLevel * 1000) / 1000 : 0,
+      notes: String(itemDraft?.notes || '').trim(),
+      createdAt: existingItem?.createdAt || now,
+      updatedAt: now,
+      lastMovementAt: existingItem?.lastMovementAt || '',
+    };
+    const previousQuantity = existingItem?.quantity || 0;
+    const quantityChanged = previousQuantity !== nextItem.quantity;
+    const movement = quantityChanged
+      ? createStoreRoomMovement({
+        item: nextItem,
+        type: existingItem ? 'adjustment' : 'opening',
+        quantity: Math.abs(nextItem.quantity - previousQuantity),
+        previousQuantity,
+        nextQuantity: nextItem.quantity,
+        reason: existingItem ? 'Count adjusted' : 'Opening stock',
+        notes: nextItem.notes,
+      })
+      : null;
+
+    setStoreRoomItems(prevItems => {
+      const existingIndex = prevItems.findIndex((item) => item.id === id);
+      const itemToSave = movement ? { ...nextItem, lastMovementAt: movement.createdAt } : nextItem;
+
+      if (existingIndex === -1) {
+        return sanitizeStoreRoomItems([...prevItems, itemToSave]);
+      }
+
+      return sanitizeStoreRoomItems(prevItems.map((item, index) => (
+        index === existingIndex ? itemToSave : item
+      )));
+    });
+
+    if (movement) {
+      setStoreRoomMovements(prevMovements => [movement, ...prevMovements].slice(0, 1000));
+    }
+
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: existingItem ? 'Store room item updated' : 'Store room item created',
+        user: activeStaffMember?.name || 'System',
+        relatedItem: nextItem.name,
+        beforeValue: existingItem || null,
+        afterValue: nextItem,
+      }),
+      ...prevLog,
+    ].slice(0, 500));
+
+    return { ok: true, message: `${nextItem.name} saved.` };
+  };
+
+  const handleRecordStoreRoomMovement = (movementDraft) => {
+    const permission = requirePermission(accessProfile, 'canManageStoreRoom', 'move store room stock');
+    if (!permission.ok) {
+      return { ok: false, message: permission.message };
+    }
+
+    const item = storeRoomItems.find((stockItem) => stockItem.id === movementDraft?.itemId);
+    const quantity = Number.parseFloat(movementDraft?.quantity);
+    const type = movementDraft?.type === 'stock_out' ? 'stock_out' : 'stock_in';
+
+    if (!item) {
+      return { ok: false, message: 'Choose a store room item.' };
+    }
+
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      return { ok: false, message: 'Enter a quantity greater than zero.' };
+    }
+
+    const previousQuantity = Number(item.quantity) || 0;
+    const nextQuantity = type === 'stock_in'
+      ? previousQuantity + quantity
+      : previousQuantity - quantity;
+
+    if (nextQuantity < 0) {
+      return { ok: false, message: `Only ${previousQuantity} ${item.unit} available.` };
+    }
+
+    const movement = createStoreRoomMovement({
+      item,
+      type,
+      quantity,
+      previousQuantity,
+      nextQuantity,
+      reason: movementDraft?.reason || (type === 'stock_in' ? 'Stock received' : 'Stock removed'),
+      notes: movementDraft?.notes,
+    });
+
+    setStoreRoomItems(prevItems => sanitizeStoreRoomItems(prevItems.map((stockItem) => (
+      stockItem.id === item.id
+        ? {
+          ...stockItem,
+          quantity: Math.round(nextQuantity * 1000) / 1000,
+          updatedAt: movement.createdAt,
+          lastMovementAt: movement.createdAt,
+        }
+        : stockItem
+    ))));
+    setStoreRoomMovements(prevMovements => [movement, ...prevMovements].slice(0, 1000));
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: type === 'stock_in' ? 'Store room stock added' : 'Store room stock removed',
+        user: activeStaffMember?.name || 'System',
+        relatedItem: item.name,
+        afterValue: movement,
+      }),
+      ...prevLog,
+    ].slice(0, 500));
+
+    return { ok: true, message: `${item.name} ${type === 'stock_in' ? 'added' : 'removed'}.` };
+  };
+
+  const handleDeleteStoreRoomItem = (itemId) => {
+    const permission = requirePermission(accessProfile, 'canManageStoreRoom', 'remove store room stock items');
+    if (!permission.ok) {
+      return { ok: false, message: permission.message };
+    }
+
+    const item = storeRoomItems.find((stockItem) => stockItem.id === itemId);
+
+    if (!item) {
+      return { ok: false, message: 'Store room item not found.' };
+    }
+
+    setStoreRoomItems(prevItems => prevItems.filter((stockItem) => stockItem.id !== itemId));
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: 'Store room item removed',
+        user: activeStaffMember?.name || 'System',
+        relatedItem: item.name,
+        beforeValue: item,
+      }),
+      ...prevLog,
+    ].slice(0, 500));
+
+    return { ok: true, message: `${item.name} removed from the store room.` };
+  };
+
   const handleSaveSettings = ({ budget: nextBudget, dailyWasteValueLimit, dailyWasteEntryLimit }) => {
     const permission = requirePermission(accessProfile, 'canManageLimits', 'change waste limits');
     if (!permission.ok) {
@@ -1665,18 +1923,17 @@ function App() {
   }
 
   return (
-    <div className={`app-shell${navbarHidden ? ' app-shell--navbar-hidden' : ''}`}>
+    <div className="app-shell">
       <Navbar
         activePage={activeTab}
         onNavigate={setActiveTab}
         wasteCount={wasteItems.length}
         activeStaffMember={activeStaffMember}
         accessProfile={accessProfile}
-        isHidden={navbarHidden}
         onLogout={handleLogout}
       />
 
-      <main className={`app-page${activeTab === 'dashboard' || activeTab === 'wasteLog' || activeTab === 'settings' ? ' app-page--wide' : ''}`}>
+      <main className={`app-page${activeTab === 'dashboard' || activeTab === 'storeRoom' || activeTab === 'wasteLog' || activeTab === 'settings' ? ' app-page--wide' : ''}`}>
         {activeTab === 'dashboard' && (
           <Dashboard items={wasteItems} budget={budget} settings={settings} staffList={staffList} accessProfile={accessProfile} />
         )}
@@ -1707,6 +1964,18 @@ function App() {
           />
         )}
 
+        {activeTab === 'storeRoom' && (
+          <StoreRoom
+            storeRoomItems={storeRoomItems}
+            storeRoomMovements={storeRoomMovements}
+            itemPriceCatalog={itemPriceCatalog}
+            accessProfile={accessProfile}
+            onSaveStoreRoomItem={handleSaveStoreRoomItem}
+            onRecordStoreRoomMovement={handleRecordStoreRoomMovement}
+            onDeleteStoreRoomItem={handleDeleteStoreRoomItem}
+          />
+        )}
+
         {activeTab === 'settings' && (
           <Settings
             budget={budget}
@@ -1718,6 +1987,8 @@ function App() {
             menuItems={menuItems}
             customMenuItems={customMenuItems}
             itemPriceCatalog={itemPriceCatalog}
+            storeRoomItems={storeRoomItems}
+            storeRoomMovements={storeRoomMovements}
             portionProfiles={portionProfiles}
             activeStaffId={activeStaffId}
             activeStaffMember={activeStaffMember}

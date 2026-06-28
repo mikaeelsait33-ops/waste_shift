@@ -186,12 +186,6 @@ button:disabled {
     transform 0.22s ease;
 }
 
-.navbar.is-hidden {
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(calc(-100% - 2px));
-}
-
 .brand {
   display: flex;
   align-items: center;
@@ -1457,6 +1451,64 @@ textarea.input {
   gap: 16px;
 }
 
+.store-room-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.stock-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.stock-card {
+  display: grid;
+  gap: 12px;
+}
+
+.stock-card.is-low-stock {
+  border-color: rgba(216, 59, 59, 0.28);
+  background: linear-gradient(180deg, #ffffff 0%, rgba(216, 59, 59, 0.04) 100%);
+}
+
+.stock-card-note {
+  margin: 0;
+}
+
+.stock-card-actions {
+  justify-content: flex-start;
+  margin-top: 2px;
+}
+
+.stock-movement-list {
+  display: grid;
+  gap: 8px;
+}
+
+.stock-movement-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) auto minmax(130px, 0.75fr) minmax(130px, 0.75fr);
+  gap: 10px;
+  align-items: center;
+  padding: 11px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.stock-movement-row > * {
+  min-width: 0;
+}
+
+.stock-movement-row strong,
+.stock-movement-row .small-text {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
 .settings-sticky-controls {
   position: sticky;
   top: var(--settings-sticky-top, 76px);
@@ -1470,10 +1522,6 @@ textarea.input {
   transition:
     opacity 0.18s ease,
     transform 0.22s ease;
-}
-
-.app-shell--navbar-hidden .settings-sticky-controls {
-  --settings-sticky-top: 12px;
 }
 
 .settings-sticky-controls.is-hidden {
@@ -1577,10 +1625,13 @@ textarea.input {
   .breakdown-grid--two,
   .breakdown-grid--four,
   .action-panel,
-  .database-grid,
-  .invoice-importer,
-  .invoice-result-row,
-  .section-ring-grid {
+    .database-grid,
+    .invoice-importer,
+    .invoice-result-row,
+    .store-room-actions,
+    .stock-grid,
+    .stock-movement-row,
+    .section-ring-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1625,10 +1676,6 @@ textarea.input {
 
   .settings-sticky-controls {
     top: var(--settings-sticky-top-mobile, 174px);
-  }
-
-  .app-shell--navbar-hidden .settings-sticky-controls {
-    --settings-sticky-top-mobile: 12px;
   }
 
   .settings-tabs {

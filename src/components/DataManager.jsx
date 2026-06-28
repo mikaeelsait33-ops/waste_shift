@@ -15,6 +15,8 @@ function DataManager({
   menuItems,
   customMenuItems,
   itemPriceCatalog,
+  storeRoomItems,
+  storeRoomMovements,
   portionProfiles,
   activeStaffId,
   authSettings,
@@ -40,6 +42,8 @@ function DataManager({
   const itemPriceCount = itemPriceCatalog && typeof itemPriceCatalog === 'object' && !Array.isArray(itemPriceCatalog)
     ? Object.keys(itemPriceCatalog).length
     : 0;
+  const storeRoomItemCount = Array.isArray(storeRoomItems) ? storeRoomItems.length : 0;
+  const storeRoomMovementCount = Array.isArray(storeRoomMovements) ? storeRoomMovements.length : 0;
   const customStaffCount = Array.isArray(customStaffList) ? customStaffList.length : 0;
   const portionProfileCount = portionProfiles && typeof portionProfiles === 'object'
     ? Object.keys(portionProfiles).length
@@ -70,6 +74,8 @@ function DataManager({
       itemPrices: data.itemPriceCatalog && typeof data.itemPriceCatalog === 'object' && !Array.isArray(data.itemPriceCatalog)
         ? Object.keys(data.itemPriceCatalog).length
         : 0,
+      storeRoomItems: Array.isArray(data.storeRoomItems) ? data.storeRoomItems.length : 0,
+      storeRoomMovements: Array.isArray(data.storeRoomMovements) ? data.storeRoomMovements.length : 0,
       portionProfiles: data.portionProfiles && typeof data.portionProfiles === 'object' && !Array.isArray(data.portionProfiles)
         ? Object.keys(data.portionProfiles).length
         : 0,
@@ -105,6 +111,8 @@ function DataManager({
       customStaffList,
       customMenuItems,
       itemPriceCatalog,
+      storeRoomItems,
+      storeRoomMovements,
       portionProfiles,
       activeStaffId,
       authSettings,
@@ -163,6 +171,8 @@ function DataManager({
       || Array.isArray(snapshot.data.authSettings)
     )) return false;
     if (snapshot.data.inventoryMovements !== undefined && !Array.isArray(snapshot.data.inventoryMovements)) return false;
+    if (snapshot.data.storeRoomItems !== undefined && !Array.isArray(snapshot.data.storeRoomItems)) return false;
+    if (snapshot.data.storeRoomMovements !== undefined && !Array.isArray(snapshot.data.storeRoomMovements)) return false;
     if (snapshot.data.auditLog !== undefined && !Array.isArray(snapshot.data.auditLog)) return false;
     return true;
   };
@@ -200,6 +210,7 @@ function DataManager({
         const confirmationText = [
           `Import ${file.name}?`,
           `${summary.wasteItems} waste entries, ${summary.recipes} recipes, ${summary.staff} staff members.`,
+          `${summary.storeRoomItems} store room items, ${summary.storeRoomMovements} store room movements.`,
           `Budget: R${summary.budget.toFixed(2)}.`,
           'This will replace the current local database.',
         ].join('\n');
@@ -307,7 +318,7 @@ function DataManager({
               Last downloaded backup: {formatDateTime(lastExportAt)}
             </p>
           </div>
-            <span className="badge">{wasteItems.length + recipeCount + customMenuItemCount + itemPriceCount + customStaffCount} saved records</span>
+            <span className="badge">{wasteItems.length + recipeCount + customMenuItemCount + itemPriceCount + storeRoomItemCount + storeRoomMovementCount + customStaffCount} saved records</span>
         </div>
 
         <div className="metrics-grid">
@@ -328,6 +339,14 @@ function DataManager({
             <span className="metric-label">Menu items</span>
           </div>
           <div className="metric-card">
+            <span className="metric-value">{storeRoomItemCount}</span>
+            <span className="metric-label">Store room items</span>
+          </div>
+          <div className="metric-card">
+            <span className="metric-value">{storeRoomMovementCount}</span>
+            <span className="metric-label">Store movements</span>
+          </div>
+          <div className="metric-card">
             <span className="metric-value">{inventoryMovementCount}</span>
             <span className="metric-label">Inventory movements</span>
           </div>
@@ -340,7 +359,7 @@ function DataManager({
         <div className="database-grid">
           <div className="database-card">
             <h3 className="breakdown-title">Backup database</h3>
-            <p className="small-text">Downloads one JSON file containing waste logs, recipes, portion sizes, staff, menu prices, and budget settings.</p>
+            <p className="small-text">Downloads one JSON file containing waste logs, recipes, portion sizes, staff, store room stock, menu prices, and budget settings.</p>
             <button type="button" onClick={exportDatabase} className="primary-button" disabled={!canExportData}>
               {canExportData ? 'Export backup' : 'Manager only'}
             </button>
@@ -376,6 +395,8 @@ function DataManager({
               <span className="badge">{importPreview.staff} staff</span>
               <span className="badge">{importPreview.customMenuItems} custom prices</span>
               <span className="badge">{importPreview.itemPrices} item prices</span>
+              <span className="badge">{importPreview.storeRoomItems} store items</span>
+              <span className="badge">{importPreview.storeRoomMovements} stock moves</span>
               <span className="badge">{importPreview.portionProfiles} portions</span>
               <span className={`badge${importPreview.authConfigured ? ' is-green' : ' is-red'}`}>
                 PINs {importPreview.authConfigured ? 'configured' : 'missing'}
@@ -398,6 +419,14 @@ function DataManager({
           <div className="budget-row" style={{ marginTop: '10px' }}>
             <span className="small-text">Waste item prices</span>
             <span className="badge">{itemPriceCount}</span>
+          </div>
+          <div className="budget-row" style={{ marginTop: '10px' }}>
+            <span className="small-text">Store room items</span>
+            <span className="badge">{storeRoomItemCount}</span>
+          </div>
+          <div className="budget-row" style={{ marginTop: '10px' }}>
+            <span className="small-text">Store room movements</span>
+            <span className="badge">{storeRoomMovementCount}</span>
           </div>
           <div className="budget-row" style={{ marginTop: '10px' }}>
             <span className="small-text">Remembered portion sizes</span>

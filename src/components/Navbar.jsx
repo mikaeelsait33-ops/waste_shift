@@ -1,17 +1,22 @@
 const navItems = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'logWaste', label: 'Log' },
+  { key: 'storeRoom', label: 'Store Room' },
   { key: 'wasteLog', label: 'History' },
   { key: 'settings', label: 'Settings' },
 ];
 
-function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, accessProfile, isHidden = false, onLogout }) {
-  const visibleNavItems = navItems.filter((item) => (
-    accessProfile?.canViewFinancials || item.key === 'logWaste' || item.key === 'wasteLog'
-  ));
+function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, accessProfile, onLogout }) {
+  const visibleNavItems = navItems.filter((item) => {
+    if (item.key === 'storeRoom') {
+      return accessProfile?.canViewStoreRoom;
+    }
+
+    return accessProfile?.canViewFinancials || item.key === 'logWaste' || item.key === 'wasteLog';
+  });
 
   return (
-    <nav className={`navbar${isHidden ? ' is-hidden' : ''}`}>
+    <nav className="navbar">
       <div className="brand">
         <span className="brand-mark">WS</span>
         <div>

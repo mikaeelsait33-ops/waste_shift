@@ -146,9 +146,13 @@ const unassignedAccess = getAccessProfile(null);
 
 assert.equal(ownerAccess.canManageServerSync, true);
 assert.equal(ownerAccess.canClearData, true);
+assert.equal(ownerAccess.canManageStoreRoom, true);
 assert.equal(managerAccess.canManageServerSync, true);
 assert.equal(managerAccess.canClearData, true);
+assert.equal(managerAccess.canManageStoreRoom, true);
 assert.equal(waiterAccess.canLogWaste, true);
+assert.equal(waiterAccess.canViewStoreRoom, true);
+assert.equal(waiterAccess.canManageStoreRoom, false);
 assert.equal(waiterAccess.canViewFinancials, false);
 assert.equal(waiterAccess.canExportData, false);
 assert.equal(unassignedAccess.canLogWaste, false);
