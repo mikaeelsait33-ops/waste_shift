@@ -67,7 +67,9 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
   }));
 
   const handleDeleteClick = (member) => {
-    if (window.confirm(`Remove ${member.name} from staff options?`)) {
+    const seedNote = member.isCsvSeed ? ' This built-in staff member will be hidden from active staff lists.' : '';
+
+    if (window.confirm(`Remove ${member.name} from staff options?${seedNote}`)) {
       onDeleteStaff(member.id);
       setMessage(`${member.name} removed.`);
     }
@@ -231,17 +233,15 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
                     Reset code
                   </button>
                 )}
-                {!member.isCsvSeed && (
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteClick(member)}
-                    className="delete-button"
-                    title={`Remove ${member.name}`}
-                    disabled={!accessProfile?.canManageStaff}
-                  >
-                    x
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => handleDeleteClick(member)}
+                  className="delete-button"
+                  title={`Remove ${member.name}`}
+                  disabled={!accessProfile?.canManageStaff}
+                >
+                  x
+                </button>
               </div>
             </div>
           );

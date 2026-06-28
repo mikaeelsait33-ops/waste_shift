@@ -405,6 +405,8 @@ const sanitizeStaffMembers = (members) => {
         role,
         staffSection: inferStaffSection(member?.staffSection || member?.section || role),
         staffCode: sanitizePinRecord(member?.staffCode),
+        removed: Boolean(member?.removed),
+        removedAt: String(member?.removedAt || ''),
         isCsvSeed: false,
       };
     })
@@ -422,9 +424,11 @@ const sanitizeStaffMembers = (members) => {
 const mergeStaffMembers = (baseStaffMembers, customStaffMembers) => {
   const customById = new Map(customStaffMembers.map((member) => [member.id, member]));
   const baseIds = new Set(baseStaffMembers.map((member) => member.id));
-  const mergedBaseMembers = baseStaffMembers.map((baseMember) => customById.get(baseMember.id) || baseMember);
+  const mergedBaseMembers = baseStaffMembers
+    .map((baseMember) => customById.get(baseMember.id) || baseMember)
+    .filter((member) => !member.removed);
   const customOnlyMembers = customStaffMembers
-    .filter((member) => !baseIds.has(member.id))
+    .filter((member) => !member.removed && !baseIds.has(member.id))
     .sort((a, b) => a.name.localeCompare(b.name));
 
   return [...mergedBaseMembers, ...customOnlyMembers];
@@ -964,6 +968,8 @@ function App() {
         name: trimmedName,
         role: 'Manager',
         staffSection: 'management',
+        removed: false,
+        removedAt: '',
         isCsvSeed: false,
       }
       : {
@@ -972,6 +978,8 @@ function App() {
         role: STAFF_SECTION_ROLE_LABELS[staffSection] || 'Team',
         staffSection: staffSection || 'kitchen',
         staffCode: staffCode || existingMember?.staffCode || null,
+        removed: false,
+        removedAt: '',
         isCsvSeed: false,
       };
 
@@ -1109,6 +1117,8 @@ function App() {
         ...newStaffMember,
         id: createStaffMemberId(newStaffMember.name),
         staffSection: inferStaffSection(newStaffMember.staffSection || newStaffMember.role),
+        removed: false,
+        removedAt: '',
         isCsvSeed: false,
       };
       const existingIndex = prev.findIndex((member) => member.id === nextStaffMember.id);
@@ -1130,7 +1140,53 @@ function App() {
       return;
     }
 
-    setCustomStaffList(prev => prev.filter(s => s.id !== staffId));
+    const staffMember = staffList.find((member) => member.id === staffId);
+    const baseStaffMember = baseStaffList.find((member) => member.id === staffId);
+
+    if (!staffMember) {
+      return;
+    }
+
+    if (baseStaffMember) {
+      setCustomStaffList(prevStaffList => {
+        const removedStaffMember = {
+          ...staffMember,
+          removed: true,
+          removedAt: new Date().toISOString(),
+          isCsvSeed: false,
+        };
+        const existingIndex = prevStaffList.findIndex((member) => member.id === staffId);
+
+        if (existingIndex === -1) {
+          return [...prevStaffList, removedStaffMember];
+        }
+
+        return prevStaffList.map((member, index) => (
+          index === existingIndex ? { ...member, ...removedStaffMember } : member
+        ));
+      });
+    } else {
+      setCustomStaffList(prevStaffList => prevStaffList.filter((member) => member.id !== staffId));
+    }
+
+    if (activeStaffId === staffId) {
+      setActiveStaffId('');
+    }
+
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: 'Staff removed',
+        user: activeStaffMember?.name || 'System',
+        relatedItem: staffMember.name,
+        beforeValue: {
+          staffId,
+          role: staffMember.role,
+          staffSection: staffMember.staffSection,
+          wasCsvSeed: Boolean(baseStaffMember),
+        },
+      }),
+      ...prevLog,
+    ].slice(0, 500));
   };
 
   const handleResetStaffCode = async (staffId) => {
