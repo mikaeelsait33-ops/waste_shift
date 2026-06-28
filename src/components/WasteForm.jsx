@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  DEFAULT_WASTE_CLASSIFICATION,
+  WASTE_CATEGORY_OPTIONS,
+  WASTE_CLASSIFICATION_OPTIONS,
   WASTE_REASONS,
   calculateMenuWasteFinancials,
   getEntryFoodCostLost,
   getMenuSellingPrice,
   getRecipeIngredientTotal,
+  getWasteClassificationMeta,
   roundCurrency,
 } from '../utils/wasteCalculations';
 
@@ -21,20 +25,15 @@ const MAX_PHOTO_INPUT_BYTES = 8 * 1024 * 1024;
 const MAX_PHOTO_DIMENSION = 1200;
 const PHOTO_QUALITY = 0.72;
 
-const CATEGORY_OPTIONS = [
-  { value: 'Produce', label: 'Produce' },
-  { value: 'Dairy', label: 'Dairy & Eggs' },
-  { value: 'Bakery', label: 'Bakery & Grains' },
-  { value: 'Meat/Poultry', label: 'Meat & Poultry' },
-  { value: 'Pantry', label: 'Pantry Goods' },
-];
-
 const COMMON_REASON_BY_CATEGORY = {
   Produce: 'Spoiled',
   Dairy: 'Expired',
   Bakery: 'Expired',
   'Meat/Poultry': 'Expired',
   Pantry: 'Expired',
+  'Coffee/Tea': 'Quality issue',
+  Drinks: 'Quality issue',
+  Other: 'Quality issue',
 };
 
 const createWasteItemKey = (itemName) => String(itemName || '')
@@ -117,6 +116,7 @@ function WasteForm({
   const [portionAmount, setPortionAmount] = useState('');
   const [portionUnit, setPortionUnit] = useState('g');
   const [category, setCategory] = useState('Produce');
+  const [wasteClassification, setWasteClassification] = useState(DEFAULT_WASTE_CLASSIFICATION);
   const [reason, setReason] = useState('Expired');
   const [customReason, setCustomReason] = useState('');
   const [selectedStaffId, setSelectedStaffId] = useState(activeStaffId || '');
@@ -250,6 +250,7 @@ function WasteForm({
     setQuantity(String(profile.quantity || '1'));
     setUnit(profile.unit || 'g');
     setCost(Number(profile.cost) > 0 ? Number(profile.cost).toFixed(2) : '');
+    setWasteClassification(profile.wasteClassification || DEFAULT_WASTE_CLASSIFICATION);
 
     if (profile.unit === 'portion') {
       setPortionAmount(profile.portionSize ? String(profile.portionSize) : '');
@@ -460,6 +461,8 @@ function WasteForm({
     let finalEntry = {
       id: Date.now().toString(),
       reason: actualReason,
+      wasteClassification,
+      wasteClassificationLabel: getWasteClassificationMeta(wasteClassification).label,
       staffId: selectedStaffMember.id,
       staff: selectedStaffMember.name,
       staffRole: selectedStaffMember.role,
@@ -563,8 +566,8 @@ function WasteForm({
         <div className="section-header">
           <div>
             <p className="eyebrow">Waste entry</p>
-            <h2 className="title">Log Wasted Food</h2>
-            <p className="subtitle">Capture one ingredient or a full menu item.</p>
+            <h2 className="title">Log Waste</h2>
+            <p className="subtitle">Capture ingredients, drinks, or full menu items.</p>
           </div>
         </div>
 
@@ -574,7 +577,7 @@ function WasteForm({
             onClick={() => handleFormTypeChange('single')}
             className={`segment-button${formType === 'single' ? ' is-active' : ''}`}
           >
-            Ingredient
+            Ingredient / drink
           </button>
           <button
             type="button"
@@ -616,13 +619,13 @@ function WasteForm({
         {formType === 'single' ? (
           <>
             <div className="field">
-              <label htmlFor="food-name">Food item name</label>
+              <label htmlFor="food-name">Item or drink name</label>
               <input
                 id="food-name"
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Cheddar block"
+                placeholder="e.g. Cheddar block or latte"
                 list="known-waste-items"
                 className="input"
               />
@@ -638,7 +641,7 @@ function WasteForm({
             <div className="field">
               <label htmlFor="food-category">Category</label>
               <select id="food-category" value={category} onChange={(e) => setCategory(e.target.value)} className="select">
-                {CATEGORY_OPTIONS.map((categoryOption) => (
+                {WASTE_CATEGORY_OPTIONS.map((categoryOption) => (
                   <option key={categoryOption.value} value={categoryOption.value}>
                     {categoryOption.label}
                   </option>
@@ -722,6 +725,22 @@ function WasteForm({
             )}
           </>
         )}
+
+        <div className="field">
+          <span className="field-label">Waste type</span>
+          <div className="segmented-control" aria-label="Waste type">
+            {WASTE_CLASSIFICATION_OPTIONS.map((classificationOption) => (
+              <button
+                key={classificationOption.value}
+                type="button"
+                onClick={() => setWasteClassification(classificationOption.value)}
+                className={`segment-button${wasteClassification === classificationOption.value ? ' is-active' : ''}`}
+              >
+                {classificationOption.shortLabel}
+              </button>
+            ))}
+          </div>
+        </div>
 
         {formType === 'recipe' && selectedRecipe && (
           <div className="smart-panel">

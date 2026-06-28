@@ -1,13 +1,18 @@
 import { useState } from 'react';
 import DateNavigator from './DateNavigator';
 import {
+  DEFAULT_WASTE_CLASSIFICATION,
+  WASTE_CATEGORY_OPTIONS,
+  WASTE_CLASSIFICATION_OPTIONS,
   getEntryFoodCostLost,
   getEntryGrossProfitLost,
   getEntryPotentialRevenueLost,
+  getWasteClassificationMeta,
 } from '../utils/wasteCalculations';
 
 function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, activeStaffMember }) {
   const [activeFilter, setActiveFilter] = useState('All');
+  const [classificationFilter, setClassificationFilter] = useState('All');
   const [searchTerm, setSearchTerm] = useState('');
   const [sortMode, setSortMode] = useState('newest');
   const [viewMode, setViewMode] = useState('day');
@@ -57,6 +62,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
   });
 
   const searchValue = searchTerm.trim().toLowerCase();
+  const getItemWasteClassification = (item) => item?.wasteClassification || DEFAULT_WASTE_CLASSIFICATION;
 
   const itemMatchesCategory = (item, category) => {
     if (category === 'All') return true;
@@ -64,7 +70,12 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
     return item.category === category;
   };
 
-  const filteredItems = dateFilteredItems.filter((item) => {
+  const classificationFilteredItems = dateFilteredItems.filter((item) => {
+    if (classificationFilter === 'All') return true;
+    return getItemWasteClassification(item) === classificationFilter;
+  });
+
+  const filteredItems = classificationFilteredItems.filter((item) => {
     if (activeFilter === 'All') return true;
     return itemMatchesCategory(item, activeFilter);
   }).filter((item) => {
@@ -76,6 +87,8 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
       item?.staff,
       item?.category,
       item?.unit,
+      getWasteClassificationMeta(getItemWasteClassification(item)).label,
+      getWasteClassificationMeta(getItemWasteClassification(item)).shortLabel,
       ...(Array.isArray(item?.ingredients) ? item.ingredients.map((ingredient) => ingredient.name) : []),
     ];
 
@@ -89,12 +102,22 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
   const totalCost = dateFilteredItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
   const totalCount = dateFilteredItems.length;
   const filteredCost = filteredItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
-  const hasActiveFilters = activeFilter !== 'All' || Boolean(searchValue);
-  const filterCategories = ['All', 'Produce', 'Dairy', 'Bakery', 'Meat/Poultry', 'Pantry', 'Other'];
-  const categoryCounts = filterCategories.reduce((acc, category) => {
-    acc[category] = dateFilteredItems.filter((item) => itemMatchesCategory(item, category)).length;
+  const hasActiveFilters = activeFilter !== 'All' || classificationFilter !== 'All' || Boolean(searchValue);
+  const categoryFilters = [
+    { value: 'All', label: 'All' },
+    ...WASTE_CATEGORY_OPTIONS,
+  ];
+  const categoryCounts = categoryFilters.reduce((acc, categoryOption) => {
+    acc[categoryOption.value] = classificationFilteredItems.filter((item) => itemMatchesCategory(item, categoryOption.value)).length;
     return acc;
   }, {});
+  const classificationFilters = [
+    { value: 'All', label: 'All waste' },
+    ...WASTE_CLASSIFICATION_OPTIONS.map((classificationOption) => ({
+      value: classificationOption.value,
+      label: classificationOption.shortLabel,
+    })),
+  ];
   const unitLabels = {
     g: 'g',
     kg: 'kg',
@@ -149,6 +172,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
       'Measured Unit',
       'Type',
       'Category',
+      'Waste Classification',
       'Department',
       'Reason',
       'Staff',
@@ -171,6 +195,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
       item.measuredUnit || '',
       item.isRecipe ? 'Recipe' : 'Ingredient',
       item.category,
+      getWasteClassificationMeta(getItemWasteClassification(item)).label,
       item.department || '',
       item.reason,
       item.staff || '',
@@ -250,6 +275,13 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
           <option value="highestCost">Highest cost</option>
           <option value="name">Item name</option>
         </select>
+        <select value={classificationFilter} onChange={(e) => setClassificationFilter(e.target.value)} className="select">
+          {classificationFilters.map((classificationOption) => (
+            <option key={classificationOption.value} value={classificationOption.value}>
+              {classificationOption.label}
+            </option>
+          ))}
+        </select>
         <button type="button" onClick={exportFilteredItems} className="ghost-button is-warning" disabled={filteredItems.length === 0 || !accessProfile?.canExportData}>
           {accessProfile?.canExportData ? 'Export CSV' : 'Manager only'}
         </button>
@@ -288,15 +320,15 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
       )}
 
       <div className="filter-row" aria-label="Waste category filter">
-        {filterCategories.map((cat) => (
+        {categoryFilters.map((categoryOption) => (
           <button
-            key={cat}
+            key={categoryOption.value}
             type="button"
-            onClick={() => setActiveFilter(cat)}
-            className={`pill-button${activeFilter === cat ? ' is-active' : ''}`}
+            onClick={() => setActiveFilter(categoryOption.value)}
+            className={`pill-button${activeFilter === categoryOption.value ? ' is-active' : ''}`}
           >
-            {cat}
-            <span className="pill-count">{categoryCounts[cat] || 0}</span>
+            {categoryOption.label}
+            <span className="pill-count">{categoryCounts[categoryOption.value] || 0}</span>
           </button>
         ))}
       </div>
@@ -324,6 +356,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
             const itemCost = getEntryFoodCostLost(item);
             const revenueLost = getEntryPotentialRevenueLost(item);
             const grossProfitLost = getEntryGrossProfitLost(item);
+            const classificationMeta = getWasteClassificationMeta(getItemWasteClassification(item));
 
             return (
               <li key={item.id} className={`log-card ${item.isRecipe ? 'is-recipe' : 'is-single'}`}>
@@ -335,6 +368,9 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
                     </h3>
                     <span className="log-meta">
                       {item.reason} - {item.date}{item.time ? ` ${item.time}` : ''}{item.staff ? ` - ${item.staff}` : ''}
+                    </span>
+                    <span className={`badge waste-type-badge waste-type-badge--${classificationMeta.value}`}>
+                      {classificationMeta.shortLabel}
                     </span>
                   </div>
 

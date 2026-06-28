@@ -1,13 +1,6 @@
 import { useMemo, useState } from 'react';
 import InvoicePriceImporter from './InvoicePriceImporter';
-
-const CATEGORY_OPTIONS = [
-  { value: 'Produce', label: 'Produce' },
-  { value: 'Dairy', label: 'Dairy & Eggs' },
-  { value: 'Bakery', label: 'Bakery & Grains' },
-  { value: 'Meat/Poultry', label: 'Meat & Poultry' },
-  { value: 'Pantry', label: 'Pantry Goods' },
-];
+import { WASTE_CATEGORY_OPTIONS } from '../utils/wasteCalculations';
 
 const createBlankIngredient = () => ({
   name: '',
@@ -372,7 +365,7 @@ function RecipeManager({
                       className="select"
                       aria-label="Ingredient category"
                     >
-                      {CATEGORY_OPTIONS.map((categoryOption) => (
+                      {WASTE_CATEGORY_OPTIONS.map((categoryOption) => (
                         <option key={categoryOption.value} value={categoryOption.value}>
                           {categoryOption.label}
                         </option>

@@ -1024,6 +1024,24 @@ button:disabled {
   color: #168a4a;
 }
 
+.waste-type-badge {
+  width: fit-content;
+  margin: 8px 0 0;
+  border: 1px solid transparent;
+}
+
+.waste-type-badge--actual_food {
+  background: rgba(10, 132, 255, 0.12);
+  border-color: rgba(10, 132, 255, 0.22);
+  color: #0068d9;
+}
+
+.waste-type-badge--operational {
+  background: rgba(183, 121, 31, 0.12);
+  border-color: rgba(183, 121, 31, 0.22);
+  color: #925d14;
+}
+
 .price {
   color: var(--danger);
   font-weight: 860;
@@ -1049,7 +1067,7 @@ button:disabled {
 
 .toolbar {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(150px, 0.45fr) auto;
+  grid-template-columns: minmax(220px, 1fr) minmax(150px, 0.45fr) minmax(150px, 0.45fr) auto;
   gap: 10px;
   align-items: center;
   margin: 14px 0;

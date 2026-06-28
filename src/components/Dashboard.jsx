@@ -1,10 +1,13 @@
 import { useMemo, useState } from 'react';
 import { STAFF_SECTIONS, getStaffSectionMeta, inferStaffSection } from '../utils/staffSections';
 import {
+  DEFAULT_WASTE_CLASSIFICATION,
   PREVENTABLE_REASONS,
+  WASTE_CLASSIFICATION_OPTIONS,
   getEntryFoodCostLost,
   getEntryGrossProfitLost,
   getEntryPotentialRevenueLost,
+  getWasteClassificationMeta,
 } from '../utils/wasteCalculations';
 
 const timeframes = ['all', 'day', 'week', 'month', 'year'];
@@ -30,6 +33,7 @@ function Dashboard({ items, budget, settings, staffList, accessProfile }) {
   const safeItems = Array.isArray(items) ? items : [];
   const canViewFinancials = Boolean(accessProfile?.canViewFinancials);
   const formatMoney = (value) => (canViewFinancials ? `R${Number(value || 0).toFixed(2)}` : 'Restricted');
+  const getItemWasteClassification = (item) => item?.wasteClassification || DEFAULT_WASTE_CLASSIFICATION;
   const metricValueClass = (isDanger = false) => (
     `metric-value${canViewFinancials && isDanger ? ' is-danger' : ''}`
   );
@@ -218,6 +222,16 @@ function Dashboard({ items, budget, settings, staffList, accessProfile }) {
     return acc;
   }, {});
 
+  const classificationMetrics = filteredItems.reduce((acc, item) => {
+    const classification = getWasteClassificationMeta(getItemWasteClassification(item)).label;
+    acc[classification] = (acc[classification] || 0) + getEntryFoodCostLost(item);
+    return acc;
+  }, {});
+
+  WASTE_CLASSIFICATION_OPTIONS.forEach((classificationOption) => {
+    classificationMetrics[classificationOption.label] = classificationMetrics[classificationOption.label] || 0;
+  });
+
   const getTopMetric = (metricsObj) => {
     const entries = Object.entries(metricsObj);
     if (entries.length === 0) return null;
@@ -234,6 +248,9 @@ function Dashboard({ items, budget, settings, staffList, accessProfile }) {
   const staffRows = getMetricRows(staffMetrics, totalFinancialLoss);
   const categoryRows = getMetricRows(categoryMetrics, totalFinancialLoss);
   const departmentRows = getMetricRows(departmentMetrics, totalFinancialLoss);
+  const classificationRows = getMetricRows(classificationMetrics, totalFinancialLoss);
+  const actualFoodLoss = classificationMetrics[getWasteClassificationMeta(DEFAULT_WASTE_CLASSIFICATION).label] || 0;
+  const operationalLoss = classificationMetrics[getWasteClassificationMeta('operational').label] || 0;
   const topReasonShare = totalFinancialLoss > 0 && topReason ? Math.round((topReason[1] / totalFinancialLoss) * 100) : 0;
   const topItemShare = totalFinancialLoss > 0 && topItem ? Math.round((topItem[1] / totalFinancialLoss) * 100) : 0;
 
@@ -333,6 +350,14 @@ function Dashboard({ items, budget, settings, staffList, accessProfile }) {
           <div className="metric-card">
             <span className="metric-value">{totalItems}</span>
             <span className="metric-label">Incidents in {timeframeLabel.toLowerCase()}</span>
+          </div>
+          <div className="metric-card">
+            <span className={metricValueClass(true)}>{formatMoney(actualFoodLoss)}</span>
+            <span className="metric-label">Actual food wastage</span>
+          </div>
+          <div className="metric-card">
+            <span className={metricValueClass(operationalLoss > 0)}>{formatMoney(operationalLoss)}</span>
+            <span className="metric-label">Operational waste</span>
           </div>
           <div className="metric-card">
             <span className={metricValueClass(true)}>{formatMoney(totalPotentialRevenueLost)}</span>
@@ -475,6 +500,23 @@ function Dashboard({ items, budget, settings, staffList, accessProfile }) {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {totalItems > 0 && (
+          <div className="budget-panel">
+            <h3 className="breakdown-title">Waste type split</h3>
+            {classificationRows.map((row) => (
+              <div key={row.label} className="breakdown-item">
+                <div className="breakdown-label">
+                  <span>{row.label}</span>
+                  <span>{formatMoney(row.value)} ({row.pct}%)</span>
+                </div>
+                <div className="progress-track">
+                  <div className="progress-fill" style={{ width: `${row.pct}%` }} />
+                </div>
+              </div>
+            ))}
           </div>
         )}
 

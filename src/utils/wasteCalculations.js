@@ -15,6 +15,37 @@ export const WASTE_REASONS = [
   'Other',
 ];
 
+export const WASTE_CATEGORY_OPTIONS = [
+  { value: 'Produce', label: 'Produce' },
+  { value: 'Dairy', label: 'Dairy & Eggs' },
+  { value: 'Bakery', label: 'Bakery & Grains' },
+  { value: 'Meat/Poultry', label: 'Meat & Poultry' },
+  { value: 'Pantry', label: 'Pantry Goods' },
+  { value: 'Coffee/Tea', label: 'Coffee & Tea' },
+  { value: 'Drinks', label: 'Drinks' },
+  { value: 'Other', label: 'Other' },
+];
+
+export const DEFAULT_WASTE_CLASSIFICATION = 'actual_food';
+
+export const WASTE_CLASSIFICATION_OPTIONS = [
+  {
+    value: DEFAULT_WASTE_CLASSIFICATION,
+    label: 'Actual food wastage',
+    shortLabel: 'Food wastage',
+  },
+  {
+    value: 'operational',
+    label: 'Operational waste',
+    shortLabel: 'Operational',
+  },
+];
+
+export const getWasteClassificationMeta = (classification) => (
+  WASTE_CLASSIFICATION_OPTIONS.find((option) => option.value === classification)
+  || WASTE_CLASSIFICATION_OPTIONS[0]
+);
+
 export const PREVENTABLE_REASONS = new Set([
   'Burnt',
   'Expired',
