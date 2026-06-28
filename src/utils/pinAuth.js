@@ -55,6 +55,16 @@ export const validatePin = (pin) => {
   return '';
 };
 
+export const createRandomPin = (length = 6) => {
+  const safeLength = Math.max(4, Math.min(8, Number(length) || 6));
+  const min = 10 ** (safeLength - 1);
+  const range = (10 ** safeLength) - min;
+  const values = new Uint32Array(1);
+
+  getCryptoApi().getRandomValues(values);
+  return String(min + (values[0] % range));
+};
+
 export const createPinRecord = async (pin) => {
   const normalizedPin = normalizePin(pin);
   const validationError = validatePin(normalizedPin);
@@ -89,12 +99,7 @@ export const verifyPin = async (pin, record) => {
   return (await hashPin(normalizedPin, record.salt)) === record.hash;
 };
 
-export const sanitizeAuthSettings = (settings) => {
-  if (!isPlainObject(settings)) {
-    return DEFAULT_AUTH_SETTINGS;
-  }
-
-  const sanitizeRecord = (record) => (
+export const sanitizePinRecord = (record) => (
     isPlainObject(record)
     && record.algorithm === PIN_ALGORITHM
     && typeof record.salt === 'string'
@@ -109,14 +114,19 @@ export const sanitizeAuthSettings = (settings) => {
       : null
   );
 
+export const sanitizeAuthSettings = (settings) => {
+  if (!isPlainObject(settings)) {
+    return DEFAULT_AUTH_SETTINGS;
+  }
+
   return {
-    staffPin: sanitizeRecord(settings.staffPin),
-    managementPin: sanitizeRecord(settings.managementPin),
+    staffPin: sanitizePinRecord(settings.staffPin),
+    managementPin: sanitizePinRecord(settings.managementPin),
     updatedAt: String(settings.updatedAt || ''),
     pinPresetVersion: String(settings.pinPresetVersion || ''),
   };
 };
 
 export const authPinsAreConfigured = (settings) => (
-  Boolean(settings?.staffPin?.hash && settings?.managementPin?.hash)
+  Boolean(settings?.managementPin?.hash)
 );

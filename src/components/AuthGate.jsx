@@ -15,6 +15,7 @@ function AuthGate({
   const [staffSection, setStaffSection] = useState('kitchen');
   const [pin, setPin] = useState('');
   const [message, setMessage] = useState('');
+  const [generatedStaffCode, setGeneratedStaffCode] = useState('');
   const [isBusy, setIsBusy] = useState(false);
 
   const handleLoginSubmit = async (event) => {
@@ -27,6 +28,7 @@ function AuthGate({
 
     setIsBusy(true);
     setMessage('');
+    setGeneratedStaffCode('');
 
     try {
       const result = await onLogin?.({
@@ -38,6 +40,9 @@ function AuthGate({
 
       if (!result?.ok) {
         setMessage(result?.message || 'PIN login failed.');
+        if (result?.generatedStaffCode) {
+          setGeneratedStaffCode(result.generatedStaffCode);
+        }
         return;
       }
 
@@ -75,7 +80,7 @@ function AuthGate({
               <p className="subtitle">
                 {mode === 'management'
                   ? 'Enter your name and the management PIN to create or open a manager account.'
-                  : 'Create or open your staff account with your name, section, and the staff PIN.'}
+                  : 'Create your staff account to receive a personal code, or enter your existing staff code.'}
               </p>
             </div>
 
@@ -86,6 +91,7 @@ function AuthGate({
                   setMode('staff');
                   setPin('');
                   setMessage('');
+                  setGeneratedStaffCode('');
                 }}
                 className={`segment-button${mode === 'staff' ? ' is-active' : ''}`}
               >
@@ -97,6 +103,7 @@ function AuthGate({
                   setMode('management');
                   setPin('');
                   setMessage('');
+                  setGeneratedStaffCode('');
                 }}
                 className={`segment-button${mode === 'management' ? ' is-active' : ''}`}
               >
@@ -136,7 +143,7 @@ function AuthGate({
             )}
 
             <div className="field">
-              <label htmlFor="login-pin">{mode === 'management' ? 'Management PIN' : 'Staff PIN'}</label>
+              <label htmlFor="login-pin">{mode === 'management' ? 'Management PIN' : 'Personal staff code'}</label>
               <input
                 id="login-pin"
                 type="password"
@@ -144,15 +151,23 @@ function AuthGate({
                 autoComplete="current-password"
                 value={pin}
                 onChange={(event) => setPin(event.target.value)}
-                placeholder="Enter PIN"
+                placeholder={mode === 'management' ? 'Enter PIN' : 'Enter code, or leave blank to create one'}
                 className="input"
               />
             </div>
 
             <button type="submit" className="primary-button" disabled={isBusy}>
-              {isBusy ? 'Checking...' : mode === 'management' ? 'Unlock management' : 'Start logging'}
+              {isBusy ? 'Checking...' : mode === 'management' ? 'Unlock management' : 'Continue'}
             </button>
           </form>
+        )}
+
+        {generatedStaffCode && (
+          <div className="staff-code-reveal" role="status">
+            <span className="field-label">Generated staff code</span>
+            <strong>{generatedStaffCode}</strong>
+            <p className="small-text">Write this down. It will not be shown again after you leave this screen.</p>
+          </div>
         )}
 
         {message && (

@@ -12,7 +12,7 @@ import {
   sanitizeItemPriceCatalog,
 } from '../src/utils/itemPriceCatalog.js';
 import { getAccessProfile, requirePermission } from '../src/utils/accessControl.js';
-import { createPinRecord, validatePin, verifyPin } from '../src/utils/pinAuth.js';
+import { createPinRecord, createRandomPin, validatePin, verifyPin } from '../src/utils/pinAuth.js';
 
 const recipe = {
   name: 'Chicken Burger',
@@ -157,6 +157,7 @@ assert.equal(requirePermission(waiterAccess, 'canClearData', 'clear data').ok, f
 
 assert.equal(validatePin('123'), 'Use a 4 to 8 digit PIN.');
 assert.equal(validatePin('1234'), '');
+assert.match(createRandomPin(6), /^\d{6}$/);
 const pinRecord = await createPinRecord('4931');
 assert.equal(await verifyPin('4931', pinRecord), true);
 assert.equal(await verifyPin('1111', pinRecord), false);

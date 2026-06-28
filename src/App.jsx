@@ -20,7 +20,9 @@ import {
   DEFAULT_AUTH_SETTINGS,
   authPinsAreConfigured,
   createPinRecord,
+  createRandomPin,
   sanitizeAuthSettings,
+  sanitizePinRecord,
   verifyPin,
 } from './utils/pinAuth';
 import { createInventoryMovementsFromEntry, getEntryFoodCostLost } from './utils/wasteCalculations';
@@ -402,6 +404,7 @@ const sanitizeStaffMembers = (members) => {
         name,
         role,
         staffSection: inferStaffSection(member?.staffSection || member?.section || role),
+        staffCode: sanitizePinRecord(member?.staffCode),
         isCsvSeed: false,
       };
     })
@@ -851,8 +854,8 @@ function App() {
         nextAuthSettings.managementPin = await createPinRecord(trimmedManagementPin);
       }
 
-      if (!nextAuthSettings.staffPin || !nextAuthSettings.managementPin) {
-        return { ok: false, message: 'Create both a staff PIN and a management PIN.' };
+      if (!nextAuthSettings.managementPin) {
+        return { ok: false, message: 'Create a management PIN.' };
       }
 
       nextAuthSettings.updatedAt = new Date().toISOString();
@@ -862,9 +865,9 @@ function App() {
         createAuditLogEntry({
           action: 'PIN settings changed',
           user: activeStaffMember?.name || 'System',
-          relatedItem: 'Access PINs',
+          relatedItem: 'Access settings',
           afterValue: {
-            staffPinConfigured: Boolean(nextAuthSettings.staffPin),
+            staffCodesEnabled: true,
             managementPinConfigured: Boolean(nextAuthSettings.managementPin),
           },
         }),
@@ -909,7 +912,7 @@ function App() {
     };
   }, [authSettings, handleSavePinSettings]);
 
-  const upsertLoginAccount = useCallback(({ mode, name, staffSection }) => {
+  const upsertLoginAccount = useCallback(({ mode, name, staffSection, staffCode }) => {
     const trimmedName = String(name || '').trim();
     const accountId = createStaffMemberId(trimmedName);
     const existingMember = staffList.find((member) => member.id === accountId);
@@ -926,6 +929,7 @@ function App() {
         name: trimmedName,
         role: STAFF_SECTION_ROLE_LABELS[staffSection] || 'Team',
         staffSection: staffSection || 'kitchen',
+        staffCode: staffCode || existingMember?.staffCode || null,
         isCsvSeed: false,
       };
 
@@ -937,7 +941,13 @@ function App() {
       }
 
       return prevStaffList.map((member, index) => (
-        index === existingIndex ? { ...member, ...nextMember } : member
+        index === existingIndex
+          ? {
+            ...member,
+            ...nextMember,
+            staffCode: nextMember.staffCode || member.staffCode || existingMember?.staffCode || null,
+          }
+          : member
       ));
     });
 
@@ -951,11 +961,49 @@ function App() {
       return { ok: false, message: mode === 'management' ? 'Enter your management name.' : 'Enter your staff name.' };
     }
 
-    const pinRecord = mode === 'management' ? authSettings.managementPin : authSettings.staffPin;
-    const pinMatches = await verifyPin(pin, pinRecord);
+    if (mode === 'staff') {
+      const accountId = createStaffMemberId(trimmedName);
+      const existingMember = staffList.find((member) => member.id === accountId);
+      const existingStaffCode = sanitizePinRecord(existingMember?.staffCode);
 
-    if (!pinMatches) {
-      return { ok: false, message: 'Incorrect PIN.' };
+      if (!existingStaffCode) {
+        const generatedStaffCode = createRandomPin(6);
+        const staffCodeRecord = await createPinRecord(generatedStaffCode);
+        const staffMember = upsertLoginAccount({
+          mode,
+          name: trimmedName,
+          staffSection,
+          staffCode: staffCodeRecord,
+        });
+
+        setAuditLog(prevLog => [
+          createAuditLogEntry({
+            action: 'Staff code generated',
+            user: staffMember.name,
+            relatedItem: 'Staff login',
+            afterValue: { staffId: staffMember.id },
+          }),
+          ...prevLog,
+        ].slice(0, 500));
+
+        return {
+          ok: false,
+          generatedStaffCode,
+          message: `Staff account created. Your personal code is ${generatedStaffCode}. Write it down, then enter it to start logging.`,
+        };
+      }
+
+      const staffCodeMatches = await verifyPin(pin, existingStaffCode);
+
+      if (!staffCodeMatches) {
+        return { ok: false, message: 'Incorrect staff code.' };
+      }
+    } else {
+      const pinMatches = await verifyPin(pin, authSettings.managementPin);
+
+      if (!pinMatches) {
+        return { ok: false, message: 'Incorrect management PIN.' };
+      }
     }
 
     const staffMember = upsertLoginAccount({
@@ -986,7 +1034,7 @@ function App() {
     ].slice(0, 500));
 
     return { ok: true, message: 'Login successful.' };
-  }, [authSettings.managementPin, authSettings.staffPin, upsertLoginAccount]);
+  }, [authSettings.managementPin, staffList, upsertLoginAccount]);
 
   const handleLogout = useCallback(() => {
     const previousSession = authSession;
@@ -1041,6 +1089,56 @@ function App() {
     }
 
     setCustomStaffList(prev => prev.filter(s => s.id !== staffId));
+  };
+
+  const handleResetStaffCode = async (staffId) => {
+    const permission = requirePermission(accessProfile, 'canManageStaff', 'reset staff codes');
+    if (!permission.ok) {
+      return { ok: false, message: permission.message };
+    }
+
+    const staffMember = staffList.find((member) => member.id === staffId);
+
+    if (!staffMember) {
+      return { ok: false, message: 'Staff member not found.' };
+    }
+
+    const generatedStaffCode = createRandomPin(6);
+    const staffCodeRecord = await createPinRecord(generatedStaffCode);
+
+    setCustomStaffList(prevStaffList => {
+      const existingIndex = prevStaffList.findIndex((member) => member.id === staffId);
+      const nextMember = {
+        ...staffMember,
+        staffCode: staffCodeRecord,
+        isCsvSeed: false,
+      };
+
+      if (existingIndex === -1) {
+        return [...prevStaffList, nextMember];
+      }
+
+      return prevStaffList.map((member, index) => (
+        index === existingIndex ? { ...member, ...nextMember } : member
+      ));
+    });
+
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: 'Staff code reset',
+        user: activeStaffMember?.name || 'System',
+        relatedItem: staffMember.name,
+        afterValue: { staffId, staffCodeGenerated: true },
+      }),
+      ...prevLog,
+    ].slice(0, 500));
+
+    return {
+      ok: true,
+      staffName: staffMember.name,
+      generatedStaffCode,
+      message: `New staff code for ${staffMember.name}: ${generatedStaffCode}`,
+    };
   };
 
   const handleAddEntry = (newEntry) => {
@@ -1472,6 +1570,7 @@ function App() {
             onClearAllWaste={handleClearAll}
             onAddStaff={handleAddStaff}
             onDeleteStaff={handleDeleteStaff}
+            onResetStaffCode={handleResetStaffCode}
             onAddRecipe={handleAddNewRecipe}
             onClearRecipes={handleClearRecipes}
             onSaveMenuItem={handleUpsertMenuItem}

@@ -122,6 +122,22 @@ button:disabled {
   gap: 14px;
 }
 
+.staff-code-reveal {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 14px;
+  background: var(--success-bg);
+  border: 1px solid rgba(22, 138, 74, 0.22);
+  border-radius: 8px;
+}
+
+.staff-code-reveal strong {
+  color: var(--success);
+  font-size: 1.7rem;
+  letter-spacing: 0.08em;
+}
+
 .app-page {
   width: min(100% - 36px, 760px);
   margin: 0 auto;

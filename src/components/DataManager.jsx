@@ -73,7 +73,7 @@ function DataManager({
       portionProfiles: data.portionProfiles && typeof data.portionProfiles === 'object' && !Array.isArray(data.portionProfiles)
         ? Object.keys(data.portionProfiles).length
         : 0,
-      authConfigured: Boolean(data.authSettings?.staffPin && data.authSettings?.managementPin),
+      authConfigured: Boolean(data.authSettings?.managementPin),
       inventoryMovements: Array.isArray(data.inventoryMovements) ? data.inventoryMovements.length : 0,
       auditLog: Array.isArray(data.auditLog) ? data.auditLog.length : 0,
       budget: Number(data.budget) || 0,
@@ -404,9 +404,9 @@ function DataManager({
             <span className="badge">{portionProfileCount}</span>
           </div>
           <div className="budget-row" style={{ marginTop: '10px' }}>
-            <span className="small-text">PIN login configured</span>
-            <span className={`badge${authSettings?.staffPin && authSettings?.managementPin ? ' is-green' : ' is-red'}`}>
-              {authSettings?.staffPin && authSettings?.managementPin ? 'Yes' : 'No'}
+            <span className="small-text">Access configured</span>
+            <span className={`badge${authSettings?.managementPin ? ' is-green' : ' is-red'}`}>
+              {authSettings?.managementPin ? 'Management PIN + staff codes' : 'No'}
             </span>
           </div>
           <div className="budget-row" style={{ marginTop: '10px' }}>

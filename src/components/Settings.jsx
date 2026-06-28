@@ -36,7 +36,7 @@ const getTodayItems = (items) => {
   });
 };
 
-function StaffSettings({ staffList, onAddStaff, onDeleteStaff, accessProfile }) {
+function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode, accessProfile }) {
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
   const [staffSection, setStaffSection] = useState('kitchen');
@@ -71,6 +71,17 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, accessProfile }) 
       onDeleteStaff(member.id);
       setMessage(`${member.name} removed.`);
     }
+  };
+
+  const handleResetCodeClick = async (member) => {
+    const result = await onResetStaffCode?.(member.id);
+
+    if (!result?.ok) {
+      setMessage(result?.message || 'Could not reset this staff code.');
+      return;
+    }
+
+    setMessage(`New code for ${result.staffName}: ${result.generatedStaffCode}. Share it once with that staff member.`);
   };
 
   const handleSubmit = (event) => {
@@ -209,17 +220,29 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, accessProfile }) 
                 </span>
                 {member.isCsvSeed && <span className="badge">CSV</span>}
               </div>
-              {!member.isCsvSeed && (
-                <button
-                  type="button"
-                  onClick={() => handleDeleteClick(member)}
-                  className="delete-button"
-                  title={`Remove ${member.name}`}
-                  disabled={!accessProfile?.canManageStaff}
-                >
-                  x
-                </button>
-              )}
+              <div className="manager-row">
+                {section.key !== 'management' && (
+                  <button
+                    type="button"
+                    onClick={() => handleResetCodeClick(member)}
+                    className="ghost-button compact-action"
+                    disabled={!accessProfile?.canManageStaff}
+                  >
+                    Reset code
+                  </button>
+                )}
+                {!member.isCsvSeed && (
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteClick(member)}
+                    className="delete-button"
+                    title={`Remove ${member.name}`}
+                    disabled={!accessProfile?.canManageStaff}
+                  >
+                    x
+                  </button>
+                )}
+              </div>
             </div>
           );
           })}
@@ -237,7 +260,6 @@ function SecurityPanel({
   onSavePinSettings,
   onLogout,
 }) {
-  const [staffPin, setStaffPin] = useState('');
   const [managementPin, setManagementPin] = useState('');
   const [confirmManagementPin, setConfirmManagementPin] = useState('');
   const [pinMessage, setPinMessage] = useState('');
@@ -260,8 +282,8 @@ function SecurityPanel({
       return;
     }
 
-    if (!staffPin && !managementPin) {
-      setPinMessage('Enter a new staff PIN or management PIN.');
+    if (!managementPin) {
+      setPinMessage('Enter a new management PIN.');
       return;
     }
 
@@ -274,17 +296,16 @@ function SecurityPanel({
     setPinMessage('');
 
     try {
-      const result = await onSavePinSettings?.({ staffPin, managementPin });
+      const result = await onSavePinSettings?.({ managementPin });
 
       if (!result?.ok) {
         setPinMessage(result?.message || 'Could not save PINs.');
         return;
       }
 
-      setStaffPin('');
       setManagementPin('');
       setConfirmManagementPin('');
-      setPinMessage('PINs updated.');
+      setPinMessage('Management PIN updated.');
     } finally {
       setIsSavingPins(false);
     }
@@ -297,7 +318,7 @@ function SecurityPanel({
           <div>
             <p className="eyebrow">Access control</p>
             <h2 className="title">Security & Safety</h2>
-            <p className="subtitle">Review the active PIN session and rotate staff or management PINs.</p>
+            <p className="subtitle">Review the active session, staff codes, and management PIN.</p>
           </div>
           <span className={`badge${accessProfile?.canManageServerSync ? ' is-green' : ''}`}>
             {accessProfile?.roleLabel || 'Unassigned'}
@@ -308,7 +329,7 @@ function SecurityPanel({
           <div>
             <h3 className="breakdown-title">Local role safety</h3>
             <p className="small-text" style={{ margin: 0 }}>
-              Staff PIN opens fast waste logging. Management PIN unlocks reports, settings, exports, backup restore, and protected actions.
+              Staff use personal generated codes. Management PIN unlocks reports, settings, exports, backup restore, and protected actions.
             </p>
           </div>
         </div>
@@ -332,30 +353,15 @@ function SecurityPanel({
             </button>
           </div>
           <div className="import-summary-grid">
-            <span className={`badge${authSettings?.staffPin ? ' is-green' : ' is-red'}`}>Staff PIN {authSettings?.staffPin ? 'set' : 'missing'}</span>
+            <span className="badge is-green">Staff codes per account</span>
             <span className={`badge${authSettings?.managementPin ? ' is-green' : ' is-red'}`}>Management PIN {authSettings?.managementPin ? 'set' : 'missing'}</span>
             {authSettings?.updatedAt && <span className="badge">Updated {new Date(authSettings.updatedAt).toLocaleString()}</span>}
           </div>
         </div>
 
         <form onSubmit={handlePinSubmit} className="budget-panel">
-          <h3 className="breakdown-title">Change PINs</h3>
+          <h3 className="breakdown-title">Change management PIN</h3>
           <div className="field-grid">
-            <div className="field">
-              <label htmlFor="change-staff-pin">New staff PIN</label>
-              <input
-                id="change-staff-pin"
-                type="password"
-                inputMode="numeric"
-                autoComplete="new-password"
-                value={staffPin}
-                onChange={(event) => setStaffPin(event.target.value)}
-                placeholder="Leave blank to keep current"
-                className="input"
-                disabled={!accessProfile?.canManagePins}
-              />
-            </div>
-
             <div className="field">
               <label htmlFor="change-management-pin">New management PIN</label>
               <input
@@ -387,7 +393,7 @@ function SecurityPanel({
             </div>
           </div>
           <button type="submit" className="primary-button" disabled={!accessProfile?.canManagePins || isSavingPins}>
-            {isSavingPins ? 'Saving...' : accessProfile?.canManagePins ? 'Save PIN changes' : 'Management only'}
+            {isSavingPins ? 'Saving...' : accessProfile?.canManagePins ? 'Save management PIN' : 'Management only'}
           </button>
           {pinMessage && (
             <div className="inline-message" role="status">
@@ -541,6 +547,7 @@ function Settings({
   onClearAllWaste,
   onAddStaff,
   onDeleteStaff,
+  onResetStaffCode,
   onAddRecipe,
   onClearRecipes,
   onSaveMenuItem,
@@ -784,6 +791,7 @@ function Settings({
           staffList={staffList}
           onAddStaff={onAddStaff}
           onDeleteStaff={onDeleteStaff}
+          onResetStaffCode={onResetStaffCode}
           accessProfile={accessProfile}
         />
       )}
