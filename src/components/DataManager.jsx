@@ -14,6 +14,7 @@ function DataManager({
   customStaffList,
   menuItems,
   customMenuItems,
+  itemPriceCatalog,
   portionProfiles,
   activeStaffId,
   authSettings,
@@ -36,6 +37,9 @@ function DataManager({
   const recipeCount = Object.keys(recipes).length;
   const menuItemCount = Array.isArray(menuItems) ? menuItems.length : 0;
   const customMenuItemCount = Array.isArray(customMenuItems) ? customMenuItems.length : 0;
+  const itemPriceCount = itemPriceCatalog && typeof itemPriceCatalog === 'object' && !Array.isArray(itemPriceCatalog)
+    ? Object.keys(itemPriceCatalog).length
+    : 0;
   const customStaffCount = Array.isArray(customStaffList) ? customStaffList.length : 0;
   const portionProfileCount = portionProfiles && typeof portionProfiles === 'object'
     ? Object.keys(portionProfiles).length
@@ -63,6 +67,9 @@ function DataManager({
         : 0,
       staff: Array.isArray(data.staffList) ? data.staffList.length : 0,
       customMenuItems: Array.isArray(data.customMenuItems) ? data.customMenuItems.length : 0,
+      itemPrices: data.itemPriceCatalog && typeof data.itemPriceCatalog === 'object' && !Array.isArray(data.itemPriceCatalog)
+        ? Object.keys(data.itemPriceCatalog).length
+        : 0,
       portionProfiles: data.portionProfiles && typeof data.portionProfiles === 'object' && !Array.isArray(data.portionProfiles)
         ? Object.keys(data.portionProfiles).length
         : 0,
@@ -97,6 +104,7 @@ function DataManager({
       staffList,
       customStaffList,
       customMenuItems,
+      itemPriceCatalog,
       portionProfiles,
       activeStaffId,
       authSettings,
@@ -139,6 +147,11 @@ function DataManager({
       || Array.isArray(snapshot.data.settings)
     )) return false;
     if (snapshot.data.customMenuItems !== undefined && !Array.isArray(snapshot.data.customMenuItems)) return false;
+    if (snapshot.data.itemPriceCatalog !== undefined && (
+      typeof snapshot.data.itemPriceCatalog !== 'object'
+      || snapshot.data.itemPriceCatalog === null
+      || Array.isArray(snapshot.data.itemPriceCatalog)
+    )) return false;
     if (snapshot.data.portionProfiles !== undefined && (
       typeof snapshot.data.portionProfiles !== 'object'
       || snapshot.data.portionProfiles === null
@@ -294,7 +307,7 @@ function DataManager({
               Last downloaded backup: {formatDateTime(lastExportAt)}
             </p>
           </div>
-          <span className="badge">{wasteItems.length + recipeCount + customMenuItemCount + customStaffCount} saved records</span>
+            <span className="badge">{wasteItems.length + recipeCount + customMenuItemCount + itemPriceCount + customStaffCount} saved records</span>
         </div>
 
         <div className="metrics-grid">
@@ -362,6 +375,7 @@ function DataManager({
               <span className="badge">{importPreview.recipes} recipes</span>
               <span className="badge">{importPreview.staff} staff</span>
               <span className="badge">{importPreview.customMenuItems} custom prices</span>
+              <span className="badge">{importPreview.itemPrices} item prices</span>
               <span className="badge">{importPreview.portionProfiles} portions</span>
               <span className={`badge${importPreview.authConfigured ? ' is-green' : ' is-red'}`}>
                 PINs {importPreview.authConfigured ? 'configured' : 'missing'}
@@ -380,6 +394,10 @@ function DataManager({
           <div className="budget-row" style={{ marginTop: '10px' }}>
             <span className="small-text">App-added menu prices/items</span>
             <span className="badge">{customMenuItemCount}</span>
+          </div>
+          <div className="budget-row" style={{ marginTop: '10px' }}>
+            <span className="small-text">Waste item prices</span>
+            <span className="badge">{itemPriceCount}</span>
           </div>
           <div className="budget-row" style={{ marginTop: '10px' }}>
             <span className="small-text">Remembered portion sizes</span>

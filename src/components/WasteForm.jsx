@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  calculateItemPriceCost,
+  findItemPriceRecord,
+  sanitizeItemPriceCatalog,
+} from '../utils/itemPriceCatalog';
+import {
   DEFAULT_WASTE_CLASSIFICATION,
   WASTE_CATEGORY_OPTIONS,
   WASTE_CLASSIFICATION_OPTIONS,
@@ -115,6 +120,8 @@ function WasteForm({
   menuItems,
   staffList,
   portionProfiles,
+  itemPriceCatalog,
+  accessProfile,
   onSavePortionProfile,
   activeStaffId,
   onActiveStaffChange,
@@ -145,6 +152,7 @@ function WasteForm({
   const safeWasteItems = useMemo(() => (Array.isArray(wasteItems) ? wasteItems : []), [wasteItems]);
   const safeMenuItems = useMemo(() => (Array.isArray(menuItems) ? menuItems : []), [menuItems]);
   const safePortionProfiles = portionProfiles && typeof portionProfiles === 'object' ? portionProfiles : {};
+  const safeItemPriceCatalog = useMemo(() => sanitizeItemPriceCatalog(itemPriceCatalog), [itemPriceCatalog]);
   const [selectedRecipeKey, setSelectedRecipeKey] = useState(safeMenuItems[0]?.key || '');
   const selectedMenuItem = safeMenuItems.find((item) => item.key === selectedRecipeKey);
   const selectedRecipe = recipes[selectedRecipeKey];
@@ -152,8 +160,9 @@ function WasteForm({
     recipe: selectedRecipe,
     menuItem: selectedMenuItem,
     quantity,
+    itemPriceCatalog: safeItemPriceCatalog,
   });
-  const selectedRecipeTotal = getRecipeIngredientTotal(selectedRecipe?.ingredients);
+  const selectedRecipeTotal = getRecipeIngredientTotal(selectedRecipe?.ingredients, safeItemPriceCatalog);
   const selectedMenuItemPrice = getMenuSellingPrice(selectedMenuItem, selectedRecipe);
   const activeStaffMember = safeStaffList.find((member) => member.id === selectedStaffId);
   const menuSearchValue = menuSearch.trim().toLowerCase();
@@ -188,6 +197,15 @@ function WasteForm({
     && portionAmountValue > 0
       ? quantityValue * portionAmountValue
       : null;
+  const activeItemPriceRecord = formType === 'single' ? findItemPriceRecord(safeItemPriceCatalog, activeWasteItem.name) : null;
+  const activePriceCalculation = calculateItemPriceCost({
+    priceRecord: activeItemPriceRecord,
+    quantity: quantityValue,
+    unit,
+    measuredQuantity: measuredAmount,
+    measuredUnit: unit === 'portion' ? portionUnit : unit,
+  });
+  const canEditManualCost = Boolean(accessProfile?.canViewFinancials || accessProfile?.canManageMenu);
   const recentSingleItemProfiles = useMemo(() => {
     const seenNames = new Set();
 
@@ -225,7 +243,10 @@ function WasteForm({
       .slice(0, 6);
   }, [safeWasteItems]);
   const lastEntry = safeWasteItems[safeWasteItems.length - 1];
-  const itemNameOptions = recentSingleItemProfiles.map((item) => item.name);
+  const itemNameOptions = Array.from(new Set([
+    ...Object.values(safeItemPriceCatalog).map((item) => item.name),
+    ...recentSingleItemProfiles.map((item) => item.name),
+  ]));
   const normalizedName = name.trim().toLowerCase();
   const matchingProfiles = normalizedName
     ? recentSingleItemProfiles
@@ -239,7 +260,11 @@ function WasteForm({
   const previewCost = formType === 'recipe'
     ? selectedRecipeFinancials.foodCostLost
     : parseFloat(cost);
-  const previewCostLabel = Number.isFinite(previewCost) ? `R${previewCost.toFixed(2)}` : 'Cost pending';
+  const previewCostLabel = Number.isFinite(previewCost)
+    ? `R${previewCost.toFixed(2)}`
+    : formType === 'single' && !canEditManualCost
+      ? 'Needs item price'
+      : 'Cost pending';
   const previewRevenueLabel = formType === 'recipe'
     ? `Revenue R${selectedRecipeFinancials.potentialRevenueLost.toFixed(2)}`
     : 'No revenue impact';
@@ -316,6 +341,25 @@ function WasteForm({
 
     setCost(selectedRecipeFinancials.foodCostLost.toFixed(2));
   }, [formType, selectedRecipeFinancials.foodCostLost]);
+
+  useEffect(() => {
+    if (formType !== 'single') {
+      return;
+    }
+
+    if (activeItemPriceRecord?.category) {
+      setCategory(activeItemPriceRecord.category);
+    }
+
+    if (activePriceCalculation.canCalculate) {
+      setCost(activePriceCalculation.cost.toFixed(2));
+      return;
+    }
+
+    if (!canEditManualCost) {
+      setCost('');
+    }
+  }, [activeItemPriceRecord, activePriceCalculation.canCalculate, activePriceCalculation.cost, canEditManualCost, formType]);
 
   const handleFormTypeChange = (nextFormType) => {
     setFormType(nextFormType);
@@ -412,8 +456,8 @@ function WasteForm({
       return;
     }
 
-    if (formType === 'single' && cost === '') {
-      setFormMessage('Enter the cost loss for this item.');
+    if (formType === 'single' && cost === '' && canEditManualCost) {
+      setFormMessage('Add an item price in Settings or enter the total cost loss.');
       return;
     }
 
@@ -493,7 +537,12 @@ function WasteForm({
     };
 
     if (formType === 'single') {
-      const foodCostLost = roundCurrency(parseFloat(cost) || 0);
+      const costStatus = activePriceCalculation.canCalculate
+        ? 'catalog'
+        : cost === ''
+          ? 'needs_item_price'
+          : 'manual';
+      const foodCostLost = costStatus === 'needs_item_price' ? 0 : roundCurrency(parseFloat(cost) || 0);
 
       finalEntry = {
         ...finalEntry,
@@ -512,7 +561,10 @@ function WasteForm({
         potentialRevenueLost: 0,
         grossProfitLost: 0,
         foodCostPercentage: null,
-        costStatus: 'manual',
+        costStatus,
+        priceCatalogKey: activeItemPriceRecord?.key || '',
+        pricePerUnit: activeItemPriceRecord?.price ?? null,
+        priceUnit: activeItemPriceRecord?.unit || '',
         isRecipe: false,
         ingredients: [],
       };
@@ -523,6 +575,7 @@ function WasteForm({
         recipe: activeRecipe,
         menuItem: activeMenuItem,
         quantity: qtyMultiplier,
+        itemPriceCatalog: safeItemPriceCatalog,
       });
 
       finalEntry = {
@@ -550,7 +603,11 @@ function WasteForm({
     }
 
     onAddEntry(finalEntry);
-    setFormMessage(`Logged ${finalEntry.name} for R${(Number(finalEntry.cost) || 0).toFixed(2)}.`);
+    setFormMessage(
+      finalEntry.costStatus === 'needs_item_price'
+        ? `Logged ${finalEntry.name}. Management needs to add an item price.`
+        : `Logged ${finalEntry.name} for R${(Number(finalEntry.cost) || 0).toFixed(2)}.`
+    );
     if (formType === 'single' && unit === 'portion') {
       onSavePortionProfile?.({
         key: activeWasteItem.key,
@@ -831,10 +888,21 @@ function WasteForm({
               step="0.01"
               value={cost}
               onChange={(e) => setCost(e.target.value)}
-              disabled={formType === 'recipe'}
+              disabled={formType === 'recipe' || (formType === 'single' && (!canEditManualCost || activePriceCalculation.canCalculate))}
               placeholder="R total"
               className="input"
             />
+            {formType === 'single' && (
+              <span className="small-text">
+                {activePriceCalculation.canCalculate
+                  ? `Auto from ${activeItemPriceRecord.name}: R${Number(activeItemPriceRecord.price).toFixed(2)} per ${activeItemPriceRecord.unit}.`
+                  : activeItemPriceRecord
+                    ? `Price saved for ${activeItemPriceRecord.unit}, but this unit cannot be converted.`
+                    : canEditManualCost
+                      ? 'Add this item in Settings > Menu & Recipes > Item Prices for staff auto-costing.'
+                      : 'Management needs to add this item price.'}
+              </span>
+            )}
           </div>
         </div>
 

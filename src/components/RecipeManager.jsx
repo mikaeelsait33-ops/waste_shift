@@ -1,6 +1,15 @@
 import { useMemo, useState } from 'react';
 import InvoicePriceImporter from './InvoicePriceImporter';
-import { WASTE_CATEGORY_OPTIONS } from '../utils/wasteCalculations';
+import {
+  WASTE_CATEGORY_OPTIONS,
+  buildRecipeIngredientBreakdown,
+  getRecipeIngredientTotal,
+} from '../utils/wasteCalculations';
+import {
+  calculateRecipeIngredientCost,
+  findItemPriceRecord,
+  sanitizeItemPriceCatalog,
+} from '../utils/itemPriceCatalog';
 
 const createBlankIngredient = () => ({
   name: '',
@@ -28,16 +37,15 @@ const formatInputPrice = (value) => {
   return Number.isFinite(parsedValue) ? String(parsedValue) : '';
 };
 
-const getIngredientTotal = (ingredients) => (
-  Array.isArray(ingredients)
-    ? ingredients.reduce((sum, ingredient) => sum + (Number(ingredient?.cost) || 0), 0)
-    : 0
+const getIngredientTotal = (ingredients, itemPriceCatalog) => (
+  getRecipeIngredientTotal(ingredients, itemPriceCatalog)
 );
 
 function RecipeManager({
   recipes,
   menuItems,
   customMenuItems,
+  itemPriceCatalog,
   onAddRecipe,
   onClearRecipes,
   onSaveMenuItem,
@@ -49,7 +57,8 @@ function RecipeManager({
   const [editingKey, setEditingKey] = useState('');
   const [message, setMessage] = useState('');
   const [ingredients, setIngredients] = useState([createBlankIngredient()]);
-  const draftIngredientTotal = getIngredientTotal(ingredients);
+  const safeItemPriceCatalog = useMemo(() => sanitizeItemPriceCatalog(itemPriceCatalog), [itemPriceCatalog]);
+  const draftIngredientTotal = getIngredientTotal(ingredients, safeItemPriceCatalog);
   const draftMenuPrice = parsePriceValue(recipePrice);
   const draftMargin = draftMenuPrice !== null ? draftMenuPrice - draftIngredientTotal : null;
   const touchedIngredientCount = ingredients.filter((ingredient) => (
@@ -330,53 +339,65 @@ function RecipeManager({
                 <p className="small-text" style={{ margin: 0 }}>No ingredients added. This item will be saved as price-only.</p>
               </div>
             ) : (
-              ingredients.map((ingredient, index) => (
-                <div key={`${index}-${ingredient.name}`} className="ingredient-card">
-                  <div className="recipe-ingredient-grid">
-                    <input
-                      type="text"
-                      placeholder="Ingredient name"
-                      value={ingredient.name}
-                      onChange={(e) => handleIngredientChange(index, 'name', e.target.value)}
-                      className="input"
-                      aria-label="Ingredient name"
-                    />
-                    <input
-                      type="text"
-                      placeholder="Quantity"
-                      value={ingredient.quantity}
-                      onChange={(e) => handleIngredientChange(index, 'quantity', e.target.value)}
-                      className="input"
-                      aria-label="Ingredient quantity"
-                    />
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      placeholder="Cost (R)"
-                      value={ingredient.cost}
-                      onChange={(e) => handleIngredientChange(index, 'cost', e.target.value)}
-                      className="input"
-                      aria-label="Ingredient cost"
-                    />
-                    <select
-                      value={ingredient.category}
-                      onChange={(e) => handleIngredientChange(index, 'category', e.target.value)}
-                      className="select"
-                      aria-label="Ingredient category"
-                    >
-                      {WASTE_CATEGORY_OPTIONS.map((categoryOption) => (
-                        <option key={categoryOption.value} value={categoryOption.value}>
-                          {categoryOption.label}
-                        </option>
-                      ))}
-                    </select>
-                    <button type="button" onClick={() => removeIngredientRow(index)} className="delete-button" title="Remove ingredient">
-                      x
-                    </button>
+              ingredients.map((ingredient, index) => {
+                const catalogPrice = findItemPriceRecord(safeItemPriceCatalog, ingredient.name);
+                const resolvedCost = calculateRecipeIngredientCost({ ingredient, itemPriceCatalog: safeItemPriceCatalog });
+
+                return (
+                  <div key={`${index}-${ingredient.name}`} className="ingredient-card">
+                    <div className="recipe-ingredient-grid">
+                      <input
+                        type="text"
+                        placeholder="Ingredient name"
+                        value={ingredient.name}
+                        onChange={(e) => handleIngredientChange(index, 'name', e.target.value)}
+                        className="input"
+                        aria-label="Ingredient name"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Quantity"
+                        value={ingredient.quantity}
+                        onChange={(e) => handleIngredientChange(index, 'quantity', e.target.value)}
+                        className="input"
+                        aria-label="Ingredient quantity"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="Fallback cost (R)"
+                        value={ingredient.cost}
+                        onChange={(e) => handleIngredientChange(index, 'cost', e.target.value)}
+                        className="input"
+                        aria-label="Ingredient cost"
+                      />
+                      <select
+                        value={ingredient.category}
+                        onChange={(e) => handleIngredientChange(index, 'category', e.target.value)}
+                        className="select"
+                        aria-label="Ingredient category"
+                      >
+                        {WASTE_CATEGORY_OPTIONS.map((categoryOption) => (
+                          <option key={categoryOption.value} value={categoryOption.value}>
+                            {categoryOption.label}
+                          </option>
+                        ))}
+                      </select>
+                      <button type="button" onClick={() => removeIngredientRow(index)} className="delete-button" title="Remove ingredient">
+                        x
+                      </button>
+                    </div>
+                    {(catalogPrice || resolvedCost.cost > 0) && (
+                      <div className="small-text ingredient-cost-note">
+                        {resolvedCost.source === 'catalog'
+                          ? `Auto cost R${resolvedCost.cost.toFixed(2)} from R${Number(catalogPrice.price).toFixed(2)} / ${catalogPrice.unit}.`
+                          : `Using fallback ingredient cost R${resolvedCost.cost.toFixed(2)}.`}
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
 
@@ -442,7 +463,8 @@ function RecipeManager({
               const safeIngredients = Array.isArray(item.recipe?.ingredients) ? item.recipe.ingredients : [];
               const explicitPrice = item.menuPrice ?? item.recipe?.menuPrice;
               const hasExplicitPrice = explicitPrice !== null && explicitPrice !== undefined;
-              const ingredientTotal = getIngredientTotal(safeIngredients);
+              const pricedIngredients = buildRecipeIngredientBreakdown({ ingredients: safeIngredients }, 1, safeItemPriceCatalog);
+              const ingredientTotal = getIngredientTotal(safeIngredients, safeItemPriceCatalog);
               const recipeTotal = hasExplicitPrice ? Number(explicitPrice) : ingredientTotal;
               const hasDisplayPrice = hasExplicitPrice || ingredientTotal > 0;
               const hasLocalChange = customKeys.has(item.key);
@@ -482,12 +504,13 @@ function RecipeManager({
 
                   {safeIngredients.length > 0 && (
                     <div className="ingredient-list">
-                      {safeIngredients.map((ingredient, index) => (
+                      {pricedIngredients.map((ingredient, index) => (
                         <div key={`${ingredient.name}-${index}`} className="ingredient-card item-row">
                           <span className="small-text">
                             {ingredient.name}
                             {ingredient.quantity && <span className="badge">{ingredient.quantity}</span>}
                             <span className="badge">{ingredient.category}</span>
+                            {ingredient.costSource === 'catalog' && <span className="badge is-green">Auto price</span>}
                           </span>
                           <span className="price">R{(Number(ingredient.cost) || 0).toFixed(2)}</span>
                         </div>

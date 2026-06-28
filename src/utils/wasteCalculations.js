@@ -1,3 +1,5 @@
+import { calculateRecipeIngredientCost } from './itemPriceCatalog.js';
+
 export const WASTE_REASONS = [
   'Dropped',
   'Burnt',
@@ -70,10 +72,12 @@ export const parsePositiveNumber = (value) => {
   return Number.isFinite(numericValue) && numericValue > 0 ? numericValue : 0;
 };
 
-export const getRecipeIngredientTotal = (ingredients) => (
+export const getRecipeIngredientTotal = (ingredients, itemPriceCatalog = {}) => (
   roundCurrency(
     (Array.isArray(ingredients) ? ingredients : [])
-      .reduce((sum, ingredient) => sum + (Number(ingredient?.cost) || 0), 0)
+      .reduce((sum, ingredient) => (
+        sum + calculateRecipeIngredientCost({ ingredient, itemPriceCatalog }).cost
+      ), 0)
   )
 );
 
@@ -138,26 +142,30 @@ export const scaleQuantityLabel = (quantityLabel, multiplier) => {
   return `${text} x ${formatScaledNumber(safeMultiplier)}`;
 };
 
-export const buildRecipeIngredientBreakdown = (recipe, quantity) => {
+export const buildRecipeIngredientBreakdown = (recipe, quantity, itemPriceCatalog = {}) => {
   const multiplier = parsePositiveNumber(quantity) || 1;
   const ingredients = Array.isArray(recipe?.ingredients) ? recipe.ingredients : [];
 
   return ingredients.map((ingredient) => {
-    const baseCost = Number(ingredient?.cost) || 0;
+    const resolvedCost = calculateRecipeIngredientCost({ ingredient, itemPriceCatalog, multiplier });
 
     return {
       ...ingredient,
       baseQuantity: ingredient?.quantity || '',
-      baseCost,
+      baseCost: resolvedCost.baseCost,
       quantity: scaleQuantityLabel(ingredient?.quantity, multiplier),
-      cost: roundCurrency(baseCost * multiplier),
+      cost: resolvedCost.cost,
+      costSource: resolvedCost.source,
+      priceCatalogKey: resolvedCost.priceCatalogKey,
+      pricePerUnit: resolvedCost.pricePerUnit,
+      priceUnit: resolvedCost.priceUnit,
     };
   });
 };
 
-export const calculateMenuWasteFinancials = ({ recipe, menuItem, quantity }) => {
+export const calculateMenuWasteFinancials = ({ recipe, menuItem, quantity, itemPriceCatalog = {} }) => {
   const itemCount = parsePositiveNumber(quantity);
-  const ingredientCostPerItem = getRecipeIngredientTotal(recipe?.ingredients);
+  const ingredientCostPerItem = getRecipeIngredientTotal(recipe?.ingredients, itemPriceCatalog);
   const sellingPrice = getMenuSellingPrice(menuItem, recipe);
   const foodCostLost = roundCurrency(ingredientCostPerItem * itemCount);
   const potentialRevenueLost = roundCurrency(sellingPrice * itemCount);
@@ -178,7 +186,7 @@ export const calculateMenuWasteFinancials = ({ recipe, menuItem, quantity }) => 
     grossProfitLost,
     foodCostPercentage,
     costStatus: hasIngredientCosts ? 'calculated' : 'needs_ingredient_costs',
-    ingredients: buildRecipeIngredientBreakdown(recipe, itemCount),
+    ingredients: buildRecipeIngredientBreakdown(recipe, itemCount, itemPriceCatalog),
   };
 };
 

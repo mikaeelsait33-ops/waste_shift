@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import DataManager from './DataManager';
+import ItemPriceManager from './ItemPriceManager';
 import RecipeManager from './RecipeManager';
 import { STAFF_SECTIONS, getStaffSectionMeta, inferStaffSection } from '../utils/staffSections';
 import { getEntryFoodCostLost } from '../utils/wasteCalculations';
@@ -524,6 +525,7 @@ function Settings({
   customStaffList,
   menuItems,
   customMenuItems,
+  itemPriceCatalog,
   portionProfiles,
   activeStaffId,
   activeStaffMember,
@@ -543,6 +545,8 @@ function Settings({
   onClearRecipes,
   onSaveMenuItem,
   onRemoveCustomMenuItem,
+  onSaveItemPrice,
+  onDeleteItemPrice,
   onSaveToServer,
   onSaveSyncAccessKey,
   onSavePinSettings,
@@ -785,15 +789,24 @@ function Settings({
       )}
 
       {activeSection === 'items' && (
-        <RecipeManager
-          recipes={recipes}
-          menuItems={menuItems}
-          customMenuItems={customMenuItems}
-          onAddRecipe={onAddRecipe}
-          onClearRecipes={onClearRecipes}
-          onSaveMenuItem={onSaveMenuItem}
-          onRemoveCustomMenuItem={onRemoveCustomMenuItem}
-        />
+        <>
+          <ItemPriceManager
+            itemPriceCatalog={itemPriceCatalog}
+            accessProfile={accessProfile}
+            onSaveItemPrice={onSaveItemPrice}
+            onDeleteItemPrice={onDeleteItemPrice}
+          />
+          <RecipeManager
+            recipes={recipes}
+            menuItems={menuItems}
+            customMenuItems={customMenuItems}
+            itemPriceCatalog={itemPriceCatalog}
+            onAddRecipe={onAddRecipe}
+            onClearRecipes={onClearRecipes}
+            onSaveMenuItem={onSaveMenuItem}
+            onRemoveCustomMenuItem={onRemoveCustomMenuItem}
+          />
+        </>
       )}
 
       {activeSection === 'database' && (
@@ -806,6 +819,7 @@ function Settings({
           customStaffList={customStaffList}
           menuItems={menuItems}
           customMenuItems={customMenuItems}
+          itemPriceCatalog={itemPriceCatalog}
           portionProfiles={portionProfiles}
           activeStaffId={activeStaffId}
           authSettings={authSettings}

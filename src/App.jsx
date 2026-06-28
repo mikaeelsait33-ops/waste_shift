@@ -11,6 +11,12 @@ import staffMembersCsv from './data/staffMembers.csv?raw';
 import { inferStaffSection } from './utils/staffSections';
 import { getAccessProfile, inferRoleKey, requirePermission } from './utils/accessControl';
 import {
+  calculateItemPriceCost,
+  createItemPriceKey,
+  sanitizeItemPriceCatalog,
+  sanitizeItemPriceRecord,
+} from './utils/itemPriceCatalog';
+import {
   DEFAULT_AUTH_SETTINGS,
   authPinsAreConfigured,
   createPinRecord,
@@ -554,6 +560,17 @@ function App() {
     }
   });
 
+  const [itemPriceCatalog, setItemPriceCatalog] = useState(() => {
+    try {
+      const savedCatalog = localStorage.getItem('itemPriceCatalog');
+      const parsed = savedCatalog ? JSON.parse(savedCatalog) : {};
+      return sanitizeItemPriceCatalog(parsed);
+    } catch (e) {
+      console.error("Corrupted item price catalog in storage, resetting.", e);
+      return {};
+    }
+  });
+
   const baseMenuItems = useMemo(() => createMenuItemsFromCsv(menuItemsCsv, recipes), [recipes]);
   const menuItems = useMemo(() => (
     mergeMenuItems(baseMenuItems, customMenuItems, recipes)
@@ -583,12 +600,13 @@ function App() {
     customStaffList,
     customMenuItems,
     portionProfiles,
+    itemPriceCatalog,
     settings,
     authSettings,
     activeStaffId,
     inventoryMovements,
     auditLog,
-  }), [wasteItems, budget, recipes, staffList, customStaffList, customMenuItems, portionProfiles, settings, authSettings, activeStaffId, inventoryMovements, auditLog]);
+  }), [wasteItems, budget, recipes, staffList, customStaffList, customMenuItems, portionProfiles, itemPriceCatalog, settings, authSettings, activeStaffId, inventoryMovements, auditLog]);
 
   const applyDatabaseData = useCallback((databaseData) => {
     setWasteItems(Array.isArray(databaseData.wasteItems) ? databaseData.wasteItems : []);
@@ -597,6 +615,7 @@ function App() {
     setCustomStaffList(sanitizeStaffMembers(databaseData.customStaffList ?? databaseData.staffList));
     setCustomMenuItems(sanitizeMenuItems(databaseData.customMenuItems));
     setPortionProfiles(sanitizePortionProfiles(databaseData.portionProfiles));
+    setItemPriceCatalog(sanitizeItemPriceCatalog(databaseData.itemPriceCatalog));
     setSettings(sanitizeSettings(databaseData.settings));
     if (databaseData.authSettings !== undefined) {
       setAuthSettings(sanitizeAuthSettings(databaseData.authSettings));
@@ -721,6 +740,10 @@ function App() {
   }, [portionProfiles]);
 
   useEffect(() => {
+    localStorage.setItem('itemPriceCatalog', JSON.stringify(itemPriceCatalog));
+  }, [itemPriceCatalog]);
+
+  useEffect(() => {
     localStorage.setItem('inventoryMovements', JSON.stringify(inventoryMovements));
   }, [inventoryMovements]);
 
@@ -732,7 +755,7 @@ function App() {
     const timestamp = new Date().toISOString();
     localStorage.setItem('wasteShiftLastSavedAt', timestamp);
     setLastSavedAt(timestamp);
-  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, settings, authSettings, activeStaffId, inventoryMovements, auditLog]);
+  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, itemPriceCatalog, settings, authSettings, activeStaffId, inventoryMovements, auditLog]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -812,7 +835,7 @@ function App() {
     }, 900);
 
     return () => window.clearTimeout(timeoutId);
-  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, settings, authSettings, activeStaffId, inventoryMovements, auditLog, serverSyncEnabled, serverLoadComplete, saveDatabaseToServer]);
+  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, itemPriceCatalog, settings, authSettings, activeStaffId, inventoryMovements, auditLog, serverSyncEnabled, serverLoadComplete, saveDatabaseToServer]);
 
   const handleSavePinSettings = useCallback(async ({ staffPin, managementPin, pinPresetVersion = 'custom' }) => {
     const nextAuthSettings = { ...authSettings };
@@ -1064,6 +1087,113 @@ function App() {
     }));
   };
 
+  const handleSaveItemPrice = (priceRecord) => {
+    const permission = requirePermission(accessProfile, 'canManageMenu', 'manage item prices');
+    if (!permission.ok) {
+      alert(permission.message);
+      return;
+    }
+
+    const cleanedRecord = sanitizeItemPriceRecord({
+      ...priceRecord,
+      updatedAt: new Date().toISOString(),
+    });
+
+    if (!cleanedRecord) {
+      alert('Enter an item name, price, and unit.');
+      return;
+    }
+
+    const nextCatalog = {
+      ...itemPriceCatalog,
+      [cleanedRecord.key]: cleanedRecord,
+    };
+    let repricedEntries = 0;
+    const nextWasteItems = wasteItems.map((item) => {
+      if (item?.isRecipe || createItemPriceKey(item?.name) !== cleanedRecord.key) {
+        return item;
+      }
+
+      if (item.costStatus === 'manual' && item.priceCatalogKey !== cleanedRecord.key) {
+        return item;
+      }
+
+      const calculatedCost = calculateItemPriceCost({
+        priceRecord: cleanedRecord,
+        quantity: item.quantity,
+        unit: item.unit,
+        measuredQuantity: item.measuredQuantity,
+        measuredUnit: item.measuredUnit,
+      });
+
+      if (!calculatedCost.canCalculate) {
+        return item;
+      }
+
+      repricedEntries += 1;
+
+      return {
+        ...item,
+        cost: calculatedCost.cost,
+        foodCostLost: calculatedCost.cost,
+        costStatus: 'catalog',
+        priceCatalogKey: cleanedRecord.key,
+        pricePerUnit: cleanedRecord.price,
+        priceUnit: cleanedRecord.unit,
+        lastEditedBy: activeStaffMember?.name || item.lastEditedBy || 'System',
+      };
+    });
+
+    setItemPriceCatalog(nextCatalog);
+
+    if (repricedEntries > 0) {
+      setWasteItems(nextWasteItems);
+      setInventoryMovements(nextWasteItems.flatMap(createInventoryMovementsFromEntry));
+    }
+
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: 'Item price saved',
+        user: activeStaffMember?.name || 'System',
+        relatedItem: cleanedRecord.name,
+        afterValue: {
+          price: cleanedRecord.price,
+          unit: cleanedRecord.unit,
+          repricedEntries,
+        },
+      }),
+      ...prevLog,
+    ].slice(0, 500));
+  };
+
+  const handleDeleteItemPrice = (itemPriceKey) => {
+    const permission = requirePermission(accessProfile, 'canManageMenu', 'remove item prices');
+    if (!permission.ok) {
+      alert(permission.message);
+      return;
+    }
+
+    const deletedRecord = itemPriceCatalog[itemPriceKey];
+
+    setItemPriceCatalog(prevCatalog => {
+      const nextCatalog = { ...prevCatalog };
+      delete nextCatalog[itemPriceKey];
+      return nextCatalog;
+    });
+
+    if (deletedRecord) {
+      setAuditLog(prevLog => [
+        createAuditLogEntry({
+          action: 'Item price removed',
+          user: activeStaffMember?.name || 'System',
+          relatedItem: deletedRecord.name,
+          beforeValue: deletedRecord,
+        }),
+        ...prevLog,
+      ].slice(0, 500));
+    }
+  };
+
   const handleSaveSettings = ({ budget: nextBudget, dailyWasteValueLimit, dailyWasteEntryLimit }) => {
     const permission = requirePermission(accessProfile, 'canManageLimits', 'change waste limits');
     if (!permission.ok) {
@@ -1298,6 +1428,8 @@ function App() {
             menuItems={menuItems}
             staffList={staffList}
             portionProfiles={portionProfiles}
+            itemPriceCatalog={itemPriceCatalog}
+            accessProfile={accessProfile}
             onSavePortionProfile={handleSavePortionProfile}
             activeStaffId={activeStaffId}
             onActiveStaffChange={setActiveStaffId}
@@ -1324,6 +1456,7 @@ function App() {
             customStaffList={customStaffList}
             menuItems={menuItems}
             customMenuItems={customMenuItems}
+            itemPriceCatalog={itemPriceCatalog}
             portionProfiles={portionProfiles}
             activeStaffId={activeStaffId}
             activeStaffMember={activeStaffMember}
@@ -1343,6 +1476,8 @@ function App() {
             onClearRecipes={handleClearRecipes}
             onSaveMenuItem={handleUpsertMenuItem}
             onRemoveCustomMenuItem={handleDeleteCustomMenuItem}
+            onSaveItemPrice={handleSaveItemPrice}
+            onDeleteItemPrice={handleDeleteItemPrice}
             onSaveToServer={() => saveDatabaseToServer('manual')}
             onSaveSyncAccessKey={setSyncAccessKey}
             onSavePinSettings={handleSavePinSettings}

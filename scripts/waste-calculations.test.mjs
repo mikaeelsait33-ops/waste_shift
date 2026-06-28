@@ -5,6 +5,12 @@ import {
   createInventoryMovementsFromEntry,
   scaleQuantityLabel,
 } from '../src/utils/wasteCalculations.js';
+import {
+  calculateItemPriceCost,
+  findItemPriceRecord,
+  parseIngredientQuantity,
+  sanitizeItemPriceCatalog,
+} from '../src/utils/itemPriceCatalog.js';
 import { getAccessProfile, requirePermission } from '../src/utils/accessControl.js';
 import { createPinRecord, validatePin, verifyPin } from '../src/utils/pinAuth.js';
 
@@ -70,6 +76,68 @@ assert.equal(movements.length, 4);
 assert.equal(movements[2].ingredientName, 'Lettuce');
 assert.equal(movements[2].changeLabel, '40g');
 assert.equal(movements[2].costImpact, 4);
+
+const itemPriceCatalog = sanitizeItemPriceCatalog({
+  tomato: { name: 'Tomato', price: 3.5, unit: 'each', category: 'Produce' },
+  milk: { name: 'Milk', price: 28, unit: 'l', category: 'Dairy' },
+  coffee_beans: { name: 'Coffee Beans', price: 180, unit: 'kg', category: 'Coffee/Tea' },
+});
+assert.equal(findItemPriceRecord(itemPriceCatalog, 'tomato').price, 3.5);
+assert.deepEqual(
+  calculateItemPriceCost({
+    priceRecord: findItemPriceRecord(itemPriceCatalog, 'Tomato'),
+    quantity: 2,
+    unit: 'each',
+  }),
+  { canCalculate: true, cost: 7, quantityInPriceUnit: 2 }
+);
+assert.equal(
+  calculateItemPriceCost({
+    priceRecord: findItemPriceRecord(itemPriceCatalog, 'Milk'),
+    quantity: 250,
+    unit: 'ml',
+  }).cost,
+  7
+);
+assert.equal(
+  calculateItemPriceCost({
+    priceRecord: findItemPriceRecord(itemPriceCatalog, 'Coffee Beans'),
+    quantity: 125,
+    unit: 'g',
+  }).cost,
+  22.5
+);
+assert.equal(
+  calculateItemPriceCost({
+    priceRecord: findItemPriceRecord(itemPriceCatalog, 'Tomato'),
+    quantity: 250,
+    unit: 'g',
+  }).canCalculate,
+  false
+);
+assert.deepEqual(parseIngredientQuantity('10g'), { quantity: 10, unit: 'g' });
+assert.deepEqual(parseIngredientQuantity('1/2 kg'), { quantity: 0.5, unit: 'kg' });
+
+const tomatoToastFinancials = calculateMenuWasteFinancials({
+  recipe: {
+    name: 'Tomato Toast',
+    ingredients: [
+      { name: 'Tomato', quantity: '10g', cost: 0, category: 'Produce' },
+      { name: 'Bread slice', quantity: '1', cost: 2, category: 'Bakery' },
+    ],
+  },
+  menuItem: { name: 'Tomato Toast', menuPrice: 35 },
+  quantity: 1,
+  itemPriceCatalog: sanitizeItemPriceCatalog({
+    tomato: { name: 'Tomato', price: 30, unit: 'kg', category: 'Produce' },
+  }),
+});
+
+assert.equal(tomatoToastFinancials.ingredientCostPerItem, 2.3);
+assert.equal(tomatoToastFinancials.ingredients[0].cost, 0.3);
+assert.equal(tomatoToastFinancials.ingredients[0].costSource, 'catalog');
+assert.equal(tomatoToastFinancials.ingredients[1].cost, 2);
+assert.equal(tomatoToastFinancials.ingredients[1].costSource, 'manual');
 
 const ownerAccess = getAccessProfile({ id: 'staff_owner', name: 'Rizwana', role: 'Owner' });
 const managerAccess = getAccessProfile({ id: 'staff_manager', name: 'Nadia', role: 'Manager' });

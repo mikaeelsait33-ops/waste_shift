@@ -203,6 +203,7 @@ const data = {
   staffList: await createStaffMembers(),
   customStaffList: [],
   customMenuItems: [],
+  itemPriceCatalog: {},
   portionProfiles: {},
 };
 

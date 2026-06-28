@@ -381,6 +381,9 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
                     <span className={`badge waste-type-badge waste-type-badge--${classificationMeta.value}`}>
                       {classificationMeta.shortLabel}
                     </span>
+                    {item.costStatus === 'needs_item_price' && (
+                      <span className="badge is-red cost-status-badge">Needs price</span>
+                    )}
                     {item.notes && (
                       <p className="log-note">{item.notes}</p>
                     )}
