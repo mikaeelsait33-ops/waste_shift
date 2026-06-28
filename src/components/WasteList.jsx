@@ -119,6 +119,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
     })),
   ];
   const unitLabels = {
+    each: 'item',
     g: 'g',
     kg: 'kg',
     ml: 'ml',
@@ -134,6 +135,10 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
 
     if (!itemUnit) {
       return `x${itemQuantity}`;
+    }
+
+    if (itemUnit === 'each') {
+      return `${itemQuantity} item${Number(itemQuantity) === 1 ? '' : 's'}`;
     }
 
     if (itemUnit === 'portion') {

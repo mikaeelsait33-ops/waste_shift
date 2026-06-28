@@ -13,6 +13,7 @@ import {
 } from '../utils/wasteCalculations';
 
 const WASTE_UNITS = [
+  { value: 'each', label: 'items / each' },
   { value: 'g', label: 'grams (g)' },
   { value: 'kg', label: 'kilograms (kg)' },
   { value: 'ml', label: 'millilitres (ml)' },
@@ -51,6 +52,16 @@ const formatNumber = (value) => {
   }
 
   return Number.isInteger(numericValue) ? String(numericValue) : numericValue.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+};
+
+const formatSimpleQuantityLabel = (value, unit) => {
+  const amountLabel = formatNumber(value) || '0';
+
+  if (unit === 'each') {
+    return `${amountLabel} item${Number(value) === 1 ? '' : 's'}`;
+  }
+
+  return `${amountLabel} ${unit}`;
 };
 
 const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
@@ -112,7 +123,7 @@ function WasteForm({
   const [menuSearch, setMenuSearch] = useState('');
   const [name, setName] = useState('');
   const [quantity, setQuantity] = useState('1');
-  const [unit, setUnit] = useState('g');
+  const [unit, setUnit] = useState('each');
   const [portionAmount, setPortionAmount] = useState('');
   const [portionUnit, setPortionUnit] = useState('g');
   const [category, setCategory] = useState('Produce');
@@ -240,7 +251,7 @@ function WasteForm({
     ? measuredAmount
       ? `${formatNumber(quantityValue)} portions = ${formatNumber(measuredAmount)} ${portionUnit}`
       : 'Portion size pending'
-    : `${formatNumber(quantityValue) || '0'} ${unit}`;
+    : formatSimpleQuantityLabel(quantityValue, unit);
 
   const applyProfile = (profile) => {
     if (!profile) return;
@@ -248,7 +259,7 @@ function WasteForm({
     setName(profile.name || '');
     setCategory(profile.category || 'Produce');
     setQuantity(String(profile.quantity || '1'));
-    setUnit(profile.unit || 'g');
+    setUnit(profile.unit || 'each');
     setCost(Number(profile.cost) > 0 ? Number(profile.cost).toFixed(2) : '');
     setWasteClassification(profile.wasteClassification || DEFAULT_WASTE_CLASSIFICATION);
 
@@ -307,7 +318,7 @@ function WasteForm({
 
   const handleFormTypeChange = (nextFormType) => {
     setFormType(nextFormType);
-    setUnit(nextFormType === 'recipe' ? 'portion' : 'g');
+    setUnit(nextFormType === 'recipe' ? 'portion' : 'each');
     setQuantity('1');
     setPortionAmount('');
     setPortionUnit('g');
@@ -547,7 +558,7 @@ function WasteForm({
     }
     setName('');
     setQuantity('1');
-    setUnit(formType === 'recipe' ? 'portion' : 'g');
+    setUnit(formType === 'recipe' ? 'portion' : 'each');
     if (formType === 'single') {
       setPortionAmount('');
       setPortionUnit('g');
