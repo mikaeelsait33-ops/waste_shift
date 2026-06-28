@@ -132,6 +132,7 @@ function WasteForm({
   const [customReason, setCustomReason] = useState('');
   const [selectedStaffId, setSelectedStaffId] = useState(activeStaffId || '');
   const [cost, setCost] = useState('');
+  const [notes, setNotes] = useState('');
   const [formMessage, setFormMessage] = useState('');
   const [photoPreview, setPhotoPreview] = useState('');
   const [photoName, setPhotoName] = useState('');
@@ -370,6 +371,7 @@ function WasteForm({
       createdAt: now.toISOString(),
       status: 'logged',
       repeatedFromId: lastEntry.id,
+      notes: '',
       photoUrl: '',
       photoName: '',
       photoCapturedAt: '',
@@ -472,6 +474,7 @@ function WasteForm({
     let finalEntry = {
       id: Date.now().toString(),
       reason: actualReason,
+      notes: notes.trim(),
       wasteClassification,
       wasteClassificationLabel: getWasteClassificationMeta(wasteClassification).label,
       staffId: selectedStaffMember.id,
@@ -565,6 +568,7 @@ function WasteForm({
     }
     setReason('Expired');
     setCustomReason('');
+    setNotes('');
     setWasteDate(getTodayYMD());
     setPhotoPreview('');
     setPhotoName('');
@@ -820,7 +824,7 @@ function WasteForm({
           )}
 
           <div className="field">
-            <label htmlFor="cost-loss">{formType === 'recipe' ? 'Food cost lost' : 'Cost loss'}</label>
+            <label htmlFor="cost-loss">{formType === 'recipe' ? 'Food cost lost' : 'Total cost loss'}</label>
             <input
               id="cost-loss"
               type="number"
@@ -828,7 +832,7 @@ function WasteForm({
               value={cost}
               onChange={(e) => setCost(e.target.value)}
               disabled={formType === 'recipe'}
-              placeholder="R"
+              placeholder="R total"
               className="input"
             />
           </div>
@@ -918,6 +922,19 @@ function WasteForm({
               style={{ marginTop: '10px' }}
             />
           )}
+        </div>
+
+        <div className="field">
+          <label htmlFor="waste-notes">Notes</label>
+          <textarea
+            id="waste-notes"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            maxLength={180}
+            placeholder="e.g. dropped during prep, customer returned, machine purge"
+            className="input note-textarea"
+          />
+          <span className="small-text">{notes.length}/180</span>
         </div>
 
         <div className="field">

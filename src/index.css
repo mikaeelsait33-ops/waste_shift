@@ -771,6 +771,11 @@ button:disabled {
   border-color: rgba(22, 138, 74, 0.2);
 }
 
+.note-textarea {
+  min-height: 74px;
+  resize: vertical;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -1130,6 +1135,13 @@ button:disabled {
   margin-top: 5px;
   color: var(--muted-2);
   font-size: 0.78rem;
+}
+
+.log-note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
 }
 
 .delete-button {

@@ -87,6 +87,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
       item?.staff,
       item?.category,
       item?.unit,
+      item?.notes,
       getWasteClassificationMeta(getItemWasteClassification(item)).label,
       getWasteClassificationMeta(getItemWasteClassification(item)).shortLabel,
       ...(Array.isArray(item?.ingredients) ? item.ingredients.map((ingredient) => ingredient.name) : []),
@@ -180,6 +181,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
       'Waste Classification',
       'Department',
       'Reason',
+      'Notes',
       'Staff',
       'Food Cost Lost',
       'Selling Price',
@@ -203,6 +205,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
       getWasteClassificationMeta(getItemWasteClassification(item)).label,
       item.department || '',
       item.reason,
+      item.notes || '',
       item.staff || '',
       getEntryFoodCostLost(item).toFixed(2),
       item.sellingPrice || '',
@@ -247,6 +250,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
 
   const clearFilters = () => {
     setActiveFilter('All');
+    setClassificationFilter('All');
     setSearchTerm('');
   };
 
@@ -272,7 +276,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
           type="search"
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          placeholder="Search item, staff, reason, or ingredient"
+          placeholder="Search item, staff, reason, note, or ingredient"
           className="input"
         />
         <select value={sortMode} onChange={(e) => setSortMode(e.target.value)} className="select">
@@ -377,6 +381,9 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
                     <span className={`badge waste-type-badge waste-type-badge--${classificationMeta.value}`}>
                       {classificationMeta.shortLabel}
                     </span>
+                    {item.notes && (
+                      <p className="log-note">{item.notes}</p>
+                    )}
                   </div>
 
                   <div className="manager-row">
