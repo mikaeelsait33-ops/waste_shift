@@ -66,7 +66,6 @@ function StoreRoom({
   const [category, setCategory] = useState('Dry Store');
   const [unit, setUnit] = useState('each');
   const [location, setLocation] = useState('');
-  const [quantity, setQuantity] = useState('0');
   const [parLevel, setParLevel] = useState('');
   const [itemNotes, setItemNotes] = useState('');
   const [movementItemId, setMovementItemId] = useState('');
@@ -120,7 +119,6 @@ function StoreRoom({
     setCategory('Dry Store');
     setUnit('each');
     setLocation('');
-    setQuantity('0');
     setParLevel('');
     setItemNotes('');
   };
@@ -131,7 +129,6 @@ function StoreRoom({
     setCategory(item.category || 'Dry Store');
     setUnit(item.unit || 'each');
     setLocation(item.location || '');
-    setQuantity(String(item.quantity ?? 0));
     setParLevel(item.parLevel ? String(item.parLevel) : '');
     setItemNotes(item.notes || '');
     setMessage(`Editing ${item.name}.`);
@@ -154,7 +151,6 @@ function StoreRoom({
       category,
       unit,
       location,
-      quantity,
       parLevel,
       notes: itemNotes,
     });
@@ -297,21 +293,7 @@ function StoreRoom({
               </div>
             </div>
 
-            <div className="field-grid field-grid--three">
-              <div className="field">
-                <label htmlFor="store-item-quantity">Current quantity</label>
-                <input
-                  id="store-item-quantity"
-                  type="number"
-                  min="0"
-                  step="0.001"
-                  value={quantity}
-                  onChange={(event) => setQuantity(event.target.value)}
-                  className="input"
-                  disabled={!canManageStoreRoom}
-                />
-              </div>
-
+            <div className="field-grid">
               <div className="field">
                 <label htmlFor="store-item-unit">Unit</label>
                 <select

@@ -1554,15 +1554,10 @@ function App() {
 
     const name = String(itemDraft?.name || '').trim();
     const id = itemDraft?.id || createStoreRoomItemId(name);
-    const quantity = Number.parseFloat(itemDraft?.quantity);
     const parLevel = Number.parseFloat(itemDraft?.parLevel);
 
     if (!name || !id) {
       return { ok: false, message: 'Enter a stock item name.' };
-    }
-
-    if (!Number.isFinite(quantity) || quantity < 0) {
-      return { ok: false, message: 'Enter a valid current quantity.' };
     }
 
     const existingItem = storeRoomItems.find((item) => item.id === id);
@@ -1573,43 +1568,25 @@ function App() {
       category: String(itemDraft?.category || 'Other').trim() || 'Other',
       unit: String(itemDraft?.unit || existingItem?.unit || 'each').trim() || 'each',
       location: String(itemDraft?.location || '').trim(),
-      quantity: Math.round(quantity * 1000) / 1000,
+      quantity: existingItem?.quantity || 0,
       parLevel: Number.isFinite(parLevel) && parLevel > 0 ? Math.round(parLevel * 1000) / 1000 : 0,
       notes: String(itemDraft?.notes || '').trim(),
       createdAt: existingItem?.createdAt || now,
       updatedAt: now,
       lastMovementAt: existingItem?.lastMovementAt || '',
     };
-    const previousQuantity = existingItem?.quantity || 0;
-    const quantityChanged = previousQuantity !== nextItem.quantity;
-    const movement = quantityChanged
-      ? createStoreRoomMovement({
-        item: nextItem,
-        type: existingItem ? 'adjustment' : 'opening',
-        quantity: Math.abs(nextItem.quantity - previousQuantity),
-        previousQuantity,
-        nextQuantity: nextItem.quantity,
-        reason: existingItem ? 'Count adjusted' : 'Opening stock',
-        notes: nextItem.notes,
-      })
-      : null;
 
     setStoreRoomItems(prevItems => {
       const existingIndex = prevItems.findIndex((item) => item.id === id);
-      const itemToSave = movement ? { ...nextItem, lastMovementAt: movement.createdAt } : nextItem;
 
       if (existingIndex === -1) {
-        return sanitizeStoreRoomItems([...prevItems, itemToSave]);
+        return sanitizeStoreRoomItems([...prevItems, nextItem]);
       }
 
       return sanitizeStoreRoomItems(prevItems.map((item, index) => (
-        index === existingIndex ? itemToSave : item
+        index === existingIndex ? nextItem : item
       )));
     });
-
-    if (movement) {
-      setStoreRoomMovements(prevMovements => [movement, ...prevMovements].slice(0, 1000));
-    }
 
     setAuditLog(prevLog => [
       createAuditLogEntry({
