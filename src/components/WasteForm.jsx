@@ -200,14 +200,16 @@ function WasteForm({
   const selectedMenuItemPrice = getMenuSellingPrice(selectedMenuItem, selectedRecipe);
   const activeStaffMember = safeStaffList.find((member) => member.id === selectedStaffId);
   const menuSearchValue = menuSearch.trim().toLowerCase();
-  const filteredMenuItems = menuSearchValue
-    ? safeMenuItems.filter((item) => [
-      item.name,
-      item.key,
-      recipes[item.key]?.name,
-      ...(Array.isArray(recipes[item.key]?.ingredients) ? recipes[item.key].ingredients.map((ingredient) => ingredient.name) : []),
-    ].some((part) => String(part || '').toLowerCase().includes(menuSearchValue)))
-    : safeMenuItems;
+  const filteredMenuItems = useMemo(() => (
+    menuSearchValue
+      ? safeMenuItems.filter((item) => [
+        item.name,
+        item.key,
+        recipes[item.key]?.name,
+        ...(Array.isArray(recipes[item.key]?.ingredients) ? recipes[item.key].ingredients.map((ingredient) => ingredient.name) : []),
+      ].some((part) => String(part || '').toLowerCase().includes(menuSearchValue)))
+      : safeMenuItems
+  ), [menuSearchValue, recipes, safeMenuItems]);
   const menuItemOptions = selectedMenuItem && !filteredMenuItems.some((item) => item.key === selectedMenuItem.key)
     ? [selectedMenuItem, ...filteredMenuItems]
     : filteredMenuItems;
@@ -346,6 +348,18 @@ function WasteForm({
       setSelectedRecipeKey(safeMenuItems[0].key);
     }
   }, [safeMenuItems, selectedRecipeKey]);
+
+  useEffect(() => {
+    if (formType !== 'recipe' || !menuSearchValue || filteredMenuItems.length === 0) {
+      return;
+    }
+
+    const selectedItemIsVisible = filteredMenuItems.some((item) => item.key === selectedRecipeKey);
+
+    if (!selectedItemIsVisible) {
+      setSelectedRecipeKey(filteredMenuItems[0].key);
+    }
+  }, [filteredMenuItems, formType, menuSearchValue, selectedRecipeKey]);
 
   useEffect(() => {
     if (activeStaffId && activeStaffId !== selectedStaffId) {
@@ -791,12 +805,21 @@ function WasteForm({
               />
             </div>
 
+            {menuSearchValue && (
+              <div className="search-status" role="status">
+                <span>
+                  <strong>{filteredMenuItems.length}</strong> match{filteredMenuItems.length === 1 ? '' : 'es'} for <strong>{menuSearch.trim()}</strong>
+                </span>
+                {filteredMenuItems[0] && <span>Top result: {filteredMenuItems[0].name}</span>}
+              </div>
+            )}
+
             <div className="field">
               <label htmlFor="menu-item">Menu item / drink</label>
               {safeMenuItems.length === 0 ? (
                 <div className="muted-box">No menu items found.</div>
               ) : menuItemOptions.length === 0 ? (
-                <div className="muted-box">No menu items match this search.</div>
+                <div className="muted-box">No menu items match "{menuSearch.trim()}".</div>
               ) : (
                 <select id="menu-item" value={selectedRecipeKey} onChange={(e) => setSelectedRecipeKey(e.target.value)} className="select">
                   {menuItemOptions.map((item) => (

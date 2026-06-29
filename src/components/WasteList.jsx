@@ -296,6 +296,17 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
         </button>
       </div>
 
+      {searchValue && (
+        <div className="search-status" role="status">
+          <span>
+            <strong>{filteredItems.length}</strong> result{filteredItems.length === 1 ? '' : 's'} for <strong>{searchTerm.trim()}</strong>
+          </span>
+          <button type="button" onClick={() => setSearchTerm('')} className="ghost-button compact-action">
+            Clear search
+          </button>
+        </div>
+      )}
+
       {deletedEntry && (
         <div className="undo-banner" role="status">
           <span>

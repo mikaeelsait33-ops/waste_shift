@@ -43,10 +43,9 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
   const [message, setMessage] = useState('');
   const [staffSearch, setStaffSearch] = useState('');
   const safeStaffList = useMemo(() => (Array.isArray(staffList) ? staffList : []), [staffList]);
+  const staffSearchValue = staffSearch.trim().toLowerCase();
   const filteredStaffList = useMemo(() => {
-    const searchValue = staffSearch.trim().toLowerCase();
-
-    if (!searchValue) {
+    if (!staffSearchValue) {
       return safeStaffList;
     }
 
@@ -55,9 +54,9 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
         member.name,
         member.role,
         getStaffSectionMeta(member.staffSection || inferStaffSection(member.role)).label,
-      ].some((part) => String(part || '').toLowerCase().includes(searchValue))
+      ].some((part) => String(part || '').toLowerCase().includes(staffSearchValue))
     ));
-  }, [safeStaffList, staffSearch]);
+  }, [safeStaffList, staffSearchValue]);
   const customStaffCount = safeStaffList.filter((member) => !member.isCsvSeed).length;
   const sectionCounts = STAFF_SECTIONS.map((section) => ({
     ...section,
@@ -193,6 +192,17 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
           />
         </div>
 
+        {staffSearchValue && (
+          <div className="search-status" role="status">
+            <span>
+              <strong>{filteredStaffList.length}</strong> staff member{filteredStaffList.length === 1 ? '' : 's'} for <strong>{staffSearch.trim()}</strong>
+            </span>
+            <button type="button" onClick={() => setStaffSearch('')} className="ghost-button compact-action">
+              Clear search
+            </button>
+          </div>
+        )}
+
         <div className="notice-list" style={{ marginBottom: '12px' }}>
           <span className="badge">{customStaffCount} app-added</span>
           <span className="badge">{safeStaffList.length - customStaffCount} CSV</span>
@@ -208,7 +218,7 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
 
         <div className="staff-list" style={{ marginTop: '16px' }}>
           {filteredStaffList.length === 0 ? (
-            <div className="empty-state">No staff members match the current search.</div>
+            <div className="empty-state">No staff members match "{staffSearch.trim()}".</div>
           ) : filteredStaffList.map((member) => {
             const section = getStaffSectionMeta(member.staffSection || inferStaffSection(member.role));
 

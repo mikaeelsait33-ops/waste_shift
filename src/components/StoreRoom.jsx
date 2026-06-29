@@ -489,10 +489,21 @@ function StoreRoom({
             />
           </div>
 
+          {searchValue && (
+            <div className="search-status" role="status">
+              <span>
+                <strong>{filteredItems.length}</strong> stock item{filteredItems.length === 1 ? '' : 's'} for <strong>{search.trim()}</strong>
+              </span>
+              <button type="button" onClick={() => setSearch('')} className="ghost-button compact-action">
+                Clear search
+              </button>
+            </div>
+          )}
+
           {safeItems.length === 0 ? (
             <div className="empty-state">No store room stock items yet.</div>
           ) : filteredItems.length === 0 ? (
-            <div className="empty-state">No stock items match the current search.</div>
+            <div className="empty-state">No stock items match "{search.trim()}".</div>
           ) : (
             <div className="stock-grid">
               {filteredItems.map((item) => {

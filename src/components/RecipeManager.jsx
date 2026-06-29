@@ -454,10 +454,21 @@ function RecipeManager({
             </div>
           )}
 
+          {recipeSearchValue && (
+            <div className="search-status" role="status">
+              <span>
+                <strong>{filteredCatalogEntries.length}</strong> menu item{filteredCatalogEntries.length === 1 ? '' : 's'} for <strong>{recipeSearch.trim()}</strong>
+              </span>
+              <button type="button" onClick={() => setRecipeSearch('')} className="ghost-button compact-action">
+                Clear search
+              </button>
+            </div>
+          )}
+
           {catalogEntries.length === 0 ? (
             <div className="empty-state">Your menu catalog is empty. Create a custom item above.</div>
           ) : filteredCatalogEntries.length === 0 ? (
-            <div className="empty-state">No menu items match the current search.</div>
+            <div className="empty-state">No menu items match "{recipeSearch.trim()}".</div>
           ) : (
             filteredCatalogEntries.map((item) => {
               const safeIngredients = Array.isArray(item.recipe?.ingredients) ? item.recipe.ingredients : [];

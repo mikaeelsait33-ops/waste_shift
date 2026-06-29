@@ -21,16 +21,15 @@ function ItemPriceManager({
   const [message, setMessage] = useState('');
   const canManagePrices = Boolean(accessProfile?.canManageMenu);
   const safeCatalog = useMemo(() => sanitizeItemPriceCatalog(itemPriceCatalog), [itemPriceCatalog]);
+  const searchValue = search.trim().toLowerCase();
   const priceRows = useMemo(() => {
-    const searchValue = search.trim().toLowerCase();
-
     return Object.values(safeCatalog)
       .filter((record) => (
         !searchValue
         || [record.name, record.category, record.unit].some((part) => String(part || '').toLowerCase().includes(searchValue))
       ))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [safeCatalog, search]);
+  }, [safeCatalog, searchValue]);
 
   const resetForm = () => {
     setName('');
@@ -177,9 +176,20 @@ function ItemPriceManager({
           />
         </div>
 
+        {searchValue && (
+          <div className="search-status" role="status">
+            <span>
+              <strong>{priceRows.length}</strong> price{priceRows.length === 1 ? '' : 's'} for <strong>{search.trim()}</strong>
+            </span>
+            <button type="button" onClick={() => setSearch('')} className="ghost-button compact-action">
+              Clear search
+            </button>
+          </div>
+        )}
+
         {priceRows.length === 0 ? (
           <div className="empty-state">
-            {search ? 'No item prices match your search.' : 'No item prices saved yet.'}
+            {searchValue ? `No item prices match "${search.trim()}".` : 'No item prices saved yet.'}
           </div>
         ) : (
           <div className="item-price-list">
