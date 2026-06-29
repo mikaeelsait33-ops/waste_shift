@@ -358,9 +358,21 @@ const removeSpans = (line, spans) => (
 const cleanItemName = (line) => cleanInvoiceLine(line)
   .replace(/^\s*(?:\d{3,}|[a-z]{1,4}\d{2,}|sku\s*\d+|code\s*\d+)[\s:.-]+/i, '')
   .replace(/\b(description|qty|quantity|unit price|amount|line total|total|price|item|code|sku|excl|incl|vat)\b/gi, ' ')
+  .replace(/[®©™]/g, ' ')
   .replace(/\s+-\s+/g, ' ')
   .replace(/\s+/g, ' ')
   .trim();
+
+const isValidItemName = (name) => {
+  const value = String(name || '').trim();
+  const letters = value.match(/[a-z]/gi) || [];
+  const alphanumeric = value.match(/[a-z0-9]/gi) || [];
+  const symbolCount = value.replace(/[a-z0-9\s]/gi, '').length;
+
+  return letters.length >= 2
+    && alphanumeric.length >= 3
+    && symbolCount <= Math.max(2, alphanumeric.length);
+};
 
 const normalizeInvoiceLines = (text) => {
   const lines = String(text || '')
@@ -425,7 +437,7 @@ const createLineItemFromLine = ({ line, index, vatMode, vatRate }) => {
   ];
   const name = cleanItemName(removeSpans(line, removeNameSpans));
 
-  if (!name || name.length < 2 || /^\d+$/.test(name)) {
+  if (!isValidItemName(name)) {
     return null;
   }
 

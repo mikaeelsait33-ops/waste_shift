@@ -1795,10 +1795,10 @@ textarea.input {
 .invoice-edit-head,
 .invoice-edit-row {
   display: grid;
-  grid-template-columns: minmax(220px, 1.45fr) 84px 92px 112px 112px minmax(95px, 0.7fr) minmax(170px, 0.9fr);
+  grid-template-columns: minmax(220px, 1.45fr) 84px 92px 112px 112px minmax(95px, 0.7fr) minmax(170px, 0.9fr) 92px;
   gap: 8px;
   align-items: center;
-  min-width: 980px;
+  min-width: 1080px;
 }
 
 .invoice-edit-head {
@@ -1815,12 +1815,38 @@ textarea.input {
   border-radius: 8px;
 }
 
+.invoice-field-control {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.invoice-field-label {
+  display: none;
+  color: var(--muted-2);
+  font-size: 0.68rem;
+  font-weight: 820;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.invoice-vat-cell {
+  min-height: 44px;
+  align-content: center;
+}
+
 .invoice-match-cell {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
   min-width: 0;
+}
+
+.invoice-line-actions {
+  display: grid;
+  gap: 5px;
+  justify-items: stretch;
 }
 
 .invoice-sparkline {
@@ -1994,6 +2020,22 @@ textarea.input {
   .invoice-edit-row {
     grid-template-columns: 1fr;
     min-width: 0;
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .invoice-field-label {
+    display: block;
+  }
+
+  .invoice-match-cell,
+  .invoice-line-actions {
+    align-items: stretch;
+  }
+
+  .invoice-match-cell {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 
   .invoice-drop-target {

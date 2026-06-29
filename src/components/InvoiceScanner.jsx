@@ -306,6 +306,10 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
     ));
   };
 
+  const removeLineItem = (lineId) => {
+    setLineItems((currentItems) => currentItems.filter((item) => item.id !== lineId));
+  };
+
   const parseAndApplyText = (text) => {
     if (!String(text || '').trim()) {
       setLineItems([]);
@@ -776,6 +780,7 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
                     <span>Total</span>
                     <span>VAT</span>
                     <span>Status</span>
+                    <span>Action</span>
                   </div>
                   {lineItems.map((lineItem) => {
                     const match = matches.get(lineItem.id);
@@ -787,18 +792,37 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
 
                     return (
                       <div key={lineItem.id} className="invoice-edit-row">
-                        <input value={lineItem.itemName} onChange={(event) => updateLineItem(lineItem.id, 'itemName', event.target.value)} className="input" />
-                        <input type="number" min="0" step="0.001" value={lineItem.quantity} onChange={(event) => updateLineItem(lineItem.id, 'quantity', event.target.value)} className="input" />
-                        <select value={lineItem.unit} onChange={(event) => updateLineItem(lineItem.id, 'unit', event.target.value)} className="select">
-                          {UNIT_OPTIONS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
-                        </select>
-                        <input type="number" min="0" step="0.01" value={lineItem.unitPrice} onChange={(event) => updateLineItem(lineItem.id, 'unitPrice', event.target.value)} className="input" />
-                        <input type="number" min="0" step="0.01" value={lineItem.lineTotal} onChange={(event) => updateLineItem(lineItem.id, 'lineTotal', event.target.value)} className="input" />
-                        <span className="small-text">
-                          {formatMoney(lineItem.priceExVAT)} ex<br />
-                          {formatMoney(lineItem.vatAmount)} VAT
-                        </span>
+                        <label className="invoice-field-control">
+                          <span className="invoice-field-label">Item</span>
+                          <input value={lineItem.itemName} onChange={(event) => updateLineItem(lineItem.id, 'itemName', event.target.value)} className="input" />
+                        </label>
+                        <label className="invoice-field-control">
+                          <span className="invoice-field-label">Qty</span>
+                          <input type="number" min="0" step="0.001" value={lineItem.quantity} onChange={(event) => updateLineItem(lineItem.id, 'quantity', event.target.value)} className="input" />
+                        </label>
+                        <label className="invoice-field-control">
+                          <span className="invoice-field-label">Unit</span>
+                          <select value={lineItem.unit} onChange={(event) => updateLineItem(lineItem.id, 'unit', event.target.value)} className="select">
+                            {UNIT_OPTIONS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+                          </select>
+                        </label>
+                        <label className="invoice-field-control">
+                          <span className="invoice-field-label">Unit price</span>
+                          <input type="number" min="0" step="0.01" value={lineItem.unitPrice} onChange={(event) => updateLineItem(lineItem.id, 'unitPrice', event.target.value)} className="input" />
+                        </label>
+                        <label className="invoice-field-control">
+                          <span className="invoice-field-label">Total</span>
+                          <input type="number" min="0" step="0.01" value={lineItem.lineTotal} onChange={(event) => updateLineItem(lineItem.id, 'lineTotal', event.target.value)} className="input" />
+                        </label>
+                        <div className="invoice-field-control invoice-vat-cell">
+                          <span className="invoice-field-label">VAT</span>
+                          <span className="small-text">
+                            {formatMoney(lineItem.priceExVAT)} ex<br />
+                            {formatMoney(lineItem.vatAmount)} VAT
+                          </span>
+                        </div>
                         <div className="invoice-match-cell">
+                          <span className="invoice-field-label">Status</span>
                           {match?.ingredient ? (
                             <>
                               <span className="badge is-green">{match.ingredient.name}</span>
@@ -821,6 +845,12 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
                               </button>
                             </>
                           )}
+                        </div>
+                        <div className="invoice-line-actions">
+                          <span className="invoice-field-label">Action</span>
+                          <button type="button" className="ghost-button compact-action" onClick={() => removeLineItem(lineItem.id)}>
+                            Remove
+                          </button>
                         </div>
                       </div>
                     );

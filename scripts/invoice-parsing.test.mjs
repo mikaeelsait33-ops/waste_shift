@@ -63,6 +63,9 @@ assert.equal(item.unit, 'each');
 assert.equal(item.unitPrice, 8);
 assert.equal(item.lineTotal, 48);
 
+const noisyOcr = parseInvoiceText('- o = . ® 3 1 3', { vatRate: 0.15 });
+assert.equal(noisyOcr.items.length, 0);
+
 const exclusive = parseInvoiceText(`
 Prices excl VAT
 Olive Oil 1 L R100.00 R100.00
