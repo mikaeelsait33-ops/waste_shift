@@ -308,6 +308,16 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
 
   const removeLineItem = (lineId) => {
     setLineItems((currentItems) => currentItems.filter((item) => item.id !== lineId));
+    setConfirmedInvoice(null);
+    setStockUpdates([]);
+  };
+
+  const clearParsedLines = () => {
+    setLineItems([]);
+    setNewDrawerLineId('');
+    setConfirmedInvoice(null);
+    setStockUpdates([]);
+    setMessage('Parsed invoice lines cleared. You can correct the OCR text and re-parse it.');
   };
 
   const parseAndApplyText = (text) => {
@@ -765,6 +775,11 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
                 <div className="manager-row">
                   <span className="badge is-green">{matchedCount} matched</span>
                   <span className={`badge${newLineItems.length > 0 ? ' is-yellow' : ''}`}>{newLineItems.length} new</span>
+                  {lineItems.length > 0 && (
+                    <button type="button" className="ghost-button compact-action" onClick={clearParsedLines}>
+                      Clear lines
+                    </button>
+                  )}
                 </div>
               </div>
 

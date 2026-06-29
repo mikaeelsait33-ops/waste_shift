@@ -5,6 +5,9 @@ const QUANTITY_UNIT_REGEX = new RegExp(`\\b(\\d+(?:[.,]\\d+)?)\\s*${UNIT_PATTERN
 const UNIT_QUANTITY_REGEX = new RegExp(`\\b${UNIT_PATTERN}\\s*(\\d+(?:[.,]\\d+)?)\\b`, 'i');
 const PACK_QUANTITY_REGEX = new RegExp(`\\b(\\d+(?:[.,]\\d+)?)\\s*[xX]\\s*(\\d+(?:[.,]\\d+)?)\\s*${UNIT_PATTERN}\\b`, 'i');
 const NUMBER_TOKEN_REGEX = /(?:\b(?:ZAR|R)\s*)?-?\d+(?:[ ,]\d{3})*(?:[.,]\d{1,2})?/gi;
+const MAX_REASONABLE_LINE_TOTAL = 250000;
+const MAX_REASONABLE_UNIT_PRICE = 100000;
+const MAX_REASONABLE_QUANTITY = 100000;
 const CATEGORIES = ['Produce', 'Dairy', 'Meat', 'Dry Goods', 'Beverages', 'Other'];
 
 export const INVOICE_CATEGORIES = CATEGORIES;
@@ -209,7 +212,7 @@ const getDecimalPlaces = (value) => {
 
 const cleanInvoiceLine = (line) => String(line || '')
   .replace(/[|;]/g, ' ')
-  .replace(/[–—]/g, '-')
+  .replace(/[\u2013\u2014]/g, '-')
   .replace(/\t/g, ' ')
   .replace(/(\d)[Oo](?=\d)/g, (_, digit) => `${digit}0`)
   .replace(/(\d)[Il](?=\d)/g, (_, digit) => `${digit}1`)
@@ -225,7 +228,7 @@ const isNonLineItemLine = (line) => {
 
   return hasTableHeader
     || dateOnlyMetadata
-    || /\b(subtotal|sub total|balance|amount due|grand total|total due|vat total|vat amount|tax total|invoice no|invoice number|invoice date|date issued|due date|customer|account|bank|tel|telephone|phone|email|website|registration|reg no|page \d|statement|order no|delivery note)\b/i.test(value);
+    || /\b(subtotal|sub total|balance|amount due|grand total|total due|vat total|vat amount|tax total|invoice no|invoice number|invoice date|date issued|due date|customer|account|bank|branch|swift|iban|routing|sort code|tel|telephone|phone|cell|mobile|fax|email|website|address|street|road|po box|registration|reg no|vat no|vat number|tax no|tax number|company reg|page \d|statement|order no|delivery note|payment|reference|ref no)\b/i.test(value);
 };
 
 const extractNumberTokens = (line) => [...String(line || '').matchAll(NUMBER_TOKEN_REGEX)]
@@ -358,7 +361,7 @@ const removeSpans = (line, spans) => (
 const cleanItemName = (line) => cleanInvoiceLine(line)
   .replace(/^\s*(?:\d{3,}|[a-z]{1,4}\d{2,}|sku\s*\d+|code\s*\d+)[\s:.-]+/i, '')
   .replace(/\b(description|qty|quantity|unit price|amount|line total|total|price|item|code|sku|excl|incl|vat)\b/gi, ' ')
-  .replace(/[®©™]/g, ' ')
+  .replace(/[\u00ae\u00a9\u2122]/g, ' ')
   .replace(/\s+-\s+/g, ' ')
   .replace(/\s+/g, ' ')
   .trim();
@@ -373,6 +376,18 @@ const isValidItemName = (name) => {
     && alphanumeric.length >= 3
     && symbolCount <= Math.max(2, alphanumeric.length);
 };
+
+const hasReasonableLineValues = ({ lineTotal, unitPrice, quantity }) => (
+  Number.isFinite(lineTotal)
+  && Number.isFinite(unitPrice)
+  && Number.isFinite(quantity)
+  && lineTotal >= 0.01
+  && lineTotal <= MAX_REASONABLE_LINE_TOTAL
+  && unitPrice >= 0.01
+  && unitPrice <= MAX_REASONABLE_UNIT_PRICE
+  && quantity > 0
+  && quantity <= MAX_REASONABLE_QUANTITY
+);
 
 const normalizeInvoiceLines = (text) => {
   const lines = String(text || '')
@@ -429,6 +444,11 @@ const createLineItemFromLine = ({ line, index, vatMode, vatRate }) => {
     : quantity > 1
       ? lineTotal / quantity
       : lineTotal;
+
+  if (!hasReasonableLineValues({ lineTotal, unitPrice, quantity })) {
+    return null;
+  }
+
   const removeNameSpans = [
     ...priceTokens.map((token) => ({ index: token.index, end: token.end })),
     ...codeTokens.map((token) => ({ index: token.index, end: token.end })),

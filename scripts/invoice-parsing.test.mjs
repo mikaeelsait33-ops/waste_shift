@@ -66,6 +66,15 @@ assert.equal(item.lineTotal, 48);
 const noisyOcr = parseInvoiceText('- o = . ® 3 1 3', { vatRate: 0.15 });
 assert.equal(noisyOcr.items.length, 0);
 
+const accountNumberOcr = parseInvoiceText(`
+Payment reference 8703533806.12
+Bank account 10009063877.00
+`, { vatRate: 0.15 });
+assert.equal(accountNumberOcr.items.length, 0);
+
+const impossibleInvoiceLine = parseInvoiceText('Chicken Breast 2 kg R350000.00 R700000.00', { vatRate: 0.15 });
+assert.equal(impossibleInvoiceLine.items.length, 0);
+
 const exclusive = parseInvoiceText(`
 Prices excl VAT
 Olive Oil 1 L R100.00 R100.00
