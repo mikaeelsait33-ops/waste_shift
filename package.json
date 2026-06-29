@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
-    "test": "node scripts/waste-calculations.test.mjs",
+    "test": "node scripts/waste-calculations.test.mjs && node scripts/invoice-parsing.test.mjs",
     "firebase:smoke": "node scripts/firebase-smoke.mjs",
     "seed:database": "node scripts/seed-vercel-database.mjs",
     "preview": "vite preview",

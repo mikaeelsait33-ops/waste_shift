@@ -49,9 +49,48 @@ const renderPdfFirstPage = async (file) => {
   return canvas.toDataURL('image/png');
 };
 
+const enhanceImageForOcr = (imageSource) => new Promise((resolve) => {
+  const image = new Image();
+
+  image.onload = () => {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    const naturalWidth = image.naturalWidth || image.width;
+    const naturalHeight = image.naturalHeight || image.height;
+    const scale = naturalWidth < 1400 ? Math.min(2, 1400 / Math.max(naturalWidth, 1)) : 1;
+
+    canvas.width = Math.round(naturalWidth * scale);
+    canvas.height = Math.round(naturalHeight * scale);
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+    const { data } = imageData;
+
+    for (let index = 0; index < data.length; index += 4) {
+      const gray = (data[index] * 0.299) + (data[index + 1] * 0.587) + (data[index + 2] * 0.114);
+      const contrasted = Math.max(0, Math.min(255, ((gray - 128) * 1.35) + 128));
+
+      data[index] = contrasted;
+      data[index + 1] = contrasted;
+      data[index + 2] = contrasted;
+      data[index + 3] = 255;
+    }
+
+    context.putImageData(imageData, 0, 0);
+    resolve(canvas.toDataURL('image/png'));
+  };
+
+  image.onerror = () => resolve(imageSource);
+  image.src = imageSource;
+});
+
 const runBrowserOcr = async (imageSource, onProgress) => {
   const Tesseract = await import('tesseract.js');
   const result = await Tesseract.recognize(imageSource, 'eng', {
+    preserve_interword_spaces: '1',
+    tessedit_pageseg_mode: '6',
     logger: (message) => {
       if (message?.status === 'recognizing text') {
         onProgress?.(Math.round((message.progress || 0) * 100));
@@ -268,14 +307,21 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
   };
 
   const parseAndApplyText = (text) => {
+    if (!String(text || '').trim()) {
+      setLineItems([]);
+      setMessage('Paste invoice text or run OCR before parsing.');
+      return;
+    }
+
     const parsed = parseInvoiceText(text, { vatRate });
+    setRawText(text);
     setSupplierName(parsed.supplierName);
     setInvoiceDate(parsed.invoiceDate);
     setVatMode(parsed.vatMode);
     setLineItems(parsed.items);
     setMessage(parsed.items.length > 0
       ? `Found ${parsed.items.length} invoice line${parsed.items.length === 1 ? '' : 's'}. Review before confirming.`
-      : 'No invoice lines were found. Check the debug text or try a clearer photo.');
+      : 'No invoice lines were found. Correct the OCR text below, then re-parse it.');
   };
 
   const handleFile = async (file) => {
@@ -321,8 +367,8 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
     setMessage('Running browser OCR...');
 
     try {
-      const text = await runBrowserOcr(previewUrl, setProgress);
-      setRawText(text);
+      const enhancedImage = await enhanceImageForOcr(previewUrl);
+      const text = await runBrowserOcr(enhancedImage, setProgress);
       parseAndApplyText(text);
       setDebugOpen(true);
       setProgress(100);
@@ -679,12 +725,30 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
 
           {message && <div className="inline-message" role="status">{message}</div>}
 
-          {rawText && (
-            <details className="panel invoice-debug-panel" open={debugOpen} onToggle={(event) => setDebugOpen(event.currentTarget.open)}>
-              <summary className="breakdown-title">Raw OCR text</summary>
-              <pre className="invoice-debug-text">{rawText}</pre>
-            </details>
-          )}
+          <details className="panel invoice-debug-panel" open={debugOpen} onToggle={(event) => setDebugOpen(event.currentTarget.open)}>
+            <summary className="breakdown-title">OCR Text & Manual Correction</summary>
+            <div className="invoice-debug-body">
+              <textarea
+                value={rawText}
+                onChange={(event) => setRawText(event.target.value)}
+                className="invoice-debug-text"
+                placeholder="Paste invoice text here, or correct OCR text after scanning."
+                spellCheck="false"
+                aria-label="Editable OCR text"
+              />
+              <div className="invoice-debug-actions">
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => parseAndApplyText(rawText)}
+                  disabled={!rawText.trim()}
+                >
+                  Re-parse text
+                </button>
+                <span className="small-text">Use this when OCR misses item names, quantities, or prices.</span>
+              </div>
+            </div>
+          </details>
 
           <section className="panel">
             <div className="panel-body">

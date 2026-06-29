@@ -1,7 +1,10 @@
 const DEFAULT_VAT_RATE = 0.15;
-const UNIT_PATTERN = '(kg|kgs|kilogram|kilograms|g|gram|grams|l|lt|liter|litre|liters|litres|ml|each|ea|unit|units|case|cases|doz|dozen|pkt|packet|pack|box|bag)';
+const UNIT_PATTERN = '(kg|kgs|kilogram|kilograms|g|gram|grams|l|lt|ltr|liter|litre|liters|litres|ml|each|ea|unit|units|case|cases|doz|dozen|pkt|packet|pack|box|boxes|bag|bags|btl|bottle|bottles|tray|trays|tin|tins)';
 const UNIT_REGEX = new RegExp(`\\b${UNIT_PATTERN}\\b`, 'i');
-const MONEY_REGEX = /(?:R|ZAR)?\s*-?\d+(?:[,\s]\d{3})*(?:\.\d{1,2})?/gi;
+const QUANTITY_UNIT_REGEX = new RegExp(`\\b(\\d+(?:[.,]\\d+)?)\\s*${UNIT_PATTERN}\\b`, 'i');
+const UNIT_QUANTITY_REGEX = new RegExp(`\\b${UNIT_PATTERN}\\s*(\\d+(?:[.,]\\d+)?)\\b`, 'i');
+const PACK_QUANTITY_REGEX = new RegExp(`\\b(\\d+(?:[.,]\\d+)?)\\s*[xX]\\s*(\\d+(?:[.,]\\d+)?)\\s*${UNIT_PATTERN}\\b`, 'i');
+const NUMBER_TOKEN_REGEX = /(?:\b(?:ZAR|R)\s*)?-?\d+(?:[ ,]\d{3})*(?:[.,]\d{1,2})?/gi;
 const CATEGORIES = ['Produce', 'Dairy', 'Meat', 'Dry Goods', 'Beverages', 'Other'];
 
 export const INVOICE_CATEGORIES = CATEGORIES;
@@ -26,15 +29,47 @@ export const createInvoiceKey = (value) => normalizeInvoiceName(value)
   .replace(/[^a-z0-9]+/g, '_')
   .replace(/^_+|_+$/g, '');
 
-export const parseMoney = (value) => {
-  const cleaned = String(value ?? '')
-    .replace(/zar/gi, '')
-    .replace(/r/gi, '')
+const normalizeNumericText = (value) => {
+  const withoutCurrency = String(value ?? '')
+    .replace(/\bzar\b/gi, '')
+    .replace(/\br\s*/gi, '')
     .replace(/\s+/g, '')
-    .replace(/,/g, '');
-  const parsed = Number.parseFloat(cleaned);
+    .replace(/[^\d.,-]/g, '');
+
+  if (!withoutCurrency || withoutCurrency === '-') return '';
+
+  const lastComma = withoutCurrency.lastIndexOf(',');
+  const lastDot = withoutCurrency.lastIndexOf('.');
+
+  if (lastComma >= 0 && lastDot >= 0) {
+    const decimalSeparator = lastComma > lastDot ? ',' : '.';
+    return decimalSeparator === ','
+      ? withoutCurrency.replace(/\./g, '').replace(',', '.')
+      : withoutCurrency.replace(/,/g, '');
+  }
+
+  if (lastComma >= 0) {
+    const trailingDigits = withoutCurrency.length - lastComma - 1;
+    return trailingDigits > 0 && trailingDigits <= 2
+      ? withoutCurrency.replace(',', '.')
+      : withoutCurrency.replace(/,/g, '');
+  }
+
+  const dotCount = (withoutCurrency.match(/\./g) || []).length;
+  if (dotCount > 1) {
+    const lastSeparator = withoutCurrency.lastIndexOf('.');
+    return `${withoutCurrency.slice(0, lastSeparator).replace(/\./g, '')}.${withoutCurrency.slice(lastSeparator + 1)}`;
+  }
+
+  return withoutCurrency;
+};
+
+const parseNumericValue = (value) => {
+  const parsed = Number.parseFloat(normalizeNumericText(value));
   return Number.isFinite(parsed) ? parsed : null;
 };
+
+export const parseMoney = (value) => parseNumericValue(value);
 
 export const roundMoney = (value) => {
   const numericValue = Number(value);
@@ -46,12 +81,17 @@ export const normalizeInvoiceUnit = (unit) => {
 
   if (['kg', 'kgs', 'kilogram', 'kilograms'].includes(value)) return 'kg';
   if (['g', 'gram', 'grams'].includes(value)) return 'g';
-  if (['l', 'lt', 'liter', 'litre', 'liters', 'litres'].includes(value)) return 'L';
+  if (['l', 'lt', 'ltr', 'liter', 'litre', 'liters', 'litres'].includes(value)) return 'L';
   if (value === 'ml') return 'ml';
   if (['ea', 'each', 'unit', 'units'].includes(value)) return 'each';
   if (['case', 'cases'].includes(value)) return 'case';
   if (['doz', 'dozen'].includes(value)) return 'doz';
   if (['pkt', 'packet', 'pack'].includes(value)) return 'pkt';
+  if (['box', 'boxes'].includes(value)) return 'box';
+  if (['bag', 'bags'].includes(value)) return 'bag';
+  if (['btl', 'bottle', 'bottles'].includes(value)) return 'bottle';
+  if (['tray', 'trays'].includes(value)) return 'tray';
+  if (['tin', 'tins'].includes(value)) return 'tin';
   return value || 'each';
 };
 
@@ -65,7 +105,10 @@ export const getBaseUnitInfo = (quantity, unit) => {
   if (normalizedUnit === 'L') return { quantity: safeQuantity * 1000, unit: 'ml' };
   if (normalizedUnit === 'ml') return { quantity: safeQuantity, unit: 'ml' };
   if (normalizedUnit === 'doz') return { quantity: safeQuantity * 12, unit: 'each' };
-  return { quantity: safeQuantity, unit: normalizedUnit === 'case' || normalizedUnit === 'pkt' ? normalizedUnit : 'each' };
+  if (['case', 'pkt', 'box', 'bag', 'bottle', 'tray', 'tin'].includes(normalizedUnit)) {
+    return { quantity: safeQuantity, unit: normalizedUnit };
+  }
+  return { quantity: safeQuantity, unit: 'each' };
 };
 
 export const calculateVatValues = ({ lineTotal, unitPrice, vatMode = 'inclusive', vatRate = DEFAULT_VAT_RATE }) => {
@@ -154,41 +197,233 @@ export const detectInvoiceDate = (text) => {
   return new Date().toISOString().slice(0, 10);
 };
 
-const removeMoneyValues = (line) => line.replace(MONEY_REGEX, ' ').replace(/\s+/g, ' ').trim();
+const getDecimalPlaces = (value) => {
+  const compact = String(value || '').replace(/\s+/g, '');
+  const separatorIndex = Math.max(compact.lastIndexOf('.'), compact.lastIndexOf(','));
+
+  if (separatorIndex < 0) return 0;
+
+  const tail = compact.slice(separatorIndex + 1).replace(/\D/g, '');
+  return tail.length > 0 && tail.length <= 2 ? tail.length : 0;
+};
+
+const cleanInvoiceLine = (line) => String(line || '')
+  .replace(/[|;]/g, ' ')
+  .replace(/[–—]/g, '-')
+  .replace(/\t/g, ' ')
+  .replace(/(\d)[Oo](?=\d)/g, (_, digit) => `${digit}0`)
+  .replace(/(\d)[Il](?=\d)/g, (_, digit) => `${digit}1`)
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const isNonLineItemLine = (line) => {
+  const value = String(line || '').toLowerCase();
+  const hasTableHeader = /\b(description|product|item)\b/.test(value)
+    && /\b(qty|quantity|unit|price|amount|total)\b/.test(value);
+  const hasDatePattern = /\b(?:[0-3]?\d[/-][01]?\d[/-](?:20)?\d{2}|(?:20)?\d{2}[/-][01]?\d[/-][0-3]?\d)\b/.test(value);
+  const dateOnlyMetadata = hasDatePattern && !UNIT_REGEX.test(value) && !/\b(?:zar|r)\s*-?\d/i.test(value);
+
+  return hasTableHeader
+    || dateOnlyMetadata
+    || /\b(subtotal|sub total|balance|amount due|grand total|total due|vat total|vat amount|tax total|invoice no|invoice number|invoice date|date issued|due date|customer|account|bank|tel|telephone|phone|email|website|registration|reg no|page \d|statement|order no|delivery note)\b/i.test(value);
+};
+
+const extractNumberTokens = (line) => [...String(line || '').matchAll(NUMBER_TOKEN_REGEX)]
+  .map((match) => ({
+    raw: match[0],
+    value: parseNumericValue(match[0]),
+    index: match.index || 0,
+    end: (match.index || 0) + match[0].length,
+    hasCurrency: /\b(?:zar|r)\s*-?\d/i.test(match[0]),
+    decimalPlaces: getDecimalPlaces(match[0]),
+  }))
+  .filter((token) => token.value !== null);
+
+const tokenHasPriceShape = (token) => (
+  token.hasCurrency
+  || token.decimalPlaces > 0
+  || Math.abs(token.value) >= 8
+);
+
+const lineHasPriceCandidate = (line) => (
+  extractNumberTokens(line).some((token) => tokenHasPriceShape(token))
+);
+
+const getExplicitQuantity = (line) => {
+  const packMatch = line.match(PACK_QUANTITY_REGEX);
+
+  if (packMatch) {
+    const packQuantity = parseNumericValue(packMatch[1]) || 1;
+    const packSize = parseNumericValue(packMatch[2]) || 1;
+    const unit = normalizeInvoiceUnit(packMatch[3]);
+
+    return {
+      quantity: packQuantity * packSize,
+      displayQuantity: packQuantity,
+      unit,
+      span: {
+        index: packMatch.index || 0,
+        end: (packMatch.index || 0) + packMatch[0].length,
+      },
+    };
+  }
+
+  const quantityMatch = line.match(QUANTITY_UNIT_REGEX);
+
+  if (quantityMatch) {
+    return {
+      quantity: parseNumericValue(quantityMatch[1]) || 1,
+      unit: normalizeInvoiceUnit(quantityMatch[2]),
+      span: {
+        index: quantityMatch.index || 0,
+        end: (quantityMatch.index || 0) + quantityMatch[0].length,
+      },
+    };
+  }
+
+  const unitQuantityMatch = line.match(UNIT_QUANTITY_REGEX);
+
+  if (unitQuantityMatch) {
+    return {
+      quantity: parseNumericValue(unitQuantityMatch[2]) || 1,
+      unit: normalizeInvoiceUnit(unitQuantityMatch[1]),
+      span: {
+        index: unitQuantityMatch.index || 0,
+        end: (unitQuantityMatch.index || 0) + unitQuantityMatch[0].length,
+      },
+    };
+  }
+
+  const looseUnitMatch = line.match(UNIT_REGEX);
+
+  return looseUnitMatch
+    ? {
+      quantity: 1,
+      unit: normalizeInvoiceUnit(looseUnitMatch[1]),
+      span: {
+        index: looseUnitMatch.index || 0,
+        end: (looseUnitMatch.index || 0) + looseUnitMatch[0].length,
+      },
+      unitOnly: true,
+    }
+    : null;
+};
+
+const isTokenInsideSpan = (token, span) => (
+  span
+  && token.index >= span.index
+  && token.end <= span.end
+);
+
+const isLeadingCodeToken = (token, line) => {
+  if (token.hasCurrency || token.decimalPlaces > 0) return false;
+
+  const rawDigits = String(token.raw || '').replace(/\D/g, '');
+  const before = line.slice(0, token.index).trim();
+  const after = line.slice(token.end).trim();
+
+  return before === ''
+    && rawDigits.length >= 3
+    && /[a-z]/i.test(after);
+};
+
+const getLooseQuantityToken = (candidates) => {
+  if (candidates.length >= 3) {
+    const beforePrices = candidates[candidates.length - 3];
+    if (!beforePrices.hasCurrency && beforePrices.decimalPlaces <= 2 && beforePrices.value > 0 && beforePrices.value <= 100) {
+      return beforePrices;
+    }
+  }
+
+  if (candidates.length === 2) {
+    const [maybeQuantity, maybeTotal] = candidates;
+    const wholeOrSimpleDecimal = maybeQuantity.decimalPlaces === 0 || maybeQuantity.value < 10;
+    const dividesTotal = maybeTotal.value >= maybeQuantity.value && maybeTotal.value / maybeQuantity.value <= 250;
+
+    if (!maybeQuantity.hasCurrency && wholeOrSimpleDecimal && maybeQuantity.value > 0 && maybeQuantity.value <= 100 && dividesTotal) {
+      return maybeQuantity;
+    }
+  }
+
+  return null;
+};
+
+const removeSpans = (line, spans) => (
+  spans
+    .filter((span) => span && Number.isFinite(span.index) && Number.isFinite(span.end) && span.end > span.index)
+    .sort((a, b) => b.index - a.index)
+    .reduce((nextLine, span) => `${nextLine.slice(0, span.index)} ${nextLine.slice(span.end)}`, line)
+);
+
+const cleanItemName = (line) => cleanInvoiceLine(line)
+  .replace(/^\s*(?:\d{3,}|[a-z]{1,4}\d{2,}|sku\s*\d+|code\s*\d+)[\s:.-]+/i, '')
+  .replace(/\b(description|qty|quantity|unit price|amount|line total|total|price|item|code|sku|excl|incl|vat)\b/gi, ' ')
+  .replace(/\s+-\s+/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const normalizeInvoiceLines = (text) => {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map(cleanInvoiceLine)
+    .filter((line) => line.length > 0);
+  const merged = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const nextLine = lines[index + 1];
+
+    if (
+      nextLine
+      && !isNonLineItemLine(line)
+      && !isNonLineItemLine(nextLine)
+      && !lineHasPriceCandidate(line)
+      && lineHasPriceCandidate(nextLine)
+      && /[a-z]/i.test(line)
+    ) {
+      merged.push(`${line} ${nextLine}`);
+      index += 1;
+    } else {
+      merged.push(line);
+    }
+  }
+
+  return merged;
+};
 
 const createLineItemFromLine = ({ line, index, vatMode, vatRate }) => {
-  const matches = [...line.matchAll(MONEY_REGEX)]
-    .map((match) => ({
-      value: parseMoney(match[0]),
-      index: match.index || 0,
-      raw: match[0],
-    }))
-    .filter((match) => match.value !== null);
+  if (isNonLineItemLine(line)) return null;
 
-  if (matches.length === 0 || /\b(subtotal|balance|amount due|grand total|total due|vat total)\b/i.test(line)) {
-    return null;
-  }
+  const tokens = extractNumberTokens(line);
+  const explicitQuantity = getExplicitQuantity(line);
+  const codeTokens = tokens.filter((token) => isLeadingCodeToken(token, line));
+  const tokensWithoutCodes = tokens.filter((token) => (
+    !codeTokens.includes(token)
+    && !isTokenInsideSpan(token, explicitQuantity?.span)
+  ));
+  const looseQuantityToken = explicitQuantity ? null : getLooseQuantityToken(tokensWithoutCodes);
+  const priceCandidates = tokensWithoutCodes.filter((token) => token !== looseQuantityToken);
+  const priceTokens = priceCandidates.length >= 2
+    ? priceCandidates.slice(-2)
+    : priceCandidates.slice(-1);
 
-  const lineTotal = matches[matches.length - 1].value;
-  const unitPrice = matches.length >= 2 ? matches[matches.length - 2].value : lineTotal;
-  const textBeforeFirstPrice = line.slice(0, matches[0].index).trim();
-  const unitMatch = textBeforeFirstPrice.match(new RegExp(`(?:^|\\s)(\\d+(?:[.,]\\d+)?)\\s*${UNIT_PATTERN}\\b`, 'i'));
-  const looseUnitMatch = textBeforeFirstPrice.match(UNIT_REGEX);
-  const quantity = unitMatch ? Number.parseFloat(unitMatch[1].replace(',', '.')) : 1;
-  const unit = normalizeInvoiceUnit(unitMatch?.[2] || looseUnitMatch?.[1] || 'each');
-  let name = textBeforeFirstPrice;
+  if (priceTokens.length === 0) return null;
 
-  if (unitMatch) {
-    name = textBeforeFirstPrice.slice(0, unitMatch.index).trim();
-  } else if (looseUnitMatch) {
-    name = textBeforeFirstPrice.slice(0, looseUnitMatch.index).trim();
-  }
-
-  name = removeMoneyValues(name)
-    .replace(/^\d+[\s.-]*/, '')
-    .replace(/\b(qty|quantity|item|code|sku)\b/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const lineTotal = priceTokens[priceTokens.length - 1].value;
+  const quantity = explicitQuantity?.quantity || looseQuantityToken?.value || 1;
+  const unit = explicitQuantity?.unit || 'each';
+  const unitPrice = priceTokens.length >= 2
+    ? priceTokens[0].value
+    : quantity > 1
+      ? lineTotal / quantity
+      : lineTotal;
+  const removeNameSpans = [
+    ...priceTokens.map((token) => ({ index: token.index, end: token.end })),
+    ...codeTokens.map((token) => ({ index: token.index, end: token.end })),
+    explicitQuantity?.span,
+    looseQuantityToken ? { index: looseQuantityToken.index, end: looseQuantityToken.end } : null,
+  ];
+  const name = cleanItemName(removeSpans(line, removeNameSpans));
 
   if (!name || name.length < 2 || /^\d+$/.test(name)) {
     return null;
@@ -197,6 +432,11 @@ const createLineItemFromLine = ({ line, index, vatMode, vatRate }) => {
   const vat = calculateVatValues({ lineTotal, unitPrice, vatMode, vatRate });
   const base = getBaseUnitInfo(quantity, unit);
   const costPerBaseUnitExVAT = base.quantity > 0 ? roundMoney(vat.priceExVAT / base.quantity) : 0;
+  const confidence = roundMoney(Math.min(0.96, 0.48
+    + (priceTokens.length >= 2 ? 0.22 : 0.1)
+    + (explicitQuantity ? 0.12 : 0)
+    + (looseQuantityToken ? 0.06 : 0)
+    + (name.length > 3 ? 0.1 : 0)));
 
   return {
     id: `line-${index}-${createInvoiceKey(name) || Math.random().toString(36).slice(2)}`,
@@ -216,17 +456,14 @@ const createLineItemFromLine = ({ line, index, vatMode, vatRate }) => {
     baseUnit: base.unit,
     costPerBaseUnitExVAT,
     rawLine: line,
-    confidence: matches.length >= 2 ? 0.82 : 0.62,
+    confidence,
   };
 };
 
 export const parseInvoiceText = (text, { vatRate = DEFAULT_VAT_RATE } = {}) => {
   const rawText = String(text || '');
   const vatMode = detectVatMode(rawText);
-  const lines = rawText
-    .split(/\r?\n/)
-    .map((line) => line.replace(/\s+/g, ' ').trim())
-    .filter((line) => line.length > 0);
+  const lines = normalizeInvoiceLines(rawText);
   const items = lines
     .map((line, index) => createLineItemFromLine({ line, index, vatMode, vatRate }))
     .filter(Boolean);

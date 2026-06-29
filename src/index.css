@@ -1751,12 +1751,38 @@ textarea.input {
   cursor: pointer;
 }
 
+.invoice-debug-body {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
 .invoice-debug-text {
+  width: 100%;
+  min-height: 220px;
   max-height: 260px;
-  margin: 14px 0 0;
   overflow: auto;
+  resize: vertical;
   white-space: pre-wrap;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  line-height: 1.5;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  box-shadow: var(--inner-highlight);
+  padding: 12px;
+}
+
+.invoice-debug-text::placeholder {
   color: var(--muted);
+}
+
+.invoice-debug-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
   font-size: 0.78rem;
 }
 
