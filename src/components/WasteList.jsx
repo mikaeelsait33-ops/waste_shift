@@ -66,7 +66,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
 
   const itemMatchesCategory = (item, category) => {
     if (category === 'All') return true;
-    if (item.isRecipe) return item.ingredients.some((ing) => ing.category === category);
+    if (item.isRecipe) return Array.isArray(item.ingredients) && item.ingredients.some((ing) => ing.category === category);
     return item.category === category;
   };
 
@@ -90,6 +90,8 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
       item?.notes,
       getWasteClassificationMeta(getItemWasteClassification(item)).label,
       getWasteClassificationMeta(getItemWasteClassification(item)).shortLabel,
+      ...(Array.isArray(item?.wastedComponents) ? item.wastedComponents.map((component) => component.name) : []),
+      ...(Array.isArray(item?.componentsWasted) ? item.componentsWasted : []),
       ...(Array.isArray(item?.ingredients) ? item.ingredients.map((ingredient) => ingredient.name) : []),
     ];
 
@@ -172,6 +174,8 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
       'Date',
       'Time',
       'Item',
+      'Partial Waste',
+      'Wasted Components',
       'Quantity',
       'Unit',
       'Measured Quantity',
@@ -196,6 +200,12 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
       item.date,
       item.time || '',
       item.name,
+      item.partialWaste ? 'Yes' : 'No',
+      Array.isArray(item.wastedComponents)
+        ? item.wastedComponents.map((component) => component.name).join('; ')
+        : Array.isArray(item.componentsWasted)
+          ? item.componentsWasted.join('; ')
+          : '',
       item.quantity,
       item.unit || '',
       item.measuredQuantity || '',
@@ -377,6 +387,11 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
             const revenueLost = getEntryPotentialRevenueLost(item);
             const grossProfitLost = getEntryGrossProfitLost(item);
             const classificationMeta = getWasteClassificationMeta(getItemWasteClassification(item));
+            const wastedComponentNames = Array.isArray(item.wastedComponents)
+              ? item.wastedComponents.map((component) => component.name).filter(Boolean)
+              : Array.isArray(item.componentsWasted)
+                ? item.componentsWasted.filter(Boolean)
+                : [];
 
             return (
               <li key={item.id} className={`log-card ${item.isRecipe ? 'is-recipe' : 'is-single'}`}>
@@ -395,8 +410,18 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
                     {item.costStatus === 'needs_item_price' && (
                       <span className="badge is-red cost-status-badge">Needs price</span>
                     )}
+                    {item.partialWaste && (
+                      <span className="badge is-green cost-status-badge">
+                        Partial: {item.wastedComponentCount || wastedComponentNames.length}/{item.totalComponentCount || item.ingredients?.length || '?'}
+                      </span>
+                    )}
                     {item.notes && (
                       <p className="log-note">{item.notes}</p>
+                    )}
+                    {wastedComponentNames.length > 0 && (
+                      <p className="log-note">
+                        Components wasted: {wastedComponentNames.join(', ')}
+                      </p>
                     )}
                   </div>
 
@@ -441,7 +466,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
 
                 {item.isRecipe && item.ingredients && (
                   <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border-soft)' }}>
-                    <h4 className="breakdown-title">Ingredient breakdown</h4>
+                    <h4 className="breakdown-title">{item.partialWaste ? 'Wasted components' : 'Ingredient breakdown'}</h4>
                     <div className="ingredient-list">
                       {item.ingredients.map((ing, idx) => (
                         <div key={`${ing.name}-${idx}`} className="ingredient-card item-row">

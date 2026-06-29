@@ -51,6 +51,26 @@ assert.equal(financials.grossProfitLost, 170);
 assert.equal(financials.foodCostPercentage, 29.17);
 assert.equal(financials.costStatus, 'calculated');
 
+const partialFinancials = calculateMenuWasteFinancials({
+  recipe,
+  menuItem: { name: 'Chicken Burger', menuPrice: 120 },
+  quantity: 2,
+  selectedComponentKeys: [
+    breakdown[1].componentKey,
+    breakdown[3].componentKey,
+  ],
+});
+
+assert.equal(partialFinancials.foodCostLost, 56);
+assert.equal(partialFinancials.fullFoodCostLost, 70);
+assert.equal(partialFinancials.potentialRevenueLost, 192);
+assert.equal(partialFinancials.partialWaste, true);
+assert.equal(partialFinancials.allComponentsSelected, false);
+assert.deepEqual(
+  partialFinancials.selectedComponents.map((component) => component.name),
+  ['Chicken patty', 'Sauce']
+);
+
 const unknownCostFinancials = calculateMenuWasteFinancials({
   recipe: { name: 'Toast', ingredients: [{ name: 'Bread', quantity: '2', cost: 0 }] },
   menuItem: { name: 'Toast', menuPrice: 80 },

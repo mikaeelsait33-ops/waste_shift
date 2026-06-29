@@ -1067,6 +1067,59 @@ textarea.input {
   gap: 8px;
 }
 
+.component-checklist {
+  display: grid;
+  gap: 8px;
+}
+
+.component-checklist__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 2px;
+}
+
+.component-option {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 50px;
+  padding: 10px 12px;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  box-shadow: var(--inner-highlight);
+  cursor: pointer;
+}
+
+.component-option.is-selected {
+  color: var(--text);
+  border-color: rgba(10, 132, 255, 0.34);
+  background: rgba(10, 132, 255, 0.1);
+}
+
+.component-option input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.component-option strong,
+.component-option small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.component-option small {
+  margin-top: 2px;
+  color: var(--muted-2);
+  font-size: 0.75rem;
+}
+
 .staff-card,
 .ingredient-card,
 .inventory-card,
@@ -1713,6 +1766,21 @@ textarea.input {
 
   .section-rings-header {
     flex-direction: column;
+  }
+
+  .component-checklist__actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .component-option {
+    grid-template-columns: 20px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .component-option .price {
+    grid-column: 2;
+    justify-self: start;
   }
 
   .panel-body {

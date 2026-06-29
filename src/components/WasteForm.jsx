@@ -5,6 +5,7 @@ import {
   sanitizeItemPriceCatalog,
 } from '../utils/itemPriceCatalog';
 import {
+  buildRecipeIngredientBreakdown,
   DEFAULT_WASTE_CLASSIFICATION,
   WASTE_CATEGORY_OPTIONS,
   WASTE_CLASSIFICATION_OPTIONS,
@@ -188,14 +189,28 @@ function WasteForm({
   const safePortionProfiles = portionProfiles && typeof portionProfiles === 'object' ? portionProfiles : {};
   const safeItemPriceCatalog = useMemo(() => sanitizeItemPriceCatalog(itemPriceCatalog), [itemPriceCatalog]);
   const [selectedRecipeKey, setSelectedRecipeKey] = useState(safeMenuItems[0]?.key || '');
+  const [selectedComponentKeys, setSelectedComponentKeys] = useState([]);
   const selectedMenuItem = safeMenuItems.find((item) => item.key === selectedRecipeKey);
   const selectedRecipe = recipes[selectedRecipeKey];
+  const quantityValue = parseFloat(quantity);
   const selectedRecipeFinancials = calculateMenuWasteFinancials({
     recipe: selectedRecipe,
     menuItem: selectedMenuItem,
     quantity,
     itemPriceCatalog: safeItemPriceCatalog,
+    selectedComponentKeys,
   });
+  const allRecipeComponents = useMemo(() => (
+    buildRecipeIngredientBreakdown(selectedRecipe, quantityValue || 1, safeItemPriceCatalog)
+  ), [quantityValue, safeItemPriceCatalog, selectedRecipe]);
+  const recipeComponentSignature = allRecipeComponents.map((component) => component.componentKey).join('|');
+  const allRecipeComponentKeys = useMemo(() => (
+    recipeComponentSignature ? recipeComponentSignature.split('|') : []
+  ), [recipeComponentSignature]);
+  const selectedRecipeComponentCount = selectedComponentKeys.filter((key) => allRecipeComponentKeys.includes(key)).length;
+  const componentSelectionIsPartial = allRecipeComponents.length > 0
+    && selectedRecipeComponentCount > 0
+    && selectedRecipeComponentCount < allRecipeComponents.length;
   const selectedRecipeTotal = getRecipeIngredientTotal(selectedRecipe?.ingredients, safeItemPriceCatalog);
   const selectedMenuItemPrice = getMenuSellingPrice(selectedMenuItem, selectedRecipe);
   const activeStaffMember = safeStaffList.find((member) => member.id === selectedStaffId);
@@ -223,7 +238,6 @@ function WasteForm({
       name: name.trim(),
     };
   const activePortionProfile = formType === 'single' && activeWasteItem.key ? safePortionProfiles[activeWasteItem.key] : null;
-  const quantityValue = parseFloat(quantity);
   const portionAmountValue = parseFloat(portionAmount);
   const measuredAmount = formType === 'single'
     && unit === 'portion'
@@ -314,6 +328,11 @@ function WasteForm({
       ? `${formatNumber(quantityValue)} portions = ${formatNumber(measuredAmount)} ${portionUnit}`
       : 'Portion size pending'
     : formatSimpleQuantityLabel(quantityValue, unit);
+  const componentPreviewLabel = formType === 'recipe' && allRecipeComponents.length > 0
+    ? componentSelectionIsPartial
+      ? `${selectedRecipeComponentCount} of ${allRecipeComponents.length} components`
+      : 'Full item'
+    : '';
 
   const applyProfile = (profile) => {
     if (!profile) return;
@@ -341,6 +360,26 @@ function WasteForm({
     setFormMessage(`Loaded recent values for ${profile.name}.`);
   };
 
+  const selectAllRecipeComponents = () => {
+    setSelectedComponentKeys(allRecipeComponentKeys);
+  };
+
+  const toggleRecipeComponent = (componentKey) => {
+    setSelectedComponentKeys((currentKeys) => {
+      const safeCurrentKeys = currentKeys.filter((key) => allRecipeComponentKeys.includes(key));
+
+      if (safeCurrentKeys.includes(componentKey)) {
+        if (safeCurrentKeys.length <= 1) {
+          return safeCurrentKeys;
+        }
+
+        return safeCurrentKeys.filter((key) => key !== componentKey);
+      }
+
+      return [...safeCurrentKeys, componentKey];
+    });
+  };
+
   useEffect(() => {
     const selectedMenuItemExists = safeMenuItems.some((item) => item.key === selectedRecipeKey);
 
@@ -360,6 +399,14 @@ function WasteForm({
       setSelectedRecipeKey(filteredMenuItems[0].key);
     }
   }, [filteredMenuItems, formType, menuSearchValue, selectedRecipeKey]);
+
+  useEffect(() => {
+    if (formType !== 'recipe') {
+      return;
+    }
+
+    setSelectedComponentKeys(allRecipeComponentKeys);
+  }, [allRecipeComponentKeys, formType, recipeComponentSignature, selectedRecipeKey]);
 
   useEffect(() => {
     if (activeStaffId && activeStaffId !== selectedStaffId) {
@@ -514,6 +561,11 @@ function WasteForm({
       return;
     }
 
+    if (formType === 'recipe' && allRecipeComponents.length > 0 && selectedRecipeComponentCount === 0) {
+      setFormMessage('Choose at least one wasted component.');
+      return;
+    }
+
     const qtyMultiplier = parseFloat(quantity);
     if (!Number.isFinite(qtyMultiplier) || qtyMultiplier <= 0) {
       setFormMessage('Enter a quantity greater than zero.');
@@ -624,6 +676,7 @@ function WasteForm({
         menuItem: activeMenuItem,
         quantity: qtyMultiplier,
         itemPriceCatalog: safeItemPriceCatalog,
+        selectedComponentKeys,
       });
 
       finalEntry = {
@@ -647,6 +700,14 @@ function WasteForm({
         isRecipe: Boolean(activeRecipe),
         recipeKey: selectedRecipeKey,
         ingredients: financials.ingredients,
+        partialWaste: financials.partialWaste,
+        allComponentsSelected: financials.allComponentsSelected,
+        totalComponentCount: financials.allComponents.length,
+        wastedComponentCount: financials.selectedComponents.length,
+        totalMenuItemCost: financials.fullFoodCostLost,
+        selectedComponentKeys: financials.selectedComponents.map((component) => component.key),
+        wastedComponents: financials.selectedComponents,
+        componentsWasted: financials.selectedComponents.map((component) => component.name),
       };
     }
 
@@ -670,6 +731,8 @@ function WasteForm({
     if (formType === 'single') {
       setPortionAmount('');
       setPortionUnit('g');
+    } else {
+      setSelectedComponentKeys(allRecipeComponentKeys);
     }
     setReason('Expired');
     setCustomReason('');
@@ -874,11 +937,21 @@ function WasteForm({
         {formType === 'recipe' && selectedRecipe && (
           <div className="smart-panel">
             <div className="smart-panel__header">
-              <span className="breakdown-title">Recipe breakdown</span>
-              <span className="badge">{Array.isArray(selectedRecipe.ingredients) ? selectedRecipe.ingredients.length : 0} ingredients</span>
+              <span className="breakdown-title">Wasted components</span>
+              <span className="badge">
+                {allRecipeComponents.length > 0
+                  ? `${selectedRecipeComponentCount || allRecipeComponents.length}/${allRecipeComponents.length} selected`
+                  : 'No components'}
+              </span>
             </div>
             <div className="import-summary-grid" style={{ marginBottom: '12px' }}>
               <span className="badge">Food cost R{selectedRecipeFinancials.foodCostLost.toFixed(2)}</span>
+              {componentSelectionIsPartial && (
+                <span className="badge is-green">Partial waste</span>
+              )}
+              {selectedRecipeFinancials.fullFoodCostLost > selectedRecipeFinancials.foodCostLost && (
+                <span className="badge">Full item R{selectedRecipeFinancials.fullFoodCostLost.toFixed(2)}</span>
+              )}
               <span className={selectedMenuItemPrice > 0 ? 'badge is-green' : 'badge'}>Revenue R{selectedRecipeFinancials.potentialRevenueLost.toFixed(2)}</span>
               <span className={selectedRecipeFinancials.costStatus === 'calculated' ? 'badge is-green' : 'badge is-red'}>
                 {selectedRecipeFinancials.costStatus === 'calculated'
@@ -889,22 +962,39 @@ function WasteForm({
                 <span className="badge">{selectedRecipeFinancials.foodCostPercentage.toFixed(1)}% food cost</span>
               )}
             </div>
-            {Array.isArray(selectedRecipe.ingredients) && selectedRecipe.ingredients.length > 0 ? (
-              <div className="ingredient-list">
-                {selectedRecipeFinancials.ingredients.slice(0, 5).map((ingredient, index) => (
-                  <div key={`${ingredient.name}-${index}`} className="ingredient-card item-row">
-                    <span className="small-text">
-                      {ingredient.name}
-                      {ingredient.quantity && <span className="badge">{ingredient.quantity}</span>}
-                      <span className="badge">{ingredient.category || 'Other'}</span>
-                    </span>
-                    <span className="price">R{(Number(ingredient.cost) || 0).toFixed(2)}</span>
-                  </div>
-                ))}
+
+            {allRecipeComponents.length > 0 ? (
+              <div className="component-checklist" aria-label="Recipe components">
+                <div className="component-checklist__actions">
+                  <span className="small-text">Select only the parts that were wasted.</span>
+                  <button type="button" onClick={selectAllRecipeComponents} className="ghost-button compact-action">
+                    Select all
+                  </button>
+                </div>
+                {allRecipeComponents.map((component) => {
+                  const isSelected = selectedComponentKeys.includes(component.componentKey);
+                  const cannotUncheck = isSelected && selectedRecipeComponentCount <= 1;
+
+                  return (
+                    <label key={component.componentKey} className={`component-option${isSelected ? ' is-selected' : ''}`}>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleRecipeComponent(component.componentKey)}
+                        disabled={cannotUncheck}
+                      />
+                      <span>
+                        <strong>{component.name}</strong>
+                        <small>{component.quantity || '1 each'}{component.category ? ` - ${component.category}` : ''}</small>
+                      </span>
+                      <span className="price">R{(Number(component.cost) || 0).toFixed(2)}</span>
+                    </label>
+                  );
+                })}
               </div>
             ) : (
               <div className="muted-box">
-                <p className="small-text" style={{ margin: 0 }}>No ingredient breakdown linked.</p>
+                <p className="small-text" style={{ margin: 0 }}>No component breakdown linked.</p>
               </div>
             )}
           </div>
@@ -1116,6 +1206,7 @@ function WasteForm({
           <div className="import-summary-grid">
             <span className="badge">{previewRevenueLabel}</span>
             {formType === 'recipe' && <span className="badge">{previewProfitLabel}</span>}
+            {componentPreviewLabel && <span className="badge">{componentPreviewLabel}</span>}
             {formType === 'recipe' && selectedRecipeTotal > 0 && (
               <span className="badge">Base cost R{selectedRecipeTotal.toFixed(2)}</span>
             )}

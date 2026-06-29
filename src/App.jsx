@@ -26,7 +26,17 @@ import {
   sanitizePinRecord,
   verifyPin,
 } from './utils/pinAuth';
-import { createInventoryMovementsFromEntry, getEntryFoodCostLost } from './utils/wasteCalculations';
+import {
+  buildRecipeIngredientBreakdown,
+  createInventoryMovementsFromEntry,
+  getEntryFoodCostLost,
+  roundCurrency,
+} from './utils/wasteCalculations';
+import {
+  loadFirestoreMenuItems,
+  saveFirestoreMenuItem,
+  saveFirestoreWasteEntry,
+} from './services/firestoreMenuItems';
 
 // Seed recipes from the bundled menu catalog.
 const DEFAULT_RECIPES = defaultRecipes;
@@ -359,6 +369,33 @@ const mergeMenuItems = (baseMenuItems, customMenuItems, recipes) => {
   return [...mergedBaseItems, ...customOnlyItems];
 };
 
+const createRecipeMapFromFirestoreMenuItems = (firestoreMenuItems) => (
+  (Array.isArray(firestoreMenuItems) ? firestoreMenuItems : []).reduce((acc, item) => {
+    const name = String(item?.name || '').trim();
+    const key = item?.key || createMenuItemKey(name);
+
+    if (!name || !key) {
+      return acc;
+    }
+
+    acc[key] = {
+      name,
+      ...(item.menuPrice !== null && item.menuPrice !== undefined ? { menuPrice: item.menuPrice } : {}),
+      totalCost: item.totalCost || 0,
+      firestoreId: item.firestoreId || key,
+      ingredients: (Array.isArray(item.components) ? item.components : []).map((component, index) => ({
+        componentKey: component.key || createMenuItemKey(`${component.name}-${index}`),
+        name: component.name,
+        quantity: '1 each',
+        cost: roundCurrency(component.cost),
+        category: 'Other',
+      })),
+    };
+
+    return acc;
+  }, {})
+);
+
 const createStaffMembersFromCsv = (csvText) => {
   const rows = parseCsvRows(csvText);
   const [headers = [], ...dataRows] = rows;
@@ -673,6 +710,8 @@ function App() {
     }
   });
 
+  const [firestoreMenuItems, setFirestoreMenuItems] = useState([]);
+
   const [portionProfiles, setPortionProfiles] = useState(() => {
     try {
       const savedProfiles = localStorage.getItem('portionProfiles');
@@ -732,10 +771,68 @@ function App() {
     markStaffFreshStartComplete();
   }, []);
 
-  const baseMenuItems = useMemo(() => createMenuItemsFromCsv(menuItemsCsv, recipes), [recipes]);
+  useEffect(() => {
+    let isCancelled = false;
+
+    const loadMenuItems = async () => {
+      try {
+        const loadedMenuItems = await loadFirestoreMenuItems();
+
+        if (!isCancelled && loadedMenuItems.length > 0) {
+          setFirestoreMenuItems(loadedMenuItems);
+        }
+      } catch (error) {
+        console.warn('Firestore menu items unavailable. Using local menu data.', error);
+      }
+    };
+
+    loadMenuItems();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  const firestoreRecipeMap = useMemo(() => (
+    createRecipeMapFromFirestoreMenuItems(firestoreMenuItems)
+  ), [firestoreMenuItems]);
+  const effectiveRecipes = useMemo(() => ({
+    ...recipes,
+    ...firestoreRecipeMap,
+  }), [recipes, firestoreRecipeMap]);
+  const firestoreMenuItemCatalogRows = useMemo(() => (
+    firestoreMenuItems.map((item) => {
+      const key = item.key || createMenuItemKey(item.name);
+      const recipe = effectiveRecipes[key];
+
+      return {
+        key,
+        name: item.name,
+        menuPrice: item.menuPrice,
+        totalCost: item.totalCost,
+        ingredientCount: Array.isArray(recipe?.ingredients) ? recipe.ingredients.length : 0,
+        firestoreId: item.firestoreId,
+      };
+    })
+  ), [effectiveRecipes, firestoreMenuItems]);
+  const baseMenuItems = useMemo(() => {
+    const mergedByKey = new Map();
+
+    createMenuItemsFromCsv(menuItemsCsv, effectiveRecipes).forEach((item) => {
+      mergedByKey.set(item.key, item);
+    });
+
+    firestoreMenuItemCatalogRows.forEach((item) => {
+      if (item.key) {
+        mergedByKey.set(item.key, item);
+      }
+    });
+
+    return [...mergedByKey.values()];
+  }, [effectiveRecipes, firestoreMenuItemCatalogRows]);
   const menuItems = useMemo(() => (
-    mergeMenuItems(baseMenuItems, customMenuItems, recipes)
-  ), [baseMenuItems, customMenuItems, recipes]);
+    mergeMenuItems(baseMenuItems, customMenuItems, effectiveRecipes)
+  ), [baseMenuItems, customMenuItems, effectiveRecipes]);
   const baseStaffList = useMemo(() => createStaffMembersFromCsv(staffMembersCsv), []);
   const staffList = useMemo(() => (
     mergeStaffMembers(baseStaffList, customStaffList)
@@ -1385,6 +1482,9 @@ function App() {
       ...prevMovements,
       ...createInventoryMovementsFromEntry(newEntry),
     ]);
+    saveFirestoreWasteEntry(newEntry).catch((error) => {
+      console.warn('Could not save waste entry to Firestore.', error);
+    });
     setAuditLog(prevLog => [
       createAuditLogEntry({
         action: 'Waste entry created',
@@ -1730,6 +1830,22 @@ function App() {
       ...prev,
       [key]: recipeObject
     }));
+
+    const components = buildRecipeIngredientBreakdown(recipeObject, 1, itemPriceCatalog)
+      .map((ingredient) => ({
+        key: ingredient.componentKey,
+        name: ingredient.name,
+        cost: Number(ingredient.cost) || 0,
+      }));
+    saveFirestoreMenuItem({
+      key,
+      name: recipeObject?.name || key,
+      menuPrice: recipeObject?.menuPrice,
+      totalCost: components.reduce((sum, component) => sum + component.cost, 0),
+      components,
+    }).catch((error) => {
+      console.warn('Could not save menu item to Firestore.', error);
+    });
   };
 
   const handleUpsertMenuItem = ({ key: requestedKey, name, price }) => {
@@ -1919,7 +2035,7 @@ function App() {
           <WasteForm
             onAddEntry={handleAddEntry}
             wasteItems={wasteItems}
-            recipes={recipes}
+            recipes={effectiveRecipes}
             menuItems={menuItems}
             staffList={staffList}
             portionProfiles={portionProfiles}
@@ -1958,7 +2074,7 @@ function App() {
             budget={budget}
             settings={settings}
             wasteItems={wasteItems}
-            recipes={recipes}
+            recipes={effectiveRecipes}
             staffList={staffList}
             customStaffList={customStaffList}
             menuItems={menuItems}

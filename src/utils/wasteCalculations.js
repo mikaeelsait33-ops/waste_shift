@@ -67,6 +67,16 @@ export const roundCurrency = (value) => {
   return Number.isFinite(numericValue) ? Math.round(numericValue * 100) / 100 : 0;
 };
 
+export const createComponentKey = (component, index = 0) => {
+  const name = String(component?.name || component || '').trim().toLowerCase();
+  const normalizedName = name
+    .replace(/&/g, ' ')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  return `${normalizedName || 'component'}_${index}`;
+};
+
 export const parsePositiveNumber = (value) => {
   const numericValue = Number.parseFloat(String(value ?? '').replace(/[^0-9.-]/g, ''));
   return Number.isFinite(numericValue) && numericValue > 0 ? numericValue : 0;
@@ -146,11 +156,12 @@ export const buildRecipeIngredientBreakdown = (recipe, quantity, itemPriceCatalo
   const multiplier = parsePositiveNumber(quantity) || 1;
   const ingredients = Array.isArray(recipe?.ingredients) ? recipe.ingredients : [];
 
-  return ingredients.map((ingredient) => {
+  return ingredients.map((ingredient, index) => {
     const resolvedCost = calculateRecipeIngredientCost({ ingredient, itemPriceCatalog, multiplier });
 
     return {
       ...ingredient,
+      componentKey: ingredient?.componentKey || ingredient?.key || createComponentKey(ingredient, index),
       baseQuantity: ingredient?.quantity || '',
       baseCost: resolvedCost.baseCost,
       quantity: scaleQuantityLabel(ingredient?.quantity, multiplier),
@@ -163,30 +174,60 @@ export const buildRecipeIngredientBreakdown = (recipe, quantity, itemPriceCatalo
   });
 };
 
-export const calculateMenuWasteFinancials = ({ recipe, menuItem, quantity, itemPriceCatalog = {} }) => {
+export const calculateMenuWasteFinancials = ({
+  recipe,
+  menuItem,
+  quantity,
+  itemPriceCatalog = {},
+  selectedComponentKeys,
+}) => {
   const itemCount = parsePositiveNumber(quantity);
+  const fullIngredients = buildRecipeIngredientBreakdown(recipe, itemCount || 1, itemPriceCatalog);
+  const allComponentKeys = fullIngredients.map((ingredient) => ingredient.componentKey);
+  const selectedKeySet = Array.isArray(selectedComponentKeys) && selectedComponentKeys.length > 0
+    ? new Set(selectedComponentKeys)
+    : new Set(allComponentKeys);
+  const selectedIngredients = fullIngredients.filter((ingredient) => selectedKeySet.has(ingredient.componentKey));
   const ingredientCostPerItem = getRecipeIngredientTotal(recipe?.ingredients, itemPriceCatalog);
+  const selectedCostPerItem = itemCount > 0
+    ? roundCurrency(selectedIngredients.reduce((sum, ingredient) => sum + (Number(ingredient.cost) || 0), 0) / itemCount)
+    : 0;
   const sellingPrice = getMenuSellingPrice(menuItem, recipe);
-  const foodCostLost = roundCurrency(ingredientCostPerItem * itemCount);
-  const potentialRevenueLost = roundCurrency(sellingPrice * itemCount);
-  const hasIngredientCosts = ingredientCostPerItem > 0;
+  const fullFoodCostLost = roundCurrency(ingredientCostPerItem * itemCount);
+  const foodCostLost = roundCurrency(selectedIngredients.reduce((sum, ingredient) => sum + (Number(ingredient.cost) || 0), 0));
+  const hasIngredientCosts = selectedIngredients.length > 0 && selectedIngredients.every((ingredient) => Number(ingredient.cost) > 0);
+  const allComponentsSelected = selectedIngredients.length === fullIngredients.length;
+  const costRatio = fullFoodCostLost > 0 ? foodCostLost / fullFoodCostLost : allComponentsSelected ? 1 : 0;
+  const potentialRevenueLost = roundCurrency((sellingPrice * itemCount) * costRatio);
   const grossProfitLost = hasIngredientCosts
     ? roundCurrency(potentialRevenueLost - foodCostLost)
     : 0;
-  const foodCostPercentage = hasIngredientCosts && sellingPrice > 0
-    ? roundCurrency((ingredientCostPerItem / sellingPrice) * 100)
+  const foodCostPercentage = hasIngredientCosts && sellingPrice > 0 && costRatio > 0
+    ? roundCurrency((selectedCostPerItem / (sellingPrice * costRatio || sellingPrice)) * 100)
     : null;
 
   return {
     itemCount,
     ingredientCostPerItem,
+    selectedCostPerItem,
     sellingPrice,
+    fullFoodCostLost,
     foodCostLost,
     potentialRevenueLost,
     grossProfitLost,
     foodCostPercentage,
     costStatus: hasIngredientCosts ? 'calculated' : 'needs_ingredient_costs',
-    ingredients: buildRecipeIngredientBreakdown(recipe, itemCount, itemPriceCatalog),
+    ingredients: selectedIngredients,
+    allComponents: fullIngredients,
+    selectedComponents: selectedIngredients.map((ingredient) => ({
+      key: ingredient.componentKey,
+      name: ingredient.name,
+      cost: Number(ingredient.cost) || 0,
+      quantity: ingredient.quantity || '',
+      category: ingredient.category || 'Other',
+    })),
+    allComponentsSelected,
+    partialWaste: fullIngredients.length > 0 && !allComponentsSelected,
   };
 };
 
