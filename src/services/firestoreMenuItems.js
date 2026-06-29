@@ -17,7 +17,10 @@ const hasFirebaseConfig = Boolean(
 );
 
 let firestoreInstance = null;
+let firebaseAppInstance = null;
+let anonymousAuthPromise = null;
 let firestoreApiPromise = null;
+let firebaseAuthPromise = null;
 
 const getFirestoreApi = async () => {
   if (!firestoreApiPromise) {
@@ -40,6 +43,17 @@ const getFirestoreApi = async () => {
   return firestoreApiPromise;
 };
 
+const getFirebaseAuthApi = async () => {
+  if (!firebaseAuthPromise) {
+    firebaseAuthPromise = import('firebase/auth').then((auth) => ({
+      getAuth: auth.getAuth,
+      signInAnonymously: auth.signInAnonymously,
+    }));
+  }
+
+  return firebaseAuthPromise;
+};
+
 export const firestoreIsConfigured = () => hasFirebaseConfig;
 
 export const getFirestoreDb = async () => {
@@ -52,9 +66,34 @@ export const getFirestoreDb = async () => {
   }
 
   const { getApps, initializeApp, getFirestore } = await getFirestoreApi();
-  const app = getApps().length > 0 ? getApps()[0] : initializeApp(FIREBASE_CONFIG);
-  firestoreInstance = getFirestore(app);
+  firebaseAppInstance = getApps().length > 0 ? getApps()[0] : initializeApp(FIREBASE_CONFIG);
+  firestoreInstance = getFirestore(firebaseAppInstance);
   return firestoreInstance;
+};
+
+export const ensureFirebaseAuth = async () => {
+  if (!hasFirebaseConfig) {
+    return null;
+  }
+
+  if (anonymousAuthPromise) {
+    return anonymousAuthPromise;
+  }
+
+  anonymousAuthPromise = (async () => {
+    await getFirestoreDb();
+    const { getAuth, signInAnonymously } = await getFirebaseAuthApi();
+    const auth = getAuth(firebaseAppInstance);
+
+    if (auth.currentUser) {
+      return auth.currentUser;
+    }
+
+    const credential = await signInAnonymously(auth);
+    return credential.user;
+  })();
+
+  return anonymousAuthPromise;
 };
 
 const sanitizeComponent = (component, index) => {
@@ -106,6 +145,7 @@ export const loadFirestoreMenuItems = async () => {
     return [];
   }
 
+  await ensureFirebaseAuth();
   const { collection, getDocs } = await getFirestoreApi();
   const snapshot = await getDocs(collection(db, 'menuItems'));
   return snapshot.docs.map(normalizeFirestoreMenuItem).filter(Boolean);
@@ -127,6 +167,7 @@ export const saveFirestoreMenuItem = async ({ key, name, totalCost, menuPrice = 
     ? roundCurrency(Number(totalCost))
     : roundCurrency(safeComponents.reduce((sum, component) => sum + component.cost, 0));
 
+  await ensureFirebaseAuth();
   const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
   await setDoc(doc(db, 'menuItems', safeKey), {
     key: safeKey,
@@ -147,6 +188,7 @@ export const saveFirestoreWasteEntry = async (entry) => {
     return { ok: false, skipped: true };
   }
 
+  await ensureFirebaseAuth();
   const { addDoc, collection, serverTimestamp } = await getFirestoreApi();
   await addDoc(collection(db, 'wasteEntries'), {
     ...entry,

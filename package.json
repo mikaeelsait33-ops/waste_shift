@@ -9,7 +9,10 @@
     "lint": "oxlint",
     "test": "node scripts/waste-calculations.test.mjs",
     "seed:database": "node scripts/seed-vercel-database.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "firebase:emulators": "npx firebase-tools emulators:start --only firestore,hosting",
+    "firebase:deploy:firestore": "npx firebase-tools deploy --only firestore",
+    "firebase:deploy:hosting": "npm run build && npx firebase-tools deploy --only hosting"
   },
   "dependencies": {
     "@vercel/blob": "^2.5.0",

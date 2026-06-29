@@ -1,0 +1,27 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    match /menuItems/{menuItemId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && request.resource.data.name is string
+        && request.resource.data.totalCost is number
+        && request.resource.data.components is list;
+      allow delete: if false;
+    }
+
+    match /wasteEntries/{entryId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.name is string
+        && request.resource.data.reason is string
+        && request.resource.data.foodCostLost is number;
+      allow update, delete: if false;
+    }
+  }
+}
