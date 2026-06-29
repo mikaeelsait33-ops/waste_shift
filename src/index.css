@@ -1786,6 +1786,27 @@ textarea.input {
   font-size: 0.78rem;
 }
 
+.invoice-manual-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) 90px 120px 130px 130px;
+  gap: 10px;
+  align-items: end;
+}
+
+.invoice-raw-row-panel {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.invoice-raw-row-panel summary {
+  cursor: pointer;
+}
+
+.invoice-raw-rows-text {
+  min-height: 120px;
+}
+
 .invoice-edit-table {
   display: grid;
   gap: 8px;
@@ -2022,6 +2043,10 @@ textarea.input {
     min-width: 0;
     gap: 12px;
     padding: 14px;
+  }
+
+  .invoice-manual-grid {
+    grid-template-columns: 1fr;
   }
 
   .invoice-field-label {

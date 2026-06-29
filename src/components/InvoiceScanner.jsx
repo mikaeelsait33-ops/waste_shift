@@ -5,6 +5,7 @@ import {
   calculateRecipeCostImpact,
   calculateVatValues,
   createInvoiceKey,
+  getBaseUnitInfo,
   getIngredientMatch,
   parseInvoiceText,
   roundMoney,
@@ -25,6 +26,13 @@ const UNIT_OPTIONS = ['kg', 'g', 'L', 'ml', 'each', 'case', 'doz', 'pkt', 'bag',
 
 const formatMoney = (value) => `R${Number(value || 0).toFixed(2)}`;
 const formatPercent = (value) => `${Number(value || 0).toFixed(1)}%`;
+const EMPTY_MANUAL_LINE = {
+  itemName: '',
+  quantity: '1',
+  unit: 'kg',
+  unitPrice: '',
+  lineTotal: '',
+};
 
 const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -186,6 +194,8 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
   const [vatRate, setVatRate] = useState(DEFAULT_VAT_RATE);
   const [vatMode, setVatMode] = useState('inclusive');
   const [lineItems, setLineItems] = useState([]);
+  const [manualLineDraft, setManualLineDraft] = useState(EMPTY_MANUAL_LINE);
+  const [rawRowsDraft, setRawRowsDraft] = useState('');
   const [newDrawerLineId, setNewDrawerLineId] = useState('');
   const [newIngredientDrafts, setNewIngredientDrafts] = useState({});
   const [confirmedInvoice, setConfirmedInvoice] = useState(null);
@@ -275,6 +285,57 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
     onInvoiceSaved?.();
   };
 
+  const applyLineCalculations = (item) => {
+    const safeQuantity = Number(item.quantity) > 0 ? Number(item.quantity) : 1;
+    const safeLineTotal = Number.isFinite(Number(item.lineTotal)) ? Number(item.lineTotal) : 0;
+    const safeUnitPrice = Number.isFinite(Number(item.unitPrice))
+      ? Number(item.unitPrice)
+      : safeQuantity > 0
+        ? safeLineTotal / safeQuantity
+        : safeLineTotal;
+    const vat = calculateVatValues({
+      lineTotal: safeLineTotal,
+      unitPrice: safeUnitPrice,
+      vatMode: item.vatMode || vatMode,
+      vatRate,
+    });
+    const base = getBaseUnitInfo(safeQuantity, item.unit || 'each');
+
+    return {
+      ...item,
+      quantity: safeQuantity,
+      unit: item.unit || 'each',
+      unitPrice: roundMoney(safeUnitPrice),
+      lineTotal: roundMoney(safeLineTotal),
+      vatMode: item.vatMode || vatMode,
+      vatRate,
+      ...vat,
+      baseQuantity: base.quantity,
+      baseUnit: base.unit,
+      costPerBaseUnitExVAT: base.quantity > 0 ? roundMoney(vat.priceExVAT / base.quantity) : 0,
+    };
+  };
+
+  const createManualLineItem = (draft) => {
+    const quantity = Number(draft.quantity) > 0 ? Number(draft.quantity) : 1;
+    const unitPrice = Number(draft.unitPrice) || 0;
+    const lineTotal = Number(draft.lineTotal) || roundMoney(quantity * unitPrice);
+    const itemName = String(draft.itemName || '').trim();
+
+    return applyLineCalculations({
+      id: `manual-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      itemName,
+      quantity,
+      unit: draft.unit || 'each',
+      unitPrice,
+      lineTotal,
+      vatMode,
+      vatRate,
+      rawLine: `Manual entry: ${itemName}`,
+      confidence: 1,
+    });
+  };
+
   const updateLineItem = (lineId, field, value) => {
     setLineItems((currentItems) => (
       currentItems.map((item) => {
@@ -287,18 +348,8 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
             : value,
         };
 
-        if (['lineTotal', 'unitPrice', 'vatMode'].includes(field)) {
-          const vat = calculateVatValues({
-            lineTotal: nextItem.lineTotal,
-            unitPrice: nextItem.unitPrice,
-            vatMode: nextItem.vatMode,
-            vatRate,
-          });
-
-          return {
-            ...nextItem,
-            ...vat,
-          };
+        if (['quantity', 'unit', 'lineTotal', 'unitPrice', 'vatMode'].includes(field)) {
+          return applyLineCalculations(nextItem);
         }
 
         return nextItem;
@@ -320,6 +371,37 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
     setMessage('Parsed invoice lines cleared. You can correct the OCR text and re-parse it.');
   };
 
+  const addManualLineItem = () => {
+    const nextLine = createManualLineItem(manualLineDraft);
+
+    if (!nextLine.itemName || nextLine.lineTotal <= 0) {
+      setMessage('Enter an item name and price before adding a manual invoice line.');
+      return;
+    }
+
+    setLineItems((currentItems) => [...currentItems, nextLine]);
+    setConfirmedInvoice(null);
+    setStockUpdates([]);
+    setManualLineDraft(EMPTY_MANUAL_LINE);
+    setMessage(`${nextLine.itemName} added as a manual invoice line.`);
+  };
+
+  const parseRawRowsDraft = () => {
+    const parsed = parseInvoiceText(rawRowsDraft, { vatRate });
+
+    if (parsed.items.length === 0) {
+      setMessage('No RAW table rows were found. Paste only the item table rows, then try again.');
+      return;
+    }
+
+    setLineItems(parsed.items);
+    setVatMode(parsed.vatMode);
+    setRawText(rawRowsDraft);
+    setConfirmedInvoice(null);
+    setStockUpdates([]);
+    setMessage(`Parsed ${parsed.items.length} RAW invoice row${parsed.items.length === 1 ? '' : 's'}.`);
+  };
+
   const parseAndApplyText = (text) => {
     if (!String(text || '').trim()) {
       setLineItems([]);
@@ -333,6 +415,8 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
     setInvoiceDate(parsed.invoiceDate);
     setVatMode(parsed.vatMode);
     setLineItems(parsed.items);
+    setConfirmedInvoice(null);
+    setStockUpdates([]);
     setMessage(parsed.items.length > 0
       ? `Found ${parsed.items.length} invoice line${parsed.items.length === 1 ? '' : 's'}. Review before confirming.`
       : 'No invoice lines were found. Correct the OCR text below, then re-parse it.');
@@ -763,6 +847,94 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
               </div>
             </div>
           </details>
+
+          <section className="panel invoice-manual-panel">
+            <div className="panel-body">
+              <div className="section-header">
+                <div>
+                  <p className="eyebrow">Fallback</p>
+                  <h2 className="title">Manual Invoice Entry</h2>
+                </div>
+                <button type="button" className="primary-button" onClick={addManualLineItem}>
+                  Add line
+                </button>
+              </div>
+
+              <div className="invoice-manual-grid">
+                <label className="field">
+                  <span className="field-label">Item</span>
+                  <input
+                    value={manualLineDraft.itemName}
+                    onChange={(event) => setManualLineDraft((draft) => ({ ...draft, itemName: event.target.value }))}
+                    className="input"
+                    placeholder="Tomatoes"
+                  />
+                </label>
+                <label className="field">
+                  <span className="field-label">Qty</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.001"
+                    value={manualLineDraft.quantity}
+                    onChange={(event) => setManualLineDraft((draft) => ({ ...draft, quantity: event.target.value }))}
+                    className="input"
+                  />
+                </label>
+                <label className="field">
+                  <span className="field-label">Unit</span>
+                  <select
+                    value={manualLineDraft.unit}
+                    onChange={(event) => setManualLineDraft((draft) => ({ ...draft, unit: event.target.value }))}
+                    className="select"
+                  >
+                    {UNIT_OPTIONS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+                  </select>
+                </label>
+                <label className="field">
+                  <span className="field-label">Unit price</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={manualLineDraft.unitPrice}
+                    onChange={(event) => setManualLineDraft((draft) => ({ ...draft, unitPrice: event.target.value }))}
+                    className="input"
+                    placeholder="29.90"
+                  />
+                </label>
+                <label className="field">
+                  <span className="field-label">Total</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={manualLineDraft.lineTotal}
+                    onChange={(event) => setManualLineDraft((draft) => ({ ...draft, lineTotal: event.target.value }))}
+                    className="input"
+                    placeholder="62.79"
+                  />
+                </label>
+              </div>
+
+              <details className="invoice-raw-row-panel">
+                <summary className="breakdown-title">RAW table rows</summary>
+                <div className="invoice-debug-body">
+                  <textarea
+                    value={rawRowsDraft}
+                    onChange={(event) => setRawRowsDraft(event.target.value)}
+                    className="invoice-debug-text invoice-raw-rows-text"
+                    placeholder="TOM - 001 - Tomatoes Kg 2.10 R29.90 0.00% 0.00% R62.79 R62.79"
+                    spellCheck="false"
+                    aria-label="RAW invoice rows"
+                  />
+                  <button type="button" className="ghost-button is-warning" onClick={parseRawRowsDraft} disabled={!rawRowsDraft.trim()}>
+                    Parse rows
+                  </button>
+                </div>
+              </details>
+            </div>
+          </section>
 
           <section className="panel">
             <div className="panel-body">
