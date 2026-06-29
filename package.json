@@ -8,6 +8,7 @@
     "build": "vite build",
     "lint": "oxlint",
     "test": "node scripts/waste-calculations.test.mjs",
+    "firebase:smoke": "node scripts/firebase-smoke.mjs",
     "seed:database": "node scripts/seed-vercel-database.mjs",
     "preview": "vite preview",
     "firebase:emulators": "npx firebase-tools emulators:start --only firestore,hosting",
@@ -17,8 +18,11 @@
   "dependencies": {
     "@vercel/blob": "^2.5.0",
     "firebase": "^12.15.0",
+    "pdfjs-dist": "^6.1.200",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "recharts": "^3.9.0",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",

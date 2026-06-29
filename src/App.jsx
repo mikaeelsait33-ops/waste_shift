@@ -5,6 +5,7 @@ import WasteForm from './components/WasteForm';
 import WasteList from './components/WasteList';
 import Settings from './components/Settings';
 import StoreRoom from './components/StoreRoom';
+import InvoiceScanner from './components/InvoiceScanner';
 import AuthGate from './components/AuthGate';
 import defaultRecipes from './data/defaultRecipes';
 import menuItemsCsv from './data/menuItems.csv?raw';
@@ -33,15 +34,20 @@ import {
   roundCurrency,
 } from './utils/wasteCalculations';
 import {
+  firestoreIsConfigured,
+  getFirestoreRuntimeInfo,
   loadFirestoreMenuItems,
   saveFirestoreMenuItem,
   saveFirestoreWasteEntry,
 } from './services/firestoreMenuItems';
+import { loadInvoiceDashboardStats } from './services/invoiceFirestore';
 
 // Seed recipes from the bundled menu catalog.
 const DEFAULT_RECIPES = defaultRecipes;
 const DEFAULT_RECIPE_SEED_VERSION = 'makeline-guide-recipes-v5';
 const SERVER_DATABASE_ENDPOINT = '/api/database';
+const FIRESTORE_RUNTIME_INFO = getFirestoreRuntimeInfo();
+const FIRESTORE_CONFIGURED = firestoreIsConfigured();
 const OLD_DEFAULT_COST_BASIS = 'Menu price from menuItems.csv split evenly across listed ingredients.';
 const DEFAULT_STAFF_PIN = '1904';
 const DEFAULT_MANAGEMENT_PIN = '1905';
@@ -577,9 +583,20 @@ function App() {
   const [serverSyncEnabled, setServerSyncEnabled] = useState(false);
   const [serverLoadComplete, setServerLoadComplete] = useState(false);
   const [serverSync, setServerSync] = useState({
-    status: 'checking',
-    message: 'Checking for server database...',
+    status: FIRESTORE_CONFIGURED ? 'ready' : 'checking',
+    message: FIRESTORE_CONFIGURED
+      ? 'Vercel is hosting the app. Firebase is handling live records; Vercel backup is manual.'
+      : 'Checking for Vercel backup database...',
     lastSavedAt: '',
+  });
+  const [firebaseSync, setFirebaseSync] = useState({
+    status: FIRESTORE_CONFIGURED ? 'checking' : 'local',
+    message: FIRESTORE_CONFIGURED
+      ? `Connecting to Firebase${FIRESTORE_RUNTIME_INFO.projectId ? ` project ${FIRESTORE_RUNTIME_INFO.projectId}` : ''}...`
+      : 'Firebase env vars are not configured. Live records stay in this browser.',
+    lastSavedAt: '',
+    menuItemCount: 0,
+    projectId: FIRESTORE_RUNTIME_INFO.projectId,
   });
   const [syncAccessKey, setSyncAccessKey] = useState(() => localStorage.getItem('wasteShiftSyncAccessKey') || '');
   const [authSession, setAuthSession] = useState(() => {
@@ -662,6 +679,13 @@ function App() {
   });
 
   const [lastSavedAt, setLastSavedAt] = useState(() => localStorage.getItem('wasteShiftLastSavedAt') || '');
+  const [invoiceDashboardStats, setInvoiceDashboardStats] = useState({
+    totalSpendThisMonth: 0,
+    topIngredients: [],
+    priceIncreasesThisMonth: [],
+    lowStockCount: 0,
+    lastInvoice: null,
+  });
 
   // Custom dynamic recipe database state loop
   const [recipes, setRecipes] = useState(() => {
@@ -775,14 +799,45 @@ function App() {
     let isCancelled = false;
 
     const loadMenuItems = async () => {
+      if (!FIRESTORE_CONFIGURED) {
+        setFirebaseSync(prev => ({
+          ...prev,
+          status: 'local',
+          message: 'Firebase env vars are not configured. Live records stay in this browser.',
+        }));
+        return;
+      }
+
+      setFirebaseSync(prev => ({
+        ...prev,
+        status: 'checking',
+        message: `Connecting to Firebase${prev.projectId ? ` project ${prev.projectId}` : ''}...`,
+      }));
+
       try {
         const loadedMenuItems = await loadFirestoreMenuItems();
 
-        if (!isCancelled && loadedMenuItems.length > 0) {
+        if (!isCancelled) {
           setFirestoreMenuItems(loadedMenuItems);
+          setFirebaseSync(prev => ({
+            ...prev,
+            status: 'ready',
+            message: loadedMenuItems.length > 0
+              ? `Firebase connected. Loaded ${loadedMenuItems.length} menu item${loadedMenuItems.length === 1 ? '' : 's'}.`
+              : 'Firebase connected. No Firestore menu items have been added yet.',
+            lastSavedAt: new Date().toISOString(),
+            menuItemCount: loadedMenuItems.length,
+          }));
         }
       } catch (error) {
         console.warn('Firestore menu items unavailable. Using local menu data.', error);
+        if (!isCancelled) {
+          setFirebaseSync(prev => ({
+            ...prev,
+            status: 'error',
+            message: `${error?.message || 'Firebase is unavailable.'} Local menu data is still available.`,
+          }));
+        }
       }
     };
 
@@ -833,6 +888,13 @@ function App() {
   const menuItems = useMemo(() => (
     mergeMenuItems(baseMenuItems, customMenuItems, effectiveRecipes)
   ), [baseMenuItems, customMenuItems, effectiveRecipes]);
+  const refreshInvoiceDashboardStats = useCallback(async () => {
+    try {
+      setInvoiceDashboardStats(await loadInvoiceDashboardStats());
+    } catch (error) {
+      console.warn('Invoice dashboard stats unavailable.', error);
+    }
+  }, []);
   const baseStaffList = useMemo(() => createStaffMembersFromCsv(staffMembersCsv), []);
   const staffList = useMemo(() => (
     mergeStaffMembers(baseStaffList, customStaffList)
@@ -841,6 +903,10 @@ function App() {
     staffList.find((member) => member.id === activeStaffId) || null
   ), [activeStaffId, staffList]);
   const accessProfile = useMemo(() => getAccessProfile(activeStaffMember), [activeStaffMember]);
+
+  useEffect(() => {
+    refreshInvoiceDashboardStats();
+  }, [refreshInvoiceDashboardStats]);
   const getSyncHeaders = useCallback((extraHeaders = {}) => {
     const trimmedAccessKey = syncAccessKey.trim();
 
@@ -904,7 +970,9 @@ function App() {
     setServerSync(prev => ({
       ...prev,
       status: 'saving',
-      message: mode === 'manual' ? 'Saving database to server...' : 'Auto-saving database to server...',
+      message: FIRESTORE_CONFIGURED
+        ? 'Saving full database backup to Vercel...'
+        : mode === 'manual' ? 'Saving database to server...' : 'Auto-saving database to server...',
     }));
 
     try {
@@ -919,10 +987,15 @@ function App() {
         throw new Error(payload.message || 'Server save failed.');
       }
 
-      setServerSyncEnabled(true);
+      if (!FIRESTORE_CONFIGURED) {
+        setServerSyncEnabled(true);
+      }
+
       setServerSync({
         status: 'synced',
-        message: 'Server database synced.',
+        message: FIRESTORE_CONFIGURED
+          ? 'Vercel backup saved. Firebase remains the live data source.'
+          : 'Server database synced.',
         lastSavedAt: payload.updatedAt || new Date().toISOString(),
       });
 
@@ -930,7 +1003,7 @@ function App() {
     } catch (error) {
       setServerSync({
         status: 'error',
-        message: `${error?.message || 'Server save failed.'} Local browser copy is still saved.`,
+        message: `${error?.message || (FIRESTORE_CONFIGURED ? 'Vercel backup failed.' : 'Server save failed.')} Local browser copy is still saved.`,
         lastSavedAt: '',
       });
 
@@ -1031,6 +1104,17 @@ function App() {
     let isCancelled = false;
 
     const loadServerDatabase = async () => {
+      if (FIRESTORE_CONFIGURED) {
+        setServerSyncEnabled(false);
+        setServerLoadComplete(true);
+        setServerSync(prev => ({
+          ...prev,
+          status: 'ready',
+          message: 'Vercel is hosting the app. Firebase is handling live records; Vercel backup is manual.',
+        }));
+        return;
+      }
+
       try {
         const response = await fetch(SERVER_DATABASE_ENDPOINT, {
           cache: 'no-store',
@@ -1482,9 +1566,36 @@ function App() {
       ...prevMovements,
       ...createInventoryMovementsFromEntry(newEntry),
     ]);
-    saveFirestoreWasteEntry(newEntry).catch((error) => {
-      console.warn('Could not save waste entry to Firestore.', error);
-    });
+
+    if (FIRESTORE_CONFIGURED) {
+      saveFirestoreWasteEntry(newEntry)
+        .then((result) => {
+          if (result?.skipped) {
+            setFirebaseSync(prev => ({
+              ...prev,
+              status: 'error',
+              message: 'Firebase skipped this waste entry because required fields were missing.',
+            }));
+            return;
+          }
+
+          setFirebaseSync(prev => ({
+            ...prev,
+            status: 'synced',
+            message: 'Waste entry saved to Firebase.',
+            lastSavedAt: new Date().toISOString(),
+          }));
+        })
+        .catch((error) => {
+          console.warn('Could not save waste entry to Firestore.', error);
+          setFirebaseSync(prev => ({
+            ...prev,
+            status: 'error',
+            message: `${error?.message || 'Could not save waste entry to Firebase.'} Local copy is still saved.`,
+          }));
+        });
+    }
+
     setAuditLog(prevLog => [
       createAuditLogEntry({
         action: 'Waste entry created',
@@ -1837,15 +1948,59 @@ function App() {
         name: ingredient.name,
         cost: Number(ingredient.cost) || 0,
       }));
+    const totalCost = components.reduce((sum, component) => sum + component.cost, 0);
+
     saveFirestoreMenuItem({
       key,
       name: recipeObject?.name || key,
       menuPrice: recipeObject?.menuPrice,
-      totalCost: components.reduce((sum, component) => sum + component.cost, 0),
+      totalCost,
       components,
-    }).catch((error) => {
-      console.warn('Could not save menu item to Firestore.', error);
-    });
+    })
+      .then((result) => {
+        if (result?.skipped) {
+          return;
+        }
+
+        const nextItem = {
+          key,
+          firestoreId: key,
+          name: recipeObject?.name || key,
+          menuPrice: recipeObject?.menuPrice ?? null,
+          totalCost: roundCurrency(totalCost),
+          components,
+        };
+        const nextMenuItemCount = firestoreMenuItems.some((item) => item.key === key)
+          ? firestoreMenuItems.length
+          : firestoreMenuItems.length + 1;
+
+        setFirestoreMenuItems(prevItems => {
+          const existingIndex = prevItems.findIndex((item) => item.key === key);
+
+          if (existingIndex === -1) {
+            return [...prevItems, nextItem].sort((a, b) => a.name.localeCompare(b.name));
+          }
+
+          return prevItems.map((item, index) => (
+            index === existingIndex ? { ...item, ...nextItem } : item
+          ));
+        });
+        setFirebaseSync(prev => ({
+          ...prev,
+          status: 'synced',
+          message: `${nextItem.name} saved to Firebase menu items.`,
+          lastSavedAt: new Date().toISOString(),
+          menuItemCount: nextMenuItemCount,
+        }));
+      })
+      .catch((error) => {
+        console.warn('Could not save menu item to Firestore.', error);
+        setFirebaseSync(prev => ({
+          ...prev,
+          status: 'error',
+          message: `${error?.message || 'Could not save menu item to Firebase.'} Local recipe is still saved.`,
+        }));
+      });
   };
 
   const handleUpsertMenuItem = ({ key: requestedKey, name, price }) => {
@@ -2026,9 +2181,16 @@ function App() {
         onLogout={handleLogout}
       />
 
-      <main className={`app-page${activeTab === 'dashboard' || activeTab === 'storeRoom' || activeTab === 'wasteLog' || activeTab === 'settings' ? ' app-page--wide' : ''}`}>
+      <main className={`app-page${activeTab === 'dashboard' || activeTab === 'storeRoom' || activeTab === 'invoices' || activeTab === 'wasteLog' || activeTab === 'settings' ? ' app-page--wide' : ''}`}>
         {activeTab === 'dashboard' && (
-          <Dashboard items={wasteItems} budget={budget} settings={settings} staffList={staffList} accessProfile={accessProfile} />
+          <Dashboard
+            items={wasteItems}
+            budget={budget}
+            settings={settings}
+            staffList={staffList}
+            accessProfile={accessProfile}
+            invoiceStats={invoiceDashboardStats}
+          />
         )}
 
         {activeTab === 'logWaste' && (
@@ -2069,6 +2231,15 @@ function App() {
           />
         )}
 
+        {activeTab === 'invoices' && (
+          <InvoiceScanner
+            accessProfile={accessProfile}
+            recipes={effectiveRecipes}
+            menuItems={menuItems}
+            onInvoiceSaved={refreshInvoiceDashboardStats}
+          />
+        )}
+
         {activeTab === 'settings' && (
           <Settings
             budget={budget}
@@ -2091,6 +2262,7 @@ function App() {
             syncAccessKey={syncAccessKey}
             authSettings={authSettings}
             authSession={authSession}
+            firebaseSync={firebaseSync}
             serverSync={serverSync}
             lastSavedAt={lastSavedAt}
             onSaveSettings={handleSaveSettings}

@@ -1,6 +1,6 @@
 # WasteShift
 
-Food waste tracking app with local browser persistence and optional Vercel server sync.
+Food waste tracking app with Vercel hosting, Firebase Firestore live records, and local browser fallback storage.
 
 ## Local Development
 
@@ -9,19 +9,48 @@ npm.cmd install
 npm.cmd run dev
 ```
 
-Local data is saved in browser storage. Database backups can still be exported from the Database page.
+Local data is saved in browser storage while Firebase is used for shared menu items and waste entries when env vars are configured. Database backups can still be exported from the Database page.
 
-## Vercel Server Sync
+## Invoice Scanning
 
-The app includes a Vercel serverless API at `api/database.js`. It saves one JSON database snapshot to Vercel Blob at `wasteshift/database.json`.
+The Invoices page runs OCR entirely in the browser with Tesseract.js. JPG and PNG files are scanned directly; PDFs are rendered to an image with pdf.js before OCR. No paid invoice API or backend OCR route is required.
 
-To enable it on Vercel:
+The invoice module writes to:
 
-1. Deploy the project to Vercel.
-2. Add Vercel Blob storage to the project.
-3. Make sure `BLOB_READ_WRITE_TOKEN` is available in the project environment variables.
+- `ingredients`
+- `ingredients/{id}/priceHistory`
+- `stockLevels`
+- `invoices`
+- `suppliers`
+- `settings/invoiceConfig`
+
+After publishing Firestore rules, run:
+
+```bash
+npm.cmd run firebase:smoke
+```
+
+That verifies menu, waste, invoice, ingredient, supplier, settings, and stock writes.
+
+## Firebase + Vercel
+
+Firebase is the live data layer:
+
+- `menuItems` stores menu item names, total costs, and component costs.
+- `wasteEntries` stores logged waste entries using the app entry id as the Firestore document id, so retries update the same entry instead of creating duplicates.
+- Large local-only fields, such as photo data URLs, are not mirrored into Firestore.
+
+Vercel is the hosting layer. Add the `VITE_FIREBASE_*` variables from `.env.firebase.example` to Vercel Project Settings > Environment Variables, then redeploy.
+
+## Vercel Backup
+
+The app also includes an optional Vercel serverless API at `api/database.js`. It saves full JSON database snapshots to Vercel Blob under `wasteshift/databases/`.
+
+To enable Vercel backups:
+
+1. Add Vercel Blob storage to the project.
+2. Make sure `BLOB_READ_WRITE_TOKEN` is available in the project environment variables.
+3. Optionally set `WASTESHIFT_SYNC_SECRET` to protect backup load/save.
 4. Redeploy.
 
-After that, the Database page will show server sync status and the app will auto-save to the server. Browser storage remains as a fallback.
-
-Important: protect the Vercel deployment if this data is private, because the sync API is same-origin but not user-authenticated.
+When Firebase is configured, Vercel backup is manual from Settings > Database. Browser storage remains a fallback.

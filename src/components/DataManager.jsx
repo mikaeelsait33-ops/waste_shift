@@ -24,6 +24,7 @@ function DataManager({
   auditLog,
   syncAccessKey,
   accessProfile,
+  firebaseSync,
   serverSync,
   onSaveToServer,
   onSaveSyncAccessKey,
@@ -88,6 +89,11 @@ function DataManager({
   const serverNoticeClass = ['ready', 'synced'].includes(serverSync?.status)
     ? ' notice-panel--success'
     : ['checking', 'saving', 'local', 'locked'].includes(serverSync?.status)
+      ? ' notice-panel--warning'
+      : '';
+  const firebaseNoticeClass = ['ready', 'synced'].includes(firebaseSync?.status)
+    ? ' notice-panel--success'
+    : ['checking', 'local'].includes(firebaseSync?.status)
       ? ' notice-panel--warning'
       : '';
   const canExportData = Boolean(accessProfile?.canExportData);
@@ -248,14 +254,14 @@ function DataManager({
         <div className="section-header">
           <div>
             <p className="eyebrow">Database</p>
-            <h2 className="title">Local Database</h2>
-            <p className="subtitle">Your data is saved in this browser and will remain when the local server is closed.</p>
+            <h2 className="title">Data Health</h2>
+            <p className="subtitle">Vercel hosts the app, Firebase stores live records, and this browser keeps a local fallback.</p>
           </div>
         </div>
 
         <div className="notice-panel notice-panel--success">
           <div>
-            <h3 className="breakdown-title">Persistence status</h3>
+            <h3 className="breakdown-title">Browser fallback</h3>
             <p className="small-text" style={{ margin: 0 }}>
               Auto-save is active. Use backups if you change browsers, clear site data, or run the app on another port.
             </p>
@@ -263,11 +269,31 @@ function DataManager({
           <span className="badge is-green">{lastSavedAt ? `Last saved: ${formatDateTime(lastSavedAt)}` : 'Ready to save'}</span>
         </div>
 
+        <div className={`notice-panel${firebaseNoticeClass}`}>
+          <div>
+            <h3 className="breakdown-title">Firebase live data</h3>
+            <p className="small-text" style={{ margin: 0 }}>
+              {firebaseSync?.message || 'Firebase status has not started.'}
+            </p>
+          </div>
+          <div className="manager-row">
+            {firebaseSync?.projectId && (
+              <span className="badge">{firebaseSync.projectId}</span>
+            )}
+            {Number.isFinite(Number(firebaseSync?.menuItemCount)) && (
+              <span className="badge">{Number(firebaseSync.menuItemCount)} menu items</span>
+            )}
+            {firebaseSync?.lastSavedAt && (
+              <span className="badge is-green">{formatDateTime(firebaseSync.lastSavedAt)}</span>
+            )}
+          </div>
+        </div>
+
         <div className={`notice-panel${serverNoticeClass}`}>
           <div>
-            <h3 className="breakdown-title">Server sync</h3>
+            <h3 className="breakdown-title">Vercel backup</h3>
             <p className="small-text" style={{ margin: 0 }}>
-              {serverSync?.message || 'Server sync has not started.'}
+              {serverSync?.message || 'Vercel backup status has not started.'}
             </p>
           </div>
           <div className="manager-row">
@@ -282,15 +308,15 @@ function DataManager({
               className="ghost-button is-warning"
               disabled={serverSync?.status === 'saving' || !canManageServerSync}
             >
-              {serverSync?.status === 'saving' ? 'Saving...' : canManageServerSync ? 'Save to server' : 'Owner only'}
+              {serverSync?.status === 'saving' ? 'Saving...' : canManageServerSync ? 'Save backup' : 'Owner only'}
             </button>
           </div>
         </div>
 
         <div className="database-card">
-          <h3 className="breakdown-title">Server sync access key</h3>
+          <h3 className="breakdown-title">Vercel backup access key</h3>
           <p className="small-text">
-            If the deployment has `WASTESHIFT_SYNC_SECRET` set, this device must send the matching key before it can load or save the server database.
+            If `WASTESHIFT_SYNC_SECRET` is set in Vercel, this device must send the matching key before it can save or load backups.
           </p>
           <div className="field-grid">
             <input

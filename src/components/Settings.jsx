@@ -553,6 +553,7 @@ function Settings({
   inventoryMovements,
   auditLog,
   syncAccessKey,
+  firebaseSync,
   serverSync,
   lastSavedAt,
   onSaveSettings,
@@ -669,7 +670,7 @@ function Settings({
           <div>
             <p className="eyebrow">Settings</p>
             <h2 className="title">Setup & Controls</h2>
-            <p className="subtitle">Manage limits, staff, menu items, database sync, and high-impact actions.</p>
+            <p className="subtitle">Manage limits, staff, menu items, data health, and high-impact actions.</p>
           </div>
         </div>
 
@@ -895,6 +896,7 @@ function Settings({
           auditLog={auditLog}
           syncAccessKey={syncAccessKey}
           accessProfile={accessProfile}
+          firebaseSync={firebaseSync}
           serverSync={serverSync}
           onSaveToServer={onSaveToServer}
           onSaveSyncAccessKey={onSaveSyncAccessKey}

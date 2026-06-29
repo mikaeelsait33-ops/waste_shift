@@ -2,13 +2,14 @@ const navItems = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'logWaste', label: 'Log' },
   { key: 'storeRoom', label: 'Store Room' },
+  { key: 'invoices', label: 'Invoices' },
   { key: 'wasteLog', label: 'History' },
   { key: 'settings', label: 'Settings' },
 ];
 
 function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, accessProfile, onLogout }) {
   const visibleNavItems = navItems.filter((item) => {
-    if (item.key === 'storeRoom') {
+    if (item.key === 'storeRoom' || item.key === 'invoices') {
       return accessProfile?.canViewStoreRoom;
     }
 

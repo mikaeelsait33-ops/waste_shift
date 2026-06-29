@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react';
-import InvoicePriceImporter from './InvoicePriceImporter';
 import {
   WASTE_CATEGORY_OPTIONS,
   buildRecipeIngredientBreakdown,
@@ -416,13 +415,6 @@ function RecipeManager({
           )}
         </div>
       </form>
-
-      <InvoicePriceImporter
-        recipes={safeRecipes}
-        catalogEntries={catalogEntries}
-        onAddRecipe={onAddRecipe}
-        onSaveMenuItem={onSaveMenuItem}
-      />
 
       <div className="panel">
         <div className="panel-body">

@@ -17,11 +17,71 @@ service cloud.firestore {
 
     match /wasteEntries/{entryId} {
       allow read: if signedIn();
-      allow create: if signedIn()
+      allow create, update: if signedIn()
+        && request.resource.data.localEntryId is string
         && request.resource.data.name is string
         && request.resource.data.reason is string
-        && request.resource.data.foodCostLost is number;
-      allow update, delete: if false;
+        && request.resource.data.foodCostLost is number
+        && request.resource.data.quantity is number
+        && request.resource.data.timestamp is string;
+      allow delete: if false;
+    }
+
+    match /ingredients/{ingredientId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && request.resource.data.name is string
+        && request.resource.data.category is string
+        && request.resource.data.unit is string;
+      allow delete: if false;
+
+      match /priceHistory/{historyId} {
+        allow read: if signedIn();
+        allow create, update: if signedIn()
+          && request.resource.data.date is string
+          && request.resource.data.supplier is string
+          && request.resource.data.priceExVAT is number
+          && request.resource.data.priceIncVAT is number
+          && request.resource.data.invoiceId is string;
+        allow delete: if false;
+      }
+    }
+
+    match /stockLevels/{stockId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && request.resource.data.ingredientId is string
+        && request.resource.data.currentQty is number
+        && request.resource.data.unit is string;
+      allow delete: if false;
+    }
+
+    match /invoices/{invoiceId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && request.resource.data.invoiceDate is string
+        && request.resource.data.supplier is string
+        && request.resource.data.totalExVAT is number
+        && request.resource.data.totalVAT is number
+        && request.resource.data.totalIncVAT is number
+        && request.resource.data.lineItems is list
+        && request.resource.data.status is string;
+      allow delete: if false;
+    }
+
+    match /suppliers/{supplierId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && request.resource.data.name is string;
+      allow delete: if false;
+    }
+
+    match /settings/{settingsId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && settingsId == "invoiceConfig"
+        && request.resource.data.vatRate is number;
+      allow delete: if false;
     }
   }
 }

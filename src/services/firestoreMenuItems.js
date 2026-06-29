@@ -30,7 +30,6 @@ const getFirestoreApi = async () => {
     ]).then(([firebaseApp, firestore]) => ({
       initializeApp: firebaseApp.initializeApp,
       getApps: firebaseApp.getApps,
-      addDoc: firestore.addDoc,
       collection: firestore.collection,
       doc: firestore.doc,
       getDocs: firestore.getDocs,
@@ -55,6 +54,11 @@ const getFirebaseAuthApi = async () => {
 };
 
 export const firestoreIsConfigured = () => hasFirebaseConfig;
+
+export const getFirestoreRuntimeInfo = () => ({
+  configured: hasFirebaseConfig,
+  projectId: FIREBASE_CONFIG.projectId || '',
+});
 
 export const getFirestoreDb = async () => {
   if (!hasFirebaseConfig) {
@@ -109,6 +113,108 @@ const sanitizeComponent = (component, index) => {
     name,
     cost: Number.isFinite(cost) && cost >= 0 ? roundCurrency(cost) : 0,
   };
+};
+
+const toSafeString = (value) => String(value ?? '').trim();
+
+const toSafeNumber = (value, fallback = 0) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+};
+
+const toSafeCurrency = (value, fallback = 0) => roundCurrency(toSafeNumber(value, fallback));
+
+const removeUndefinedValues = (value) => {
+  if (Array.isArray(value)) {
+    return value.map(removeUndefinedValues);
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entryValue]) => entryValue !== undefined)
+        .map(([key, entryValue]) => [key, removeUndefinedValues(entryValue)])
+    );
+  }
+
+  return value;
+};
+
+const sanitizeWasteComponent = (component, index) => {
+  const name = toSafeString(component?.name);
+
+  if (!name) {
+    return null;
+  }
+
+  return {
+    key: toSafeString(component?.key) || createItemPriceKey(`${name}-${index}`),
+    name,
+    cost: toSafeCurrency(component?.cost),
+  };
+};
+
+const createFirestoreWasteEntryPayload = (entry) => {
+  const createdAt = toSafeString(entry?.createdAt) || new Date().toISOString();
+  const wastedComponents = (Array.isArray(entry?.wastedComponents) ? entry.wastedComponents : [])
+    .map(sanitizeWasteComponent)
+    .filter(Boolean);
+  const selectedComponentKeys = Array.isArray(entry?.selectedComponentKeys)
+    ? entry.selectedComponentKeys.map(toSafeString).filter(Boolean)
+    : wastedComponents.map((component) => component.key);
+
+  return removeUndefinedValues({
+    localEntryId: toSafeString(entry?.id),
+    name: toSafeString(entry?.name),
+    itemType: toSafeString(entry?.itemType),
+    recipeKey: toSafeString(entry?.recipeKey),
+    category: toSafeString(entry?.category),
+    quantity: toSafeNumber(entry?.quantity, 1),
+    unit: toSafeString(entry?.unit),
+    measuredQuantity: toSafeString(entry?.measuredQuantity),
+    measuredUnit: toSafeString(entry?.measuredUnit),
+    portionSize: toSafeString(entry?.portionSize),
+    portionSizeUnit: toSafeString(entry?.portionSizeUnit),
+    reason: toSafeString(entry?.reason),
+    notes: toSafeString(entry?.notes),
+    wasteClassification: toSafeString(entry?.wasteClassification),
+    wasteClassificationLabel: toSafeString(entry?.wasteClassificationLabel),
+    staffId: toSafeString(entry?.staffId),
+    staff: toSafeString(entry?.staff),
+    staffRole: toSafeString(entry?.staffRole),
+    department: toSafeString(entry?.department),
+    date: toSafeString(entry?.date),
+    time: toSafeString(entry?.time),
+    timestamp: createdAt,
+    createdAt,
+    createdBy: toSafeString(entry?.createdBy),
+    lastEditedBy: toSafeString(entry?.lastEditedBy),
+    status: toSafeString(entry?.status) || 'logged',
+    cost: toSafeCurrency(entry?.cost ?? entry?.foodCostLost),
+    foodCostLost: toSafeCurrency(entry?.foodCostLost ?? entry?.cost),
+    sellingPrice: entry?.sellingPrice === null || entry?.sellingPrice === undefined
+      ? null
+      : toSafeCurrency(entry.sellingPrice),
+    potentialRevenueLost: toSafeCurrency(entry?.potentialRevenueLost),
+    grossProfitLost: toSafeCurrency(entry?.grossProfitLost),
+    foodCostPercentage: entry?.foodCostPercentage === null || entry?.foodCostPercentage === undefined
+      ? null
+      : toSafeNumber(entry.foodCostPercentage),
+    costStatus: toSafeString(entry?.costStatus),
+    partialWaste: Boolean(entry?.partialWaste),
+    allComponentsSelected: Boolean(entry?.allComponentsSelected),
+    totalComponentCount: toSafeNumber(entry?.totalComponentCount),
+    wastedComponentCount: toSafeNumber(entry?.wastedComponentCount),
+    totalMenuItemCost: toSafeCurrency(entry?.totalMenuItemCost),
+    selectedComponentKeys,
+    componentsWasted: Array.isArray(entry?.componentsWasted)
+      ? entry.componentsWasted.map(toSafeString).filter(Boolean)
+      : wastedComponents.map((component) => component.name),
+    wastedComponents,
+    hasPhoto: Boolean(entry?.photoUrl),
+    photoName: toSafeString(entry?.photoName),
+    photoCapturedAt: toSafeString(entry?.photoCapturedAt),
+  });
 };
 
 export const normalizeFirestoreMenuItem = (docSnapshot) => {
@@ -183,17 +289,24 @@ export const saveFirestoreMenuItem = async ({ key, name, totalCost, menuPrice = 
 
 export const saveFirestoreWasteEntry = async (entry) => {
   const db = await getFirestoreDb();
+  const safeEntryId = toSafeString(entry?.id);
 
-  if (!db || !entry?.id) {
+  if (!db || !safeEntryId) {
+    return { ok: false, skipped: true };
+  }
+
+  const payload = createFirestoreWasteEntryPayload(entry);
+
+  if (!payload.name || !payload.reason) {
     return { ok: false, skipped: true };
   }
 
   await ensureFirebaseAuth();
-  const { addDoc, collection, serverTimestamp } = await getFirestoreApi();
-  await addDoc(collection(db, 'wasteEntries'), {
-    ...entry,
+  const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
+  await setDoc(doc(db, 'wasteEntries', safeEntryId), {
+    ...payload,
     firestoreSavedAt: serverTimestamp(),
-  });
+  }, { merge: true });
 
-  return { ok: true };
+  return { ok: true, id: safeEntryId };
 };

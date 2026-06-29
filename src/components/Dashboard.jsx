@@ -22,7 +22,7 @@ const getMetricRows = (metricsObj, totalValue) => (
     }))
 );
 
-function Dashboard({ items, budget, settings, staffList, accessProfile }) {
+function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceStats }) {
   const [timeframe, setTimeframe] = useState('all');
   const [sectionDate, setSectionDate] = useState(() => {
     const date = new Date();
@@ -33,6 +33,7 @@ function Dashboard({ items, budget, settings, staffList, accessProfile }) {
   const safeItems = Array.isArray(items) ? items : [];
   const canViewFinancials = Boolean(accessProfile?.canViewFinancials);
   const formatMoney = (value) => (canViewFinancials ? `R${Number(value || 0).toFixed(2)}` : 'Restricted');
+  const invoiceDashboard = invoiceStats || {};
   const getItemWasteClassification = (item) => item?.wasteClassification || DEFAULT_WASTE_CLASSIFICATION;
   const metricValueClass = (isDanger = false) => (
     `metric-value${canViewFinancials && isDanger ? ' is-danger' : ''}`
@@ -374,6 +375,72 @@ function Dashboard({ items, budget, settings, staffList, accessProfile }) {
           <div className="metric-card">
             <span className={metricValueClass(budget > 0 && projectedMonthLoss > budget)}>{formatMoney(projectedMonthLoss)}</span>
             <span className="metric-label">Projected month-end food cost</span>
+          </div>
+        </div>
+
+        <div className="panel dashboard-invoice-panel">
+          <div className="panel-body">
+            <div className="section-header">
+              <div>
+                <p className="eyebrow">Purchasing</p>
+                <h2 className="title">Invoice & Stock Signals</h2>
+              </div>
+              <span className={`badge${Number(invoiceDashboard.lowStockCount || 0) > 0 ? ' is-red' : ' is-green'}`}>
+                {Number(invoiceDashboard.lowStockCount || 0)} low stock
+              </span>
+            </div>
+
+            <div className="metrics-grid">
+              <div className="metric-card">
+                <span className={metricValueClass(true)}>{formatMoney(invoiceDashboard.totalSpendThisMonth)}</span>
+                <span className="metric-label">Spend this month excl VAT</span>
+              </div>
+              <div className="metric-card">
+                <span className="metric-value">{invoiceDashboard.topIngredients?.[0]?.name || 'None'}</span>
+                <span className="metric-label">Most expensive ingredient</span>
+              </div>
+              <div className="metric-card">
+                <span className={`metric-value${Number(invoiceDashboard.priceIncreasesThisMonth?.length || 0) > 0 ? ' is-danger' : ''}`}>
+                  {invoiceDashboard.priceIncreasesThisMonth?.length || 0}
+                </span>
+                <span className="metric-label">Price increases this month</span>
+              </div>
+              <div className="metric-card">
+                <span className="metric-value">{invoiceDashboard.lastInvoice?.supplier || 'None'}</span>
+                <span className="metric-label">
+                  Last invoice {invoiceDashboard.lastInvoice?.invoiceDate || ''}
+                </span>
+              </div>
+            </div>
+
+            <div className="breakdown-grid">
+              <div>
+                <h3 className="breakdown-title">Top 5 expensive ingredients</h3>
+                {(invoiceDashboard.topIngredients || []).length === 0 ? (
+                  <div className="empty-state">No invoice ingredient prices yet.</div>
+                ) : invoiceDashboard.topIngredients.map((ingredient) => (
+                  <div key={ingredient.id} className="breakdown-item">
+                    <div className="breakdown-label">
+                      <span>{ingredient.name}</span>
+                      <span>{formatMoney(ingredient.priceExVAT)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <h3 className="breakdown-title">Price increases</h3>
+                {(invoiceDashboard.priceIncreasesThisMonth || []).length === 0 ? (
+                  <div className="empty-state">No ingredient price increases this month.</div>
+                ) : invoiceDashboard.priceIncreasesThisMonth.slice(0, 5).map((ingredient) => (
+                  <div key={ingredient.id} className="breakdown-item">
+                    <div className="breakdown-label">
+                      <span>{ingredient.name}</span>
+                      <span className="badge is-red">Up {ingredient.increasePercent.toFixed(1)}%</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
 
