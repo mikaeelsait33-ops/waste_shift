@@ -21,7 +21,7 @@ import {
 
 const ACCEPTED_TYPES = 'image/jpeg,image/png,application/pdf,.jpg,.jpeg,.png,.pdf';
 const DEFAULT_VAT_RATE = 0.15;
-const UNIT_OPTIONS = ['kg', 'g', 'L', 'ml', 'each', 'case', 'doz', 'pkt'];
+const UNIT_OPTIONS = ['kg', 'g', 'L', 'ml', 'each', 'case', 'doz', 'pkt', 'bag', 'tray', 'punnet', 'bunch', 'head', 'pillow'];
 
 const formatMoney = (value) => `R${Number(value || 0).toFixed(2)}`;
 const formatPercent = (value) => `${Number(value || 0).toFixed(1)}%`;

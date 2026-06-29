@@ -63,7 +63,31 @@ assert.equal(item.unit, 'each');
 assert.equal(item.unitPrice, 8);
 assert.equal(item.lineTotal, 48);
 
-const noisyOcr = parseInvoiceText('- o = . ® 3 1 3', { vatRate: 0.15 });
+const rawNaturallyInvoice = parseInvoiceText(`
+Description Quantity Excl Price Disc % VAT % Exclusive Total Inclusive Total
+TOM - 001 - Tomatoes Kg 2.10 R29.90 0.00% 0.00% R62.79 R62.79
+ONION - 002 - Onion Red Kg 1.50 R21.90 0.00% 0.00% R32.85 R32.85
+STRAW - 001 - Strawberries Punnet 1.00 R49.00 0.00% 0.00% R49.00 R49.00
+TENDER - 001 - Tender Stem Broccoli 250g 1.00 R45.00 0.00% 0.00% R45.00 R45.00
+ORAN - 002 - Oranges bag 3.00 R29.00 0.00% 0.00% R87.00 R87.00
+Total Exclusive: R276.64
+Total VAT: R0.00
+Total: R276.64
+`, { vatRate: 0.15 });
+
+assert.equal(rawNaturallyInvoice.items.length, 5);
+assert.deepEqual(
+  rawNaturallyInvoice.items.map((lineItem) => [lineItem.itemName, lineItem.quantity, lineItem.unit, lineItem.unitPrice, lineItem.lineTotal]),
+  [
+    ['Tomatoes', 2.1, 'kg', 29.9, 62.79],
+    ['Onion Red', 1.5, 'kg', 21.9, 32.85],
+    ['Strawberries', 1, 'punnet', 49, 49],
+    ['Tender Stem Broccoli 250g', 1, 'each', 45, 45],
+    ['Oranges', 3, 'bag', 29, 87],
+  ]
+);
+
+const noisyOcr = parseInvoiceText('- o = . \u00ae 3 1 3', { vatRate: 0.15 });
 assert.equal(noisyOcr.items.length, 0);
 
 const accountNumberOcr = parseInvoiceText(`

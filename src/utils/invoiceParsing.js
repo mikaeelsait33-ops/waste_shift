@@ -1,5 +1,5 @@
 const DEFAULT_VAT_RATE = 0.15;
-const UNIT_PATTERN = '(kg|kgs|kilogram|kilograms|g|gram|grams|l|lt|ltr|liter|litre|liters|litres|ml|each|ea|unit|units|case|cases|doz|dozen|pkt|packet|pack|box|boxes|bag|bags|btl|bottle|bottles|tray|trays|tin|tins)';
+const UNIT_PATTERN = '(kg|kgs|kilogram|kilograms|g|gram|grams|l|lt|ltr|liter|litre|liters|litres|ml|each|ea|unit|units|case|cases|doz|dozen|pkt|packet|pack|box|boxes|bag|bags|btl|bottle|bottles|tray|trays|tin|tins|punnet|punnets|bunch|bunches|head|heads|pillow|pillows|pp)';
 const UNIT_REGEX = new RegExp(`\\b${UNIT_PATTERN}\\b`, 'i');
 const QUANTITY_UNIT_REGEX = new RegExp(`\\b(\\d+(?:[.,]\\d+)?)\\s*${UNIT_PATTERN}\\b`, 'i');
 const UNIT_QUANTITY_REGEX = new RegExp(`\\b${UNIT_PATTERN}\\s*(\\d+(?:[.,]\\d+)?)\\b`, 'i');
@@ -95,6 +95,11 @@ export const normalizeInvoiceUnit = (unit) => {
   if (['btl', 'bottle', 'bottles'].includes(value)) return 'bottle';
   if (['tray', 'trays'].includes(value)) return 'tray';
   if (['tin', 'tins'].includes(value)) return 'tin';
+  if (['punnet', 'punnets'].includes(value)) return 'punnet';
+  if (['bunch', 'bunches'].includes(value)) return 'bunch';
+  if (['head', 'heads'].includes(value)) return 'head';
+  if (['pillow', 'pillows'].includes(value)) return 'pillow';
+  if (value === 'pp') return 'punnet';
   return value || 'each';
 };
 
@@ -108,7 +113,7 @@ export const getBaseUnitInfo = (quantity, unit) => {
   if (normalizedUnit === 'L') return { quantity: safeQuantity * 1000, unit: 'ml' };
   if (normalizedUnit === 'ml') return { quantity: safeQuantity, unit: 'ml' };
   if (normalizedUnit === 'doz') return { quantity: safeQuantity * 12, unit: 'each' };
-  if (['case', 'pkt', 'box', 'bag', 'bottle', 'tray', 'tin'].includes(normalizedUnit)) {
+  if (['case', 'pkt', 'box', 'bag', 'bottle', 'tray', 'tin', 'punnet', 'bunch', 'head', 'pillow'].includes(normalizedUnit)) {
     return { quantity: safeQuantity, unit: normalizedUnit };
   }
   return { quantity: safeQuantity, unit: 'each' };
@@ -228,7 +233,8 @@ const isNonLineItemLine = (line) => {
 
   return hasTableHeader
     || dateOnlyMetadata
-    || /\b(subtotal|sub total|balance|amount due|grand total|total due|vat total|vat amount|tax total|invoice no|invoice number|invoice date|date issued|due date|customer|account|bank|branch|swift|iban|routing|sort code|tel|telephone|phone|cell|mobile|fax|email|website|address|street|road|po box|registration|reg no|vat no|vat number|tax no|tax number|company reg|page \d|statement|order no|delivery note|payment|reference|ref no)\b/i.test(value);
+    || /\b(subtotal|sub total|balance|amount due|grand total|total due|total exclusive|total inclusive|total vat|total discount|vat total|vat amount|tax total|invoice no|invoice number|invoice date|date issued|due date|customer|account|bank|branch|swift|iban|routing|sort code|tel|telephone|phone|cell|mobile|fax|email|website|address|street|road|po box|registration|reg no|vat no|vat number|tax no|tax number|company reg|page \d|statement|order no|delivery note|payment|reference|ref no)\b/i.test(value)
+    || /^total\s*:/.test(value);
 };
 
 const extractNumberTokens = (line) => [...String(line || '').matchAll(NUMBER_TOKEN_REGEX)]
@@ -239,6 +245,7 @@ const extractNumberTokens = (line) => [...String(line || '').matchAll(NUMBER_TOK
     end: (match.index || 0) + match[0].length,
     hasCurrency: /\b(?:zar|r)\s*-?\d/i.test(match[0]),
     decimalPlaces: getDecimalPlaces(match[0]),
+    hasPercent: String(line || '').slice((match.index || 0) + match[0].length).trimStart().startsWith('%'),
   }))
   .filter((token) => token.value !== null);
 
@@ -325,9 +332,16 @@ const isLeadingCodeToken = (token, line) => {
   const before = line.slice(0, token.index).trim();
   const after = line.slice(token.end).trim();
 
-  return before === ''
+  const leadingNumericCode = before === ''
     && rawDigits.length >= 3
     && /[a-z]/i.test(after);
+  const prefixedSupplierCode = token.index < 28
+    && rawDigits.length >= 1
+    && rawDigits.length <= 5
+    && /^[a-z\s.-]+$/i.test(before)
+    && /-\s*[a-z]/i.test(after);
+
+  return leadingNumericCode || prefixedSupplierCode;
 };
 
 const getLooseQuantityToken = (candidates) => {
@@ -359,8 +373,11 @@ const removeSpans = (line, spans) => (
 );
 
 const cleanItemName = (line) => cleanInvoiceLine(line)
+  .replace(/^\s*[A-Z]{2,}(?:\s+[A-Z]{2,}){0,3}\s*-\s*\d{1,5}\s*-\s*/, '')
+  .replace(/^\s*[A-Z]{2,}(?:\s+[A-Z]{2,}){0,3}\s*-\s*/, '')
   .replace(/^\s*(?:\d{3,}|[a-z]{1,4}\d{2,}|sku\s*\d+|code\s*\d+)[\s:.-]+/i, '')
   .replace(/\b(description|qty|quantity|unit price|amount|line total|total|price|item|code|sku|excl|incl|vat)\b/gi, ' ')
+  .replace(/%/g, ' ')
   .replace(/[\u00ae\u00a9\u2122]/g, ' ')
   .replace(/\s+-\s+/g, ' ')
   .replace(/\s+/g, ' ')
@@ -388,6 +405,53 @@ const hasReasonableLineValues = ({ lineTotal, unitPrice, quantity }) => (
   && quantity > 0
   && quantity <= MAX_REASONABLE_QUANTITY
 );
+
+const getSupplierTableColumns = (tokens, line) => {
+  if (!Array.isArray(tokens) || tokens.length < 4) return null;
+
+  const percentCount = tokens.filter((token) => token.hasPercent).length;
+  const currencyTokens = tokens.filter((token) => token.hasCurrency);
+  const hasTableEvidence = percentCount >= 1
+    || currencyTokens.length >= 3
+    || /\b(excl\.?\s*price|disc\s*%|vat\s*%|exclusive\s+total|inclusive\s+total)\b/i.test(line);
+
+  if (!hasTableEvidence) return null;
+
+  const usableTokens = tokens.filter((token) => !token.hasPercent);
+  const unitPriceToken = usableTokens.find((token) => (
+    token.hasCurrency
+    && token.value > 0
+    && token.value <= MAX_REASONABLE_UNIT_PRICE
+  ));
+
+  if (!unitPriceToken) return null;
+
+  const quantityToken = usableTokens
+    .filter((token) => (
+      token.index < unitPriceToken.index
+      && !token.hasCurrency
+      && token.value > 0
+      && token.value <= MAX_REASONABLE_QUANTITY
+    ))
+    .at(-1);
+  const lineTotalToken = [...usableTokens]
+    .reverse()
+    .find((token) => (
+      token.hasCurrency
+      && token.index > unitPriceToken.index
+      && token.value > 0
+      && token.value <= MAX_REASONABLE_LINE_TOTAL
+    ));
+
+  if (!quantityToken || !lineTotalToken) return null;
+
+  return {
+    quantityToken,
+    unitPriceToken,
+    lineTotalToken,
+    removeTokens: tokens.filter((token) => token.index >= quantityToken.index),
+  };
+};
 
 const normalizeInvoiceLines = (text) => {
   const lines = String(text || '')
@@ -424,35 +488,59 @@ const createLineItemFromLine = ({ line, index, vatMode, vatRate }) => {
   const tokens = extractNumberTokens(line);
   const explicitQuantity = getExplicitQuantity(line);
   const codeTokens = tokens.filter((token) => isLeadingCodeToken(token, line));
-  const tokensWithoutCodes = tokens.filter((token) => (
-    !codeTokens.includes(token)
+  const tokensWithoutCodes = tokens.filter((token) => !codeTokens.includes(token));
+  const tableColumns = getSupplierTableColumns(tokensWithoutCodes, line);
+  const tableQuantityUsesExplicitUnit = Boolean(
+    tableColumns
+    && explicitQuantity?.span
+    && isTokenInsideSpan(tableColumns.quantityToken, explicitQuantity.span)
+  );
+  const tokensForGenericParsing = tokensWithoutCodes.filter((token) => (
+    !isTokenInsideSpan(token, explicitQuantity?.span)
+  ));
+  const looseQuantityToken = explicitQuantity || tableColumns ? null : getLooseQuantityToken(tokensForGenericParsing);
+  const priceCandidates = tokensWithoutCodes.filter((token) => (
+    token !== looseQuantityToken
+    && !tableColumns?.removeTokens.includes(token)
     && !isTokenInsideSpan(token, explicitQuantity?.span)
   ));
-  const looseQuantityToken = explicitQuantity ? null : getLooseQuantityToken(tokensWithoutCodes);
-  const priceCandidates = tokensWithoutCodes.filter((token) => token !== looseQuantityToken);
-  const priceTokens = priceCandidates.length >= 2
-    ? priceCandidates.slice(-2)
-    : priceCandidates.slice(-1);
+  const priceTokens = tableColumns
+    ? [tableColumns.unitPriceToken, tableColumns.lineTotalToken]
+    : priceCandidates.length >= 2
+      ? priceCandidates.slice(-2)
+      : priceCandidates.slice(-1);
 
   if (priceTokens.length === 0) return null;
 
-  const lineTotal = priceTokens[priceTokens.length - 1].value;
-  const quantity = explicitQuantity?.quantity || looseQuantityToken?.value || 1;
-  const unit = explicitQuantity?.unit || 'each';
-  const unitPrice = priceTokens.length >= 2
-    ? priceTokens[0].value
-    : quantity > 1
-      ? lineTotal / quantity
-      : lineTotal;
+  const lineTotal = tableColumns?.lineTotalToken.value || priceTokens[priceTokens.length - 1].value;
+  const quantity = tableColumns?.quantityToken.value || explicitQuantity?.quantity || looseQuantityToken?.value || 1;
+  const unit = tableColumns
+    ? tableQuantityUsesExplicitUnit || explicitQuantity?.unitOnly
+      ? explicitQuantity.unit
+      : 'each'
+    : explicitQuantity?.unit || 'each';
+  const unitPrice = tableColumns?.unitPriceToken.value
+    || (priceTokens.length >= 2
+      ? priceTokens[0].value
+      : quantity > 1
+        ? lineTotal / quantity
+        : lineTotal);
 
   if (!hasReasonableLineValues({ lineTotal, unitPrice, quantity })) {
     return null;
   }
 
   const removeNameSpans = [
-    ...priceTokens.map((token) => ({ index: token.index, end: token.end })),
-    ...codeTokens.map((token) => ({ index: token.index, end: token.end })),
-    explicitQuantity?.span,
+    ...(tableColumns
+      ? tableColumns.removeTokens
+      : priceTokens).map((token) => ({ index: token.index, end: token.end })),
+    tableColumns
+      ? tableQuantityUsesExplicitUnit
+        ? { index: explicitQuantity.span.index, end: tableColumns.quantityToken.index }
+        : explicitQuantity?.unitOnly
+          ? explicitQuantity.span
+          : null
+      : explicitQuantity?.span,
     looseQuantityToken ? { index: looseQuantityToken.index, end: looseQuantityToken.end } : null,
   ];
   const name = cleanItemName(removeSpans(line, removeNameSpans));
