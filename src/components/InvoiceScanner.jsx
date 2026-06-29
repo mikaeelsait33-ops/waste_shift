@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Line, LineChart, ResponsiveContainer } from 'recharts';
 import {
   INVOICE_CATEGORIES,
@@ -7,7 +7,6 @@ import {
   createInvoiceKey,
   getBaseUnitInfo,
   getIngredientMatch,
-  parseInvoiceText,
   roundMoney,
   summarizeInvoiceItems,
 } from '../utils/invoiceParsing';
@@ -20,7 +19,6 @@ import {
   updateStockFromInvoice,
 } from '../services/invoiceFirestore';
 
-const ACCEPTED_TYPES = 'image/jpeg,image/png,application/pdf,.jpg,.jpeg,.png,.pdf';
 const DEFAULT_VAT_RATE = 0.15;
 const UNIT_OPTIONS = ['kg', 'g', 'L', 'ml', 'each', 'case', 'doz', 'pkt', 'bag', 'tray', 'punnet', 'bunch', 'head', 'pillow'];
 
@@ -32,81 +30,6 @@ const EMPTY_MANUAL_LINE = {
   unit: 'kg',
   unitPrice: '',
   lineTotal: '',
-};
-
-const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
-  const reader = new FileReader();
-  reader.onload = () => resolve(String(reader.result || ''));
-  reader.onerror = () => reject(new Error('Could not read that file.'));
-  reader.readAsDataURL(file);
-});
-
-const renderPdfFirstPage = async (file) => {
-  const pdfjs = await import('pdfjs-dist');
-  pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mjs', import.meta.url).toString();
-
-  const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
-  const page = await pdf.getPage(1);
-  const viewport = page.getViewport({ scale: 2 });
-  const canvas = document.createElement('canvas');
-  const context = canvas.getContext('2d');
-
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
-  await page.render({ canvasContext: context, viewport }).promise;
-  return canvas.toDataURL('image/png');
-};
-
-const enhanceImageForOcr = (imageSource) => new Promise((resolve) => {
-  const image = new Image();
-
-  image.onload = () => {
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d', { willReadFrequently: true });
-    const naturalWidth = image.naturalWidth || image.width;
-    const naturalHeight = image.naturalHeight || image.height;
-    const scale = naturalWidth < 1400 ? Math.min(2, 1400 / Math.max(naturalWidth, 1)) : 1;
-
-    canvas.width = Math.round(naturalWidth * scale);
-    canvas.height = Math.round(naturalHeight * scale);
-    context.fillStyle = '#ffffff';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.drawImage(image, 0, 0, canvas.width, canvas.height);
-
-    const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-    const { data } = imageData;
-
-    for (let index = 0; index < data.length; index += 4) {
-      const gray = (data[index] * 0.299) + (data[index + 1] * 0.587) + (data[index + 2] * 0.114);
-      const contrasted = Math.max(0, Math.min(255, ((gray - 128) * 1.35) + 128));
-
-      data[index] = contrasted;
-      data[index + 1] = contrasted;
-      data[index + 2] = contrasted;
-      data[index + 3] = 255;
-    }
-
-    context.putImageData(imageData, 0, 0);
-    resolve(canvas.toDataURL('image/png'));
-  };
-
-  image.onerror = () => resolve(imageSource);
-  image.src = imageSource;
-});
-
-const runBrowserOcr = async (imageSource, onProgress) => {
-  const Tesseract = await import('tesseract.js');
-  const result = await Tesseract.recognize(imageSource, 'eng', {
-    preserve_interword_spaces: '1',
-    tessedit_pageseg_mode: '6',
-    logger: (message) => {
-      if (message?.status === 'recognizing text') {
-        onProgress?.(Math.round((message.progress || 0) * 100));
-      }
-    },
-  });
-
-  return result?.data?.text || '';
 };
 
 const createLocalMenuItems = (recipes, menuItems) => (
@@ -171,8 +94,6 @@ const createIngredientRows = ({ lineItems, matches, newIngredientDrafts, supplie
 );
 
 function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
-  const fileInputRef = useRef(null);
-  const cameraInputRef = useRef(null);
   const [workspace, setWorkspace] = useState({
     ingredients: [],
     menuItems: [],
@@ -181,13 +102,7 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
     suppliers: [],
     settings: { vatRate: DEFAULT_VAT_RATE },
   });
-  const [activeView, setActiveView] = useState('scan');
-  const [fileInfo, setFileInfo] = useState(null);
-  const [previewUrl, setPreviewUrl] = useState('');
-  const [rawText, setRawText] = useState('');
-  const [debugOpen, setDebugOpen] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [isScanning, setIsScanning] = useState(false);
+  const [activeView, setActiveView] = useState('entry');
   const [message, setMessage] = useState('');
   const [supplierName, setSupplierName] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -195,7 +110,6 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
   const [vatMode, setVatMode] = useState('inclusive');
   const [lineItems, setLineItems] = useState([]);
   const [manualLineDraft, setManualLineDraft] = useState(EMPTY_MANUAL_LINE);
-  const [rawRowsDraft, setRawRowsDraft] = useState('');
   const [newDrawerLineId, setNewDrawerLineId] = useState('');
   const [newIngredientDrafts, setNewIngredientDrafts] = useState({});
   const [confirmedInvoice, setConfirmedInvoice] = useState(null);
@@ -265,7 +179,7 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
         setWorkspace(data);
         setVatRate(Number(data.settings?.vatRate || DEFAULT_VAT_RATE));
         if (!firebaseReady) {
-          setMessage('Firebase is not configured. Invoice scanning can run, but saving is disabled.');
+          setMessage('Firebase is not configured. Manual invoice entry works locally, but saving is disabled.');
         }
       } catch (error) {
         setMessage(error?.message || 'Could not load invoice workspace data.');
@@ -285,7 +199,7 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
     onInvoiceSaved?.();
   };
 
-  const applyLineCalculations = (item) => {
+  const applyLineCalculations = (item, options = {}) => {
     const safeQuantity = Number(item.quantity) > 0 ? Number(item.quantity) : 1;
     const safeLineTotal = Number.isFinite(Number(item.lineTotal)) ? Number(item.lineTotal) : 0;
     const safeUnitPrice = Number.isFinite(Number(item.unitPrice))
@@ -293,11 +207,13 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
       : safeQuantity > 0
         ? safeLineTotal / safeQuantity
         : safeLineTotal;
+    const nextVatMode = options.vatMode || item.vatMode || vatMode;
+    const nextVatRate = Number.isFinite(Number(options.vatRate)) ? Number(options.vatRate) : vatRate;
     const vat = calculateVatValues({
       lineTotal: safeLineTotal,
       unitPrice: safeUnitPrice,
-      vatMode: item.vatMode || vatMode,
-      vatRate,
+      vatMode: nextVatMode,
+      vatRate: nextVatRate,
     });
     const base = getBaseUnitInfo(safeQuantity, item.unit || 'each');
 
@@ -307,8 +223,8 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
       unit: item.unit || 'each',
       unitPrice: roundMoney(safeUnitPrice),
       lineTotal: roundMoney(safeLineTotal),
-      vatMode: item.vatMode || vatMode,
-      vatRate,
+      vatMode: nextVatMode,
+      vatRate: nextVatRate,
       ...vat,
       baseQuantity: base.quantity,
       baseUnit: base.unit,
@@ -368,7 +284,7 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
     setNewDrawerLineId('');
     setConfirmedInvoice(null);
     setStockUpdates([]);
-    setMessage('Parsed invoice lines cleared. You can correct the OCR text and re-parse it.');
+    setMessage('Invoice lines cleared. Add the lines again when ready.');
   };
 
   const addManualLineItem = () => {
@@ -384,97 +300,6 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
     setStockUpdates([]);
     setManualLineDraft(EMPTY_MANUAL_LINE);
     setMessage(`${nextLine.itemName} added as a manual invoice line.`);
-  };
-
-  const parseRawRowsDraft = () => {
-    const parsed = parseInvoiceText(rawRowsDraft, { vatRate });
-
-    if (parsed.items.length === 0) {
-      setMessage('No RAW table rows were found. Paste only the item table rows, then try again.');
-      return;
-    }
-
-    setLineItems(parsed.items);
-    setVatMode(parsed.vatMode);
-    setRawText(rawRowsDraft);
-    setConfirmedInvoice(null);
-    setStockUpdates([]);
-    setMessage(`Parsed ${parsed.items.length} RAW invoice row${parsed.items.length === 1 ? '' : 's'}.`);
-  };
-
-  const parseAndApplyText = (text) => {
-    if (!String(text || '').trim()) {
-      setLineItems([]);
-      setMessage('Paste invoice text or run OCR before parsing.');
-      return;
-    }
-
-    const parsed = parseInvoiceText(text, { vatRate });
-    setRawText(text);
-    setSupplierName(parsed.supplierName);
-    setInvoiceDate(parsed.invoiceDate);
-    setVatMode(parsed.vatMode);
-    setLineItems(parsed.items);
-    setConfirmedInvoice(null);
-    setStockUpdates([]);
-    setMessage(parsed.items.length > 0
-      ? `Found ${parsed.items.length} invoice line${parsed.items.length === 1 ? '' : 's'}. Review before confirming.`
-      : 'No invoice lines were found. Correct the OCR text below, then re-parse it.');
-  };
-
-  const handleFile = async (file) => {
-    if (!file) return;
-
-    setMessage('');
-    setLineItems([]);
-    setConfirmedInvoice(null);
-    setStockUpdates([]);
-    setProgress(0);
-    setFileInfo({
-      name: file.name,
-      type: file.type || 'unknown',
-      size: file.size,
-    });
-
-    try {
-      const imageUrl = file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
-        ? await renderPdfFirstPage(file)
-        : await readFileAsDataUrl(file);
-
-      setPreviewUrl(imageUrl);
-      setRawText('');
-      setMessage(file.type === 'application/pdf' ? 'PDF first page is ready to scan.' : 'Image is ready to scan.');
-    } catch (error) {
-      setMessage(error?.message || 'Could not prepare that invoice.');
-    }
-  };
-
-  const handleDrop = (event) => {
-    event.preventDefault();
-    handleFile(event.dataTransfer.files?.[0]);
-  };
-
-  const scanInvoice = async () => {
-    if (!previewUrl) {
-      setMessage('Upload or capture an invoice first.');
-      return;
-    }
-
-    setIsScanning(true);
-    setProgress(1);
-    setMessage('Running browser OCR...');
-
-    try {
-      const enhancedImage = await enhanceImageForOcr(previewUrl);
-      const text = await runBrowserOcr(enhancedImage, setProgress);
-      parseAndApplyText(text);
-      setDebugOpen(true);
-      setProgress(100);
-    } catch (error) {
-      setMessage(error?.message || 'OCR failed. Try a brighter photo or a cropped invoice image.');
-    } finally {
-      setIsScanning(false);
-    }
   };
 
   const openNewIngredientDrawer = (lineItem) => {
@@ -551,11 +376,14 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
     }
 
     if (lineItems.length === 0) {
-      setMessage('Scan and review at least one invoice line before confirming.');
+      setMessage('Add at least one invoice line before confirming.');
       return;
     }
 
     const invoiceId = `invoice_${Date.now()}`;
+    const manualSourceText = lineItems
+      .map((item) => `${item.itemName} | ${item.quantity} ${item.unit} | ${formatMoney(item.unitPrice)} | ${formatMoney(item.lineTotal)}`)
+      .join('\n');
 
     try {
       const result = await saveConfirmedInvoice({
@@ -567,7 +395,7 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
         totals,
         vatRate,
         vatMode,
-        rawText,
+        rawText: manualSourceText,
       });
 
       if (!result?.ok) {
@@ -636,12 +464,12 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
       <div className="section-header">
         <div>
           <p className="eyebrow">Invoices</p>
-          <h2 className="title">Invoice Scanning & Stock Control</h2>
-          <p className="subtitle">Scan supplier invoices, review prices, update recipes, and put stock on hand.</p>
+          <h2 className="title">Invoice Entry & Stock Control</h2>
+          <p className="subtitle">Enter supplier invoice lines, review prices, update recipes, and put stock on hand.</p>
         </div>
         <div className="segmented-control" aria-label="Invoice views">
-          <button type="button" className={`segment-button${activeView === 'scan' ? ' is-active' : ''}`} onClick={() => setActiveView('scan')}>
-            Scan
+          <button type="button" className={`segment-button${activeView === 'entry' ? ' is-active' : ''}`} onClick={() => setActiveView('entry')}>
+            Entry
           </button>
           <button type="button" className={`segment-button${activeView === 'history' ? ' is-active' : ''}`} onClick={() => setActiveView('history')}>
             History
@@ -653,86 +481,20 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
         <div className="notice-panel notice-panel--warning">
           <div>
             <h3 className="breakdown-title">Firebase required for saving</h3>
-            <p className="small-text" style={{ margin: 0 }}>OCR still works locally, but invoices, ingredients, suppliers, and stock updates need Firebase env vars.</p>
+            <p className="small-text" style={{ margin: 0 }}>Manual entry works locally, but invoices, ingredients, suppliers, and stock updates need Firebase env vars.</p>
           </div>
         </div>
       )}
 
-      {activeView === 'scan' && (
+      {activeView === 'entry' && (
         <>
-          <div className="invoice-scan-grid">
-            <section
-              className="panel invoice-upload-panel"
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={handleDrop}
-            >
-              <div className="panel-body">
-                <div className="section-header">
-                  <div>
-                    <p className="eyebrow">Upload</p>
-                    <h2 className="title">Capture Invoice</h2>
-                  </div>
-                  {fileInfo && <span className="badge">{(fileInfo.size / 1024).toFixed(1)} KB</span>}
-                </div>
-
-                <div className="invoice-drop-target">
-                  {previewUrl ? (
-                    <img src={previewUrl} alt="Invoice preview" className="invoice-preview-image" />
-                  ) : (
-                    <div>
-                      <strong>Drop invoice here</strong>
-                      <span className="small-text">JPG, PNG, or first page of a PDF</span>
-                    </div>
-                  )}
-                </div>
-
-                <div className="manager-row">
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept={ACCEPTED_TYPES}
-                    onChange={(event) => handleFile(event.target.files?.[0])}
-                    className="input-hidden"
-                  />
-                  <input
-                    ref={cameraInputRef}
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    onChange={(event) => handleFile(event.target.files?.[0])}
-                    className="input-hidden"
-                  />
-                  <button type="button" className="primary-button" onClick={() => fileInputRef.current?.click()}>
-                    Upload file
-                  </button>
-                  <button type="button" className="ghost-button is-warning" onClick={() => cameraInputRef.current?.click()}>
-                    Camera capture
-                  </button>
-                </div>
-
-                {fileInfo && <p className="small-text">{fileInfo.name}</p>}
-
-                <button type="button" className="primary-button invoice-primary-action" onClick={scanInvoice} disabled={isScanning || !previewUrl}>
-                  {isScanning ? 'Scanning...' : 'Run OCR scan'}
-                </button>
-
-                {(isScanning || progress > 0) && (
-                  <div className="invoice-progress">
-                    <div className="progress-track">
-                      <div className="progress-fill" style={{ width: `${progress}%` }} />
-                    </div>
-                    <span className="small-text">{progress}%</span>
-                  </div>
-                )}
-              </div>
-            </section>
-
+          <div className="invoice-entry-grid">
             <section className="panel">
               <div className="panel-body">
                 <div className="section-header">
                   <div>
                     <p className="eyebrow">Invoice details</p>
-                    <h2 className="title">Confirm Header</h2>
+                    <h2 className="title">Header</h2>
                   </div>
                 </div>
 
@@ -765,14 +527,18 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
                       min="0"
                       step="0.01"
                       value={vatRate}
-                      onChange={(event) => setVatRate(Number(event.target.value) || 0)}
+                      onChange={(event) => {
+                        const nextRate = Number(event.target.value) || 0;
+                        setVatRate(nextRate);
+                        setLineItems((currentItems) => currentItems.map((item) => applyLineCalculations(item, { vatRate: nextRate })));
+                      }}
                       className="input"
                     />
                   </div>
                 </div>
 
                 <div className="field">
-                  <span className="field-label">Detected VAT mode</span>
+                  <span className="field-label">VAT mode</span>
                   <div className="segmented-control" aria-label="VAT mode">
                     {['inclusive', 'exclusive'].map((mode) => (
                       <button
@@ -780,16 +546,10 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
                         type="button"
                         onClick={() => {
                           setVatMode(mode);
-                          setLineItems((currentItems) => currentItems.map((item) => ({
+                          setLineItems((currentItems) => currentItems.map((item) => applyLineCalculations({
                             ...item,
                             vatMode: mode,
-                            ...calculateVatValues({
-                              lineTotal: item.lineTotal,
-                              unitPrice: item.unitPrice,
-                              vatMode: mode,
-                              vatRate,
-                            }),
-                          })));
+                          }, { vatMode: mode })));
                         }}
                         className={`segment-button${vatMode === mode ? ' is-active' : ''}`}
                       >
@@ -819,129 +579,95 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
                 </div>
               </div>
             </section>
+
+            <section className="panel invoice-manual-panel">
+              <div className="panel-body">
+                <div className="section-header">
+                  <div>
+                    <p className="eyebrow">Manual entry</p>
+                    <h2 className="title">Add Line</h2>
+                    <p className="subtitle">Enter one invoice row at a time. Leave total blank to calculate quantity x unit price.</p>
+                  </div>
+                  <span className="badge">{lineItems.length} lines</span>
+                </div>
+
+                <div className="invoice-manual-grid">
+                  <label className="field">
+                    <span className="field-label">Item</span>
+                    <input
+                      value={manualLineDraft.itemName}
+                      onChange={(event) => setManualLineDraft((draft) => ({ ...draft, itemName: event.target.value }))}
+                      className="input"
+                      placeholder="Tomatoes"
+                    />
+                  </label>
+                  <label className="field">
+                    <span className="field-label">Qty</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.001"
+                      value={manualLineDraft.quantity}
+                      onChange={(event) => setManualLineDraft((draft) => ({ ...draft, quantity: event.target.value }))}
+                      className="input"
+                    />
+                  </label>
+                  <label className="field">
+                    <span className="field-label">Unit</span>
+                    <select
+                      value={manualLineDraft.unit}
+                      onChange={(event) => setManualLineDraft((draft) => ({ ...draft, unit: event.target.value }))}
+                      className="select"
+                    >
+                      {UNIT_OPTIONS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span className="field-label">Unit price</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={manualLineDraft.unitPrice}
+                      onChange={(event) => setManualLineDraft((draft) => ({ ...draft, unitPrice: event.target.value }))}
+                      className="input"
+                      placeholder="29.90"
+                    />
+                  </label>
+                  <label className="field">
+                    <span className="field-label">Total</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={manualLineDraft.lineTotal}
+                      onChange={(event) => setManualLineDraft((draft) => ({ ...draft, lineTotal: event.target.value }))}
+                      className="input"
+                      placeholder="Auto"
+                    />
+                  </label>
+                </div>
+
+                <div className="invoice-manual-actions">
+                  <button type="button" className="primary-button" onClick={addManualLineItem}>
+                    Add line
+                  </button>
+                  <button type="button" className="ghost-button" onClick={() => setManualLineDraft(EMPTY_MANUAL_LINE)}>
+                    Reset
+                  </button>
+                </div>
+              </div>
+            </section>
           </div>
 
           {message && <div className="inline-message" role="status">{message}</div>}
-
-          <details className="panel invoice-debug-panel" open={debugOpen} onToggle={(event) => setDebugOpen(event.currentTarget.open)}>
-            <summary className="breakdown-title">OCR Text & Manual Correction</summary>
-            <div className="invoice-debug-body">
-              <textarea
-                value={rawText}
-                onChange={(event) => setRawText(event.target.value)}
-                className="invoice-debug-text"
-                placeholder="Paste invoice text here, or correct OCR text after scanning."
-                spellCheck="false"
-                aria-label="Editable OCR text"
-              />
-              <div className="invoice-debug-actions">
-                <button
-                  type="button"
-                  className="primary-button"
-                  onClick={() => parseAndApplyText(rawText)}
-                  disabled={!rawText.trim()}
-                >
-                  Re-parse text
-                </button>
-                <span className="small-text">Use this when OCR misses item names, quantities, or prices.</span>
-              </div>
-            </div>
-          </details>
-
-          <section className="panel invoice-manual-panel">
-            <div className="panel-body">
-              <div className="section-header">
-                <div>
-                  <p className="eyebrow">Fallback</p>
-                  <h2 className="title">Manual Invoice Entry</h2>
-                </div>
-                <button type="button" className="primary-button" onClick={addManualLineItem}>
-                  Add line
-                </button>
-              </div>
-
-              <div className="invoice-manual-grid">
-                <label className="field">
-                  <span className="field-label">Item</span>
-                  <input
-                    value={manualLineDraft.itemName}
-                    onChange={(event) => setManualLineDraft((draft) => ({ ...draft, itemName: event.target.value }))}
-                    className="input"
-                    placeholder="Tomatoes"
-                  />
-                </label>
-                <label className="field">
-                  <span className="field-label">Qty</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.001"
-                    value={manualLineDraft.quantity}
-                    onChange={(event) => setManualLineDraft((draft) => ({ ...draft, quantity: event.target.value }))}
-                    className="input"
-                  />
-                </label>
-                <label className="field">
-                  <span className="field-label">Unit</span>
-                  <select
-                    value={manualLineDraft.unit}
-                    onChange={(event) => setManualLineDraft((draft) => ({ ...draft, unit: event.target.value }))}
-                    className="select"
-                  >
-                    {UNIT_OPTIONS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
-                  </select>
-                </label>
-                <label className="field">
-                  <span className="field-label">Unit price</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={manualLineDraft.unitPrice}
-                    onChange={(event) => setManualLineDraft((draft) => ({ ...draft, unitPrice: event.target.value }))}
-                    className="input"
-                    placeholder="29.90"
-                  />
-                </label>
-                <label className="field">
-                  <span className="field-label">Total</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={manualLineDraft.lineTotal}
-                    onChange={(event) => setManualLineDraft((draft) => ({ ...draft, lineTotal: event.target.value }))}
-                    className="input"
-                    placeholder="62.79"
-                  />
-                </label>
-              </div>
-
-              <details className="invoice-raw-row-panel">
-                <summary className="breakdown-title">RAW table rows</summary>
-                <div className="invoice-debug-body">
-                  <textarea
-                    value={rawRowsDraft}
-                    onChange={(event) => setRawRowsDraft(event.target.value)}
-                    className="invoice-debug-text invoice-raw-rows-text"
-                    placeholder="TOM - 001 - Tomatoes Kg 2.10 R29.90 0.00% 0.00% R62.79 R62.79"
-                    spellCheck="false"
-                    aria-label="RAW invoice rows"
-                  />
-                  <button type="button" className="ghost-button is-warning" onClick={parseRawRowsDraft} disabled={!rawRowsDraft.trim()}>
-                    Parse rows
-                  </button>
-                </div>
-              </details>
-            </div>
-          </section>
 
           <section className="panel">
             <div className="panel-body">
               <div className="section-header">
                 <div>
                   <p className="eyebrow">Line items</p>
-                  <h2 className="title">Review Parsed Items</h2>
+                  <h2 className="title">Review Invoice Lines</h2>
                   <p className="subtitle">Every field is editable before save. New ingredients are flagged for setup.</p>
                 </div>
                 <div className="manager-row">
@@ -956,7 +682,7 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
               </div>
 
               {lineItems.length === 0 ? (
-                <div className="empty-state">Upload an invoice, run OCR, then review parsed lines here.</div>
+                <div className="empty-state">Add invoice lines manually, then review them here.</div>
               ) : (
                 <div className="invoice-edit-table">
                   <div className="invoice-edit-head">
@@ -1251,7 +977,7 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
 
             <div className="notice-panel notice-panel--warning">
               <div>
-                <h3 className="breakdown-title">From scan</h3>
+                <h3 className="breakdown-title">From invoice line</h3>
                 <p className="small-text" style={{ margin: 0 }}>
                   {formatMoney(activeNewLineItem.priceExVAT)} ex VAT, {formatMoney(activeNewLineItem.priceIncVAT)} incl VAT
                 </p>
