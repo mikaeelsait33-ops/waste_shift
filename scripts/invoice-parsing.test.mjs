@@ -4,6 +4,10 @@ import {
   parseMoney,
   roundMoney,
 } from '../src/utils/invoiceParsing.js';
+import {
+  normalizeGeminiInvoicePayload,
+  parseGeminiJsonText,
+} from '../api/gemini-invoice.js';
 
 const getOnlyItem = (text) => {
   const parsed = parseInvoiceText(text, { vatRate: 0.15 });
@@ -108,5 +112,42 @@ assert.equal(exclusive.items[0].priceExVAT, 100);
 assert.equal(exclusive.items[0].vatAmount, 15);
 assert.equal(exclusive.items[0].priceIncVAT, 115);
 assert.equal(roundMoney(exclusive.totals.totalIncVAT), 115);
+
+const geminiInvoice = normalizeGeminiInvoicePayload(parseGeminiJsonText(`
+\`\`\`json
+{
+  "supplierName": "Raw Naturally Nutritious",
+  "invoiceDate": "2026-06-27",
+  "vatMode": "exclusive",
+  "vatRate": 0,
+  "items": [
+    {
+      "itemName": "Tomatoes",
+      "quantity": 2.1,
+      "unit": "kilograms",
+      "unitPrice": 29.9,
+      "lineTotal": 62.79,
+      "confidence": 0.94
+    },
+    {
+      "itemName": "Bank reference",
+      "quantity": 1,
+      "unit": "each",
+      "unitPrice": 0,
+      "lineTotal": 0
+    }
+  ]
+}
+\`\`\`
+`), { fallbackVatRate: 0.15, fallbackVatMode: 'inclusive' });
+
+assert.equal(geminiInvoice.supplierName, 'Raw Naturally Nutritious');
+assert.equal(geminiInvoice.vatMode, 'exclusive');
+assert.equal(geminiInvoice.vatRate, 0);
+assert.equal(geminiInvoice.items.length, 1);
+assert.deepEqual(
+  [geminiInvoice.items[0].itemName, geminiInvoice.items[0].quantity, geminiInvoice.items[0].unit, geminiInvoice.items[0].unitPrice, geminiInvoice.items[0].lineTotal],
+  ['Tomatoes', 2.1, 'kg', 29.9, 62.79]
+);
 
 console.log('invoice parsing tests passed');

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Line, LineChart, ResponsiveContainer } from 'recharts';
 import {
   INVOICE_CATEGORIES,
@@ -7,6 +7,7 @@ import {
   createInvoiceKey,
   getBaseUnitInfo,
   getIngredientMatch,
+  normalizeInvoiceUnit,
   roundMoney,
   summarizeInvoiceItems,
 } from '../utils/invoiceParsing';
@@ -20,7 +21,11 @@ import {
 } from '../services/invoiceFirestore';
 
 const DEFAULT_VAT_RATE = 0.15;
-const UNIT_OPTIONS = ['kg', 'g', 'L', 'ml', 'each', 'case', 'doz', 'pkt', 'bag', 'tray', 'punnet', 'bunch', 'head', 'pillow'];
+const UNIT_OPTIONS = ['kg', 'g', 'L', 'ml', 'each', 'case', 'doz', 'pkt', 'bag', 'box', 'bottle', 'tray', 'tin', 'punnet', 'bunch', 'head', 'pillow'];
+const SCAN_IMAGE_MAX_EDGE = 1800;
+const SCAN_IMAGE_QUALITY = 0.84;
+const MAX_SCAN_BYTES = 8 * 1024 * 1024;
+const SUPPORTED_SCAN_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
 
 const formatMoney = (value) => `R${Number(value || 0).toFixed(2)}`;
 const formatPercent = (value) => `${Number(value || 0).toFixed(1)}%`;
@@ -62,6 +67,106 @@ const mergeMenuItems = (firestoreMenuItems, localMenuItems) => {
   }));
 
   return [...byId.values()].filter((item) => item?.name);
+};
+
+const readBlobAsDataUrl = (blob) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+
+  reader.onload = () => resolve(String(reader.result || ''));
+  reader.onerror = () => reject(new Error('Could not read this invoice file.'));
+  reader.readAsDataURL(blob);
+});
+
+const getBase64FromDataUrl = (dataUrl) => String(dataUrl || '').split(',').pop() || '';
+
+const getApproxBase64Bytes = (data) => Math.ceil(String(data || '').length * 0.75);
+
+const assertScanPayloadSize = (data) => {
+  if (getApproxBase64Bytes(data) > MAX_SCAN_BYTES) {
+    throw new Error('This invoice file is too large. Try a cropped photo or a smaller PDF.');
+  }
+};
+
+const createImageScanPayload = (file) => new Promise((resolve, reject) => {
+  const imageUrl = URL.createObjectURL(file);
+  const image = new Image();
+
+  image.onload = () => {
+    const scale = Math.min(1, SCAN_IMAGE_MAX_EDGE / Math.max(image.width, image.height));
+    const canvas = document.createElement('canvas');
+    const width = Math.max(1, Math.round(image.width * scale));
+    const height = Math.max(1, Math.round(image.height * scale));
+    const context = canvas.getContext('2d');
+
+    canvas.width = width;
+    canvas.height = height;
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
+    URL.revokeObjectURL(imageUrl);
+
+    canvas.toBlob(async (blob) => {
+      if (!blob) {
+        reject(new Error('Could not prepare this invoice photo.'));
+        return;
+      }
+
+      try {
+        const dataUrl = await readBlobAsDataUrl(blob);
+        const data = getBase64FromDataUrl(dataUrl);
+
+        assertScanPayloadSize(data);
+        resolve({
+          name: file.name,
+          mimeType: 'image/jpeg',
+          data,
+        });
+      } catch (error) {
+        reject(error);
+      }
+    }, 'image/jpeg', SCAN_IMAGE_QUALITY);
+  };
+
+  image.onerror = () => {
+    URL.revokeObjectURL(imageUrl);
+    reject(new Error('Could not load this invoice photo.'));
+  };
+  image.src = imageUrl;
+});
+
+const createScanPayload = async (file) => {
+  if (!file || !SUPPORTED_SCAN_TYPES.has(file.type)) {
+    throw new Error('Upload a JPG, PNG, WEBP, or PDF invoice.');
+  }
+
+  if (file.type.startsWith('image/')) {
+    return createImageScanPayload(file);
+  }
+
+  const dataUrl = await readBlobAsDataUrl(file);
+  const data = getBase64FromDataUrl(dataUrl);
+
+  assertScanPayloadSize(data);
+  return {
+    name: file.name,
+    mimeType: file.type,
+    data,
+  };
+};
+
+const getScannedLineTotal = (item, nextVatMode) => {
+  const lineTotal = Number(item?.lineTotal);
+  const modeTotal = nextVatMode === 'exclusive'
+    ? Number(item?.exclusiveTotal)
+    : Number(item?.inclusiveTotal);
+  const fallbackTotal = nextVatMode === 'exclusive'
+    ? Number(item?.inclusiveTotal)
+    : Number(item?.exclusiveTotal);
+
+  if (Number.isFinite(lineTotal) && lineTotal > 0) return lineTotal;
+  if (Number.isFinite(modeTotal) && modeTotal > 0) return modeTotal;
+  if (Number.isFinite(fallbackTotal) && fallbackTotal > 0) return fallbackTotal;
+  return 0;
 };
 
 const createIngredientRows = ({ lineItems, matches, newIngredientDrafts, supplierName }) => (
@@ -110,6 +215,10 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
   const [vatMode, setVatMode] = useState('inclusive');
   const [lineItems, setLineItems] = useState([]);
   const [manualLineDraft, setManualLineDraft] = useState(EMPTY_MANUAL_LINE);
+  const [scanFile, setScanFile] = useState(null);
+  const [isScanningInvoice, setIsScanningInvoice] = useState(false);
+  const [scanSummary, setScanSummary] = useState(null);
+  const scanFileInputRef = useRef(null);
   const [newDrawerLineId, setNewDrawerLineId] = useState('');
   const [newIngredientDrafts, setNewIngredientDrafts] = useState({});
   const [confirmedInvoice, setConfirmedInvoice] = useState(null);
@@ -300,6 +409,122 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
     setStockUpdates([]);
     setManualLineDraft(EMPTY_MANUAL_LINE);
     setMessage(`${nextLine.itemName} added as a manual invoice line.`);
+  };
+
+  const handleScanFileChange = (event) => {
+    const file = event.target.files?.[0] || null;
+
+    setScanSummary(null);
+    setScanFile(file);
+
+    if (!file) {
+      return;
+    }
+
+    if (!SUPPORTED_SCAN_TYPES.has(file.type)) {
+      setMessage('Upload a JPG, PNG, WEBP, or PDF invoice.');
+      setScanFile(null);
+      event.target.value = '';
+      return;
+    }
+
+    setMessage(`${file.name} selected for Gemini scanning.`);
+  };
+
+  const scanInvoiceWithGemini = async () => {
+    if (!scanFile) {
+      setMessage('Choose an invoice file before scanning.');
+      return;
+    }
+
+    try {
+      setIsScanningInvoice(true);
+      setScanSummary(null);
+      setMessage('Scanning invoice with Gemini...');
+
+      const scanPayload = await createScanPayload(scanFile);
+      const response = await fetch('/api/gemini-invoice', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          file: scanPayload,
+          vatMode,
+          vatRate,
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+
+      if (!response.ok || !body?.ok) {
+        throw new Error(body?.message || 'Gemini could not read this invoice.');
+      }
+
+      const invoice = body.invoice || {};
+      const nextVatMode = invoice.vatMode === 'exclusive' || invoice.vatMode === 'inclusive'
+        ? invoice.vatMode
+        : vatMode;
+      const nextVatRate = Number.isFinite(Number(invoice.vatRate))
+        ? Number(invoice.vatRate)
+        : vatRate;
+      const createdAt = Date.now();
+      const scannedLines = (Array.isArray(invoice.items) ? invoice.items : [])
+        .map((item, index) => {
+          const itemName = String(item?.itemName || '').trim();
+          const quantity = Number(item?.quantity) > 0 ? Number(item.quantity) : 1;
+          const lineTotal = getScannedLineTotal(item, nextVatMode);
+          const unitPrice = Number(item?.unitPrice) > 0
+            ? Number(item.unitPrice)
+            : quantity > 0
+              ? lineTotal / quantity
+              : lineTotal;
+
+          if (!itemName || lineTotal <= 0) {
+            return null;
+          }
+
+          return applyLineCalculations({
+            id: `gemini-${createdAt}-${index}-${createInvoiceKey(itemName) || Math.random().toString(36).slice(2)}`,
+            itemName,
+            quantity,
+            unit: normalizeInvoiceUnit(item?.unit || 'each'),
+            unitPrice: roundMoney(unitPrice),
+            lineTotal: roundMoney(lineTotal),
+            vatMode: nextVatMode,
+            vatRate: nextVatRate,
+            rawLine: item?.rawLine || `Gemini scan: ${itemName}`,
+            confidence: Number(item?.confidence) || 0.82,
+          }, { vatMode: nextVatMode, vatRate: nextVatRate });
+        })
+        .filter(Boolean);
+
+      if (scannedLines.length === 0) {
+        throw new Error('Gemini did not find usable invoice line items. Try a clearer, flatter photo.');
+      }
+
+      if (invoice.supplierName) {
+        setSupplierName(invoice.supplierName);
+      }
+
+      if (/^\d{4}-\d{2}-\d{2}$/.test(invoice.invoiceDate || '')) {
+        setInvoiceDate(invoice.invoiceDate);
+      }
+
+      setVatMode(nextVatMode);
+      setVatRate(nextVatRate);
+      setLineItems((currentItems) => [...currentItems, ...scannedLines]);
+      setConfirmedInvoice(null);
+      setStockUpdates([]);
+      setScanSummary({
+        fileName: scanFile.name,
+        lineCount: scannedLines.length,
+        supplierName: invoice.supplierName || '',
+        model: body.model || 'Gemini',
+      });
+      setMessage(`Gemini added ${scannedLines.length} invoice line${scannedLines.length === 1 ? '' : 's'} for review.`);
+    } catch (error) {
+      setMessage(error?.message || 'Could not scan this invoice with Gemini.');
+    } finally {
+      setIsScanningInvoice(false);
+    }
   };
 
   const openNewIngredientDrawer = (lineItem) => {
@@ -584,11 +809,51 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
               <div className="panel-body">
                 <div className="section-header">
                   <div>
-                    <p className="eyebrow">Manual entry</p>
-                    <h2 className="title">Add Line</h2>
-                    <p className="subtitle">Enter one invoice row at a time. Leave total blank to calculate quantity x unit price.</p>
+                    <p className="eyebrow">Capture</p>
+                    <h2 className="title">Scan or Add Lines</h2>
+                    <p className="subtitle">Use Gemini for invoice photos or add rows manually.</p>
                   </div>
                   <span className="badge">{lineItems.length} lines</span>
+                </div>
+
+                <div className="invoice-scan-card">
+                  <label className="invoice-upload-card">
+                    <input
+                      ref={scanFileInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,application/pdf"
+                      onChange={handleScanFileChange}
+                      className="invoice-file-input"
+                    />
+                    <span className="invoice-upload-label">{scanFile ? scanFile.name : 'Choose invoice file'}</span>
+                    <span className="small-text">JPG, PNG, WEBP, or PDF</span>
+                  </label>
+                  <div className="invoice-manual-actions">
+                    <button type="button" className="primary-button" onClick={scanInvoiceWithGemini} disabled={!scanFile || isScanningInvoice}>
+                      {isScanningInvoice ? 'Scanning...' : 'Scan invoice'}
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      onClick={() => {
+                        setScanFile(null);
+                        setScanSummary(null);
+                        if (scanFileInputRef.current) {
+                          scanFileInputRef.current.value = '';
+                        }
+                      }}
+                      disabled={isScanningInvoice || !scanFile}
+                    >
+                      Clear file
+                    </button>
+                  </div>
+                  {scanSummary && (
+                    <div className="invoice-scan-status">
+                      <span className="badge is-green">{scanSummary.lineCount} lines</span>
+                      {scanSummary.supplierName && <span className="badge">{scanSummary.supplierName}</span>}
+                      <span className="small-text">{scanSummary.model}</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="invoice-manual-grid">

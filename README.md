@@ -13,7 +13,7 @@ Local data is saved in browser storage while Firebase is used for shared menu it
 
 ## Invoice Scanning
 
-The Invoices page runs OCR entirely in the browser with Tesseract.js. JPG and PNG files are scanned directly; PDFs are rendered to an image with pdf.js before OCR. No paid invoice API or backend OCR route is required.
+The Invoices page can scan invoice photos and PDFs with Gemini through the serverless route at `api/gemini-invoice.js`. Add `GEMINI_API_KEY` to local env and Vercel Project Settings > Environment Variables, then redeploy. Manual entry remains available and every scanned line is editable before saving.
 
 The invoice module writes to:
 
