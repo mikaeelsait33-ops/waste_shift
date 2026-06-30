@@ -4,14 +4,38 @@ export const PRICE_UNIT_OPTIONS = [
   { value: 'kg', label: 'kilogram (kg)' },
   { value: 'ml', label: 'millilitre (ml)' },
   { value: 'l', label: 'litre (L)' },
+  { value: 'doz', label: 'dozen' },
+  { value: 'case', label: 'case' },
+  { value: 'pkt', label: 'packet' },
+  { value: 'bag', label: 'bag' },
+  { value: 'box', label: 'box' },
+  { value: 'bottle', label: 'bottle' },
+  { value: 'tray', label: 'tray' },
+  { value: 'tin', label: 'tin' },
+  { value: 'punnet', label: 'punnet' },
+  { value: 'bunch', label: 'bunch' },
+  { value: 'head', label: 'head' },
+  { value: 'pillow', label: 'pillow' },
 ];
 
 const UNIT_CONVERSIONS = {
-  each: { family: 'count', factor: 1 },
+  each: { family: 'each', factor: 1 },
   g: { family: 'mass', factor: 1 },
   kg: { family: 'mass', factor: 1000 },
   ml: { family: 'volume', factor: 1 },
   l: { family: 'volume', factor: 1000 },
+  doz: { family: 'each', factor: 12 },
+  case: { family: 'case', factor: 1 },
+  pkt: { family: 'pkt', factor: 1 },
+  bag: { family: 'bag', factor: 1 },
+  box: { family: 'box', factor: 1 },
+  bottle: { family: 'bottle', factor: 1 },
+  tray: { family: 'tray', factor: 1 },
+  tin: { family: 'tin', factor: 1 },
+  punnet: { family: 'punnet', factor: 1 },
+  bunch: { family: 'bunch', factor: 1 },
+  head: { family: 'head', factor: 1 },
+  pillow: { family: 'pillow', factor: 1 },
 };
 
 const roundCurrency = (value) => {
@@ -53,7 +77,7 @@ const parseQuantityNumber = (value) => {
   return numericMatch ? Number(numericMatch[0]) : Number.NaN;
 };
 
-const normalizeUnit = (unit) => {
+export const normalizeItemPriceUnit = (unit) => {
   const value = String(unit || '').trim().toLowerCase();
 
   if (!value) return 'each';
@@ -62,6 +86,18 @@ const normalizeUnit = (unit) => {
   if (['kg', 'kgs', 'kilogram', 'kilograms'].includes(value)) return 'kg';
   if (['ml', 'millilitre', 'millilitres', 'milliliter', 'milliliters'].includes(value)) return 'ml';
   if (['l', 'lt', 'ltr', 'litre', 'litres', 'liter', 'liters'].includes(value)) return 'l';
+  if (['doz', 'dozen'].includes(value)) return 'doz';
+  if (['case', 'cases'].includes(value)) return 'case';
+  if (['pkt', 'packet', 'pack', 'packets', 'packs'].includes(value)) return 'pkt';
+  if (['bag', 'bags'].includes(value)) return 'bag';
+  if (['box', 'boxes'].includes(value)) return 'box';
+  if (['btl', 'bottle', 'bottles'].includes(value)) return 'bottle';
+  if (['tray', 'trays'].includes(value)) return 'tray';
+  if (['tin', 'tins'].includes(value)) return 'tin';
+  if (['punnet', 'punnets', 'pp'].includes(value)) return 'punnet';
+  if (['bunch', 'bunches'].includes(value)) return 'bunch';
+  if (['head', 'heads'].includes(value)) return 'head';
+  if (['pillow', 'pillows'].includes(value)) return 'pillow';
   return value;
 };
 
@@ -79,7 +115,7 @@ export const parseIngredientQuantity = (quantityLabel) => {
   }
 
   const unitMatch = text.match(/(?:\d+\s+\d+\s*\/\s*\d+|\d+\s*\/\s*\d+|-?\d+(?:\.\d+)?)\s*([a-zA-Z]+)/);
-  const unit = normalizeUnit(unitMatch?.[1] || 'each');
+  const unit = normalizeItemPriceUnit(unitMatch?.[1] || 'each');
 
   return { quantity, unit };
 };
@@ -91,7 +127,7 @@ export const sanitizeItemPriceRecord = (record, fallbackKey = '') => {
 
   const name = String(record.name || '').trim();
   const key = String(record.key || fallbackKey || createItemPriceKey(name)).trim();
-  const unit = normalizeUnit(record.unit || record.priceUnit || 'each');
+  const unit = normalizeItemPriceUnit(record.unit || record.priceUnit || 'each');
   const price = parsePrice(record.price ?? record.pricePerUnit ?? record.cost);
 
   if (!key || !name || price === null || !UNIT_CONVERSIONS[unit]) {
@@ -105,6 +141,10 @@ export const sanitizeItemPriceRecord = (record, fallbackKey = '') => {
     price: roundCurrency(price),
     unit,
     updatedAt: String(record.updatedAt || ''),
+    source: String(record.source || 'manual').trim() || 'manual',
+    sourceInvoiceId: String(record.sourceInvoiceId || '').trim(),
+    supplier: String(record.supplier || '').trim(),
+    lastInvoiceDate: String(record.lastInvoiceDate || '').trim(),
   };
 };
 
@@ -150,8 +190,8 @@ export const calculateItemPriceCost = ({
     ? Number(measuredQuantity)
     : Number(quantity);
   const sourceUnit = unit === 'portion' && measuredUnit
-    ? normalizeUnit(measuredUnit)
-    : normalizeUnit(unit);
+    ? normalizeItemPriceUnit(measuredUnit)
+    : normalizeItemPriceUnit(unit);
   const sourceMeta = UNIT_CONVERSIONS[sourceUnit];
   const priceMeta = UNIT_CONVERSIONS[cleanRecord.unit];
 
@@ -166,6 +206,48 @@ export const calculateItemPriceCost = ({
     cost: roundCurrency(quantityInPriceUnit * cleanRecord.price),
     quantityInPriceUnit,
   };
+};
+
+export const createItemPriceCatalogFromInvoice = ({
+  lineItems,
+  ingredientRows,
+  invoiceId = '',
+  supplierName = '',
+  invoiceDate = '',
+}) => {
+  const rows = Array.isArray(ingredientRows) ? ingredientRows : [];
+  const items = Array.isArray(lineItems) ? lineItems : [];
+
+  return rows.reduce((catalog, row) => {
+    const lineItem = items.find((item) => item.id === row?.lineItemId);
+    const name = String(row?.ingredientName || lineItem?.itemName || '').trim();
+    const unit = normalizeItemPriceUnit(row?.priceUnit || lineItem?.unit || row?.unit || 'each');
+    const unitPrice = Number(row?.unitPriceExVAT ?? lineItem?.unitPriceExVAT ?? lineItem?.unitPrice ?? 0);
+    const key = createItemPriceKey(name);
+
+    if (!name || !key || !UNIT_CONVERSIONS[unit] || !Number.isFinite(unitPrice) || unitPrice <= 0) {
+      return catalog;
+    }
+
+    const record = sanitizeItemPriceRecord({
+      key,
+      name,
+      category: row?.category || 'Other',
+      price: unitPrice,
+      unit,
+      source: 'invoice',
+      sourceInvoiceId: invoiceId,
+      supplier: supplierName,
+      lastInvoiceDate: invoiceDate,
+      updatedAt: new Date().toISOString(),
+    });
+
+    if (record) {
+      catalog[record.key] = record;
+    }
+
+    return catalog;
+  }, {});
 };
 
 export const calculateRecipeIngredientCost = ({ ingredient, itemPriceCatalog, multiplier = 1 }) => {

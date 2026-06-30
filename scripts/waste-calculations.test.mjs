@@ -7,6 +7,7 @@ import {
 } from '../src/utils/wasteCalculations.js';
 import {
   calculateItemPriceCost,
+  createItemPriceCatalogFromInvoice,
   findItemPriceRecord,
   parseIngredientQuantity,
   sanitizeItemPriceCatalog,
@@ -137,6 +138,7 @@ assert.equal(
 );
 assert.deepEqual(parseIngredientQuantity('10g'), { quantity: 10, unit: 'g' });
 assert.deepEqual(parseIngredientQuantity('1/2 kg'), { quantity: 0.5, unit: 'kg' });
+assert.deepEqual(parseIngredientQuantity('1 punnet'), { quantity: 1, unit: 'punnet' });
 
 const tomatoToastFinancials = calculateMenuWasteFinancials({
   recipe: {
@@ -158,6 +160,65 @@ assert.equal(tomatoToastFinancials.ingredients[0].cost, 0.3);
 assert.equal(tomatoToastFinancials.ingredients[0].costSource, 'catalog');
 assert.equal(tomatoToastFinancials.ingredients[1].cost, 2);
 assert.equal(tomatoToastFinancials.ingredients[1].costSource, 'manual');
+
+const invoicePriceCatalog = createItemPriceCatalogFromInvoice({
+  invoiceId: 'invoice-1',
+  supplierName: 'Raw Produce',
+  invoiceDate: '2026-06-30',
+  lineItems: [
+    {
+      id: 'line-tomatoes',
+      itemName: 'Tomatoes',
+      quantity: 2.1,
+      unit: 'kg',
+      unitPriceExVAT: 29.9,
+      priceExVAT: 62.79,
+    },
+    {
+      id: 'line-strawberries',
+      itemName: 'Strawberries',
+      quantity: 1,
+      unit: 'punnet',
+      unitPriceExVAT: 49,
+      priceExVAT: 49,
+    },
+  ],
+  ingredientRows: [
+    {
+      lineItemId: 'line-tomatoes',
+      ingredientName: 'Tomatoes',
+      category: 'Produce',
+      unitPriceExVAT: 29.9,
+      priceUnit: 'kg',
+    },
+    {
+      lineItemId: 'line-strawberries',
+      ingredientName: 'Strawberries',
+      category: 'Produce',
+      unitPriceExVAT: 49,
+      priceUnit: 'punnet',
+    },
+  ],
+});
+
+assert.equal(invoicePriceCatalog.tomatoes.price, 29.9);
+assert.equal(invoicePriceCatalog.tomatoes.unit, 'kg');
+assert.equal(invoicePriceCatalog.tomatoes.source, 'invoice');
+assert.equal(invoicePriceCatalog.strawberries.unit, 'punnet');
+assert.equal(
+  calculateMenuWasteFinancials({
+    recipe: {
+      name: 'Berry Bowl',
+      ingredients: [
+        { name: 'Strawberries', quantity: '1 punnet', cost: 0, category: 'Produce' },
+      ],
+    },
+    menuItem: { name: 'Berry Bowl', menuPrice: 120 },
+    quantity: 1,
+    itemPriceCatalog: invoicePriceCatalog,
+  }).foodCostLost,
+  49
+);
 
 const ownerAccess = getAccessProfile({ id: 'staff_owner', name: 'Rizwana', role: 'Owner' });
 const managerAccess = getAccessProfile({ id: 'staff_manager', name: 'Nadia', role: 'Manager' });

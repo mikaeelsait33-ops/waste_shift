@@ -14,6 +14,7 @@ import { inferStaffSection } from './utils/staffSections';
 import { getAccessProfile, inferRoleKey, requirePermission } from './utils/accessControl';
 import {
   calculateItemPriceCost,
+  createItemPriceCatalogFromInvoice,
   createItemPriceKey,
   sanitizeItemPriceCatalog,
   sanitizeItemPriceRecord,
@@ -1012,7 +1013,56 @@ function App() {
   }, [accessProfile, buildDatabaseData, getSyncHeaders]);
 
   useEffect(() => {
-    localStorage.setItem('wasteItems', JSON.stringify(wasteItems));
+    try {
+      localStorage.setItem('wasteItems', JSON.stringify(wasteItems));
+      return;
+    } catch (error) {
+      console.warn('Could not save waste entries with photos locally.', error);
+    }
+
+    let removedPhotoCount = 0;
+    const lightweightWasteItems = wasteItems.map((item) => {
+      const photoUrl = String(item?.photoUrl || '');
+
+      if (!photoUrl.startsWith('data:image/')) {
+        return item;
+      }
+
+      removedPhotoCount += 1;
+
+      return {
+        ...item,
+        photoUrl: '',
+        photoCapturedAt: '',
+        photoStorageWarning: 'Photo preview was removed because local storage was full.',
+      };
+    });
+
+    if (removedPhotoCount === 0) {
+      setFirebaseSync(prev => ({
+        ...prev,
+        status: 'error',
+        message: 'Waste entry is visible now, but this browser could not save it locally. Try removing older entries.',
+      }));
+      return;
+    }
+
+    try {
+      localStorage.setItem('wasteItems', JSON.stringify(lightweightWasteItems));
+      setWasteItems(lightweightWasteItems);
+      setFirebaseSync(prev => ({
+        ...prev,
+        status: 'error',
+        message: 'Waste entry saved, but photo previews were removed because this browser ran out of storage.',
+      }));
+    } catch (fallbackError) {
+      console.warn('Could not save lightweight waste entries locally.', fallbackError);
+      setFirebaseSync(prev => ({
+        ...prev,
+        status: 'error',
+        message: 'Waste entry is visible now, but this browser could not save it locally. Try removing older photo entries or using a smaller photo.',
+      }));
+    }
   }, [wasteItems]);
 
   useEffect(() => {
@@ -1741,6 +1791,102 @@ function App() {
     }
   };
 
+  const handleInvoicePricesUpdated = useCallback((invoiceUpdate) => {
+    const invoiceCatalog = createItemPriceCatalogFromInvoice(invoiceUpdate || {});
+    const updatedKeys = Object.keys(invoiceCatalog);
+
+    if (updatedKeys.length === 0) {
+      return;
+    }
+
+    const nextCatalog = sanitizeItemPriceCatalog({
+      ...itemPriceCatalog,
+      ...invoiceCatalog,
+    });
+    const updatedKeySet = new Set(updatedKeys);
+    let repricedEntries = 0;
+    const nextWasteItems = wasteItems.map((item) => {
+      const itemKey = createItemPriceKey(item?.name);
+
+      if (item?.isRecipe || !updatedKeySet.has(itemKey)) {
+        return item;
+      }
+
+      if (item.costStatus === 'manual' && item.priceCatalogKey !== itemKey) {
+        return item;
+      }
+
+      const calculatedCost = calculateItemPriceCost({
+        priceRecord: nextCatalog[itemKey],
+        quantity: item.quantity,
+        unit: item.unit,
+        measuredQuantity: item.measuredQuantity,
+        measuredUnit: item.measuredUnit,
+      });
+
+      if (!calculatedCost.canCalculate) {
+        return item;
+      }
+
+      repricedEntries += 1;
+
+      return {
+        ...item,
+        cost: calculatedCost.cost,
+        foodCostLost: calculatedCost.cost,
+        costStatus: 'catalog',
+        priceCatalogKey: itemKey,
+        pricePerUnit: nextCatalog[itemKey].price,
+        priceUnit: nextCatalog[itemKey].unit,
+        lastEditedBy: activeStaffMember?.name || item.lastEditedBy || 'System',
+      };
+    });
+
+    setItemPriceCatalog(nextCatalog);
+
+    if (repricedEntries > 0) {
+      setWasteItems(nextWasteItems);
+      setInventoryMovements(nextWasteItems.flatMap(createInventoryMovementsFromEntry));
+    }
+
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: 'Invoice prices synced',
+        user: activeStaffMember?.name || 'System',
+        relatedItem: invoiceUpdate?.supplierName || 'Invoice',
+        afterValue: {
+          invoiceId: invoiceUpdate?.invoiceId || '',
+          updatedPrices: updatedKeys.length,
+          repricedEntries,
+        },
+      }),
+      ...prevLog,
+    ].slice(0, 500));
+  }, [activeStaffMember?.name, itemPriceCatalog, wasteItems]);
+
+  const handleInvoiceIngredientDeleted = useCallback((ingredient) => {
+    const key = createItemPriceKey(ingredient?.name);
+
+    if (!key) {
+      return;
+    }
+
+    setItemPriceCatalog(prevCatalog => {
+      const nextCatalog = { ...prevCatalog };
+      delete nextCatalog[key];
+      return nextCatalog;
+    });
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: 'Raw ingredient deleted',
+        user: activeStaffMember?.name || 'System',
+        relatedItem: ingredient?.name || key,
+        beforeValue: ingredient,
+      }),
+      ...prevLog,
+    ].slice(0, 500));
+  }, [activeStaffMember?.name]);
+
   const createStoreRoomMovement = ({ item, type, quantity, previousQuantity, nextQuantity, reason, notes }) => ({
     id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     itemId: item.id,
@@ -2236,7 +2382,10 @@ function App() {
             accessProfile={accessProfile}
             recipes={effectiveRecipes}
             menuItems={menuItems}
+            itemPriceCatalog={itemPriceCatalog}
             onInvoiceSaved={refreshInvoiceDashboardStats}
+            onInvoicePricesUpdated={handleInvoicePricesUpdated}
+            onIngredientDeleted={handleInvoiceIngredientDeleted}
           />
         )}
 

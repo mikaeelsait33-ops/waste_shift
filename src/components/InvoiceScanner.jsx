@@ -11,7 +11,9 @@ import {
   roundMoney,
   summarizeInvoiceItems,
 } from '../utils/invoiceParsing';
+import { createItemPriceKey } from '../utils/itemPriceCatalog';
 import {
+  deleteIngredient,
   invoiceFirestoreIsConfigured,
   loadInvoiceWorkspaceData,
   saveConfirmedInvoice,
@@ -177,8 +179,9 @@ const createIngredientRows = ({ lineItems, matches, newIngredientDrafts, supplie
     const ingredientName = ingredient?.name || draft?.name || lineItem.itemName;
     const ingredientId = ingredient?.id || draft?.id || createInvoiceKey(ingredientName);
     const previousPrice = Number(ingredient?.lastPriceExVAT || 0);
+    const nextUnitPriceExVAT = Number(lineItem.unitPriceExVAT || lineItem.unitPrice || 0);
     const changePercent = previousPrice > 0
-      ? roundMoney(((lineItem.priceExVAT - previousPrice) / previousPrice) * 100)
+      ? roundMoney(((nextUnitPriceExVAT - previousPrice) / previousPrice) * 100)
       : 0;
 
     return {
@@ -187,18 +190,34 @@ const createIngredientRows = ({ lineItems, matches, newIngredientDrafts, supplie
       ingredientName,
       category: ingredient?.category || draft?.category || 'Other',
       unit: lineItem.baseUnit || lineItem.unit || ingredient?.unit || 'each',
+      priceUnit: lineItem.unit || ingredient?.unit || 'each',
+      invoiceQuantity: lineItem.quantity,
+      invoiceUnit: lineItem.unit || 'each',
+      baseQuantity: lineItem.baseQuantity,
+      baseUnit: lineItem.baseUnit,
       parLevel: Number(draft?.parLevel ?? ingredient?.parLevel ?? 0) || 0,
       reorderPoint: Number(draft?.reorderPoint ?? ingredient?.reorderPoint ?? 0) || 0,
       preferredSupplier: draft?.preferredSupplier || ingredient?.preferredSupplier || supplierName,
       priceExVAT: lineItem.priceExVAT,
       priceIncVAT: lineItem.priceIncVAT,
+      unitPriceExVAT: lineItem.unitPriceExVAT,
+      unitPriceIncVAT: lineItem.unitPriceIncVAT,
+      costPerBaseUnitExVAT: lineItem.costPerBaseUnitExVAT,
       priceChangePercent: changePercent,
       priceDirection: previousPrice <= 0 ? 'new' : changePercent > 0 ? 'up' : changePercent < 0 ? 'down' : 'flat',
     };
   })
 );
 
-function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
+function InvoiceScanner({
+  accessProfile,
+  recipes,
+  menuItems,
+  itemPriceCatalog,
+  onInvoiceSaved,
+  onInvoicePricesUpdated,
+  onIngredientDeleted,
+}) {
   const [workspace, setWorkspace] = useState({
     ingredients: [],
     menuItems: [],
@@ -226,6 +245,8 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
   const [historySearch, setHistorySearch] = useState('');
   const [historyStartDate, setHistoryStartDate] = useState('');
   const [historyEndDate, setHistoryEndDate] = useState('');
+  const [ingredientSearch, setIngredientSearch] = useState('');
+  const [deletingIngredientId, setDeletingIngredientId] = useState('');
 
   const canManageInvoices = Boolean(accessProfile?.canManageStoreRoom || accessProfile?.canManageMenu);
   const firebaseReady = invoiceFirestoreIsConfigured();
@@ -276,6 +297,33 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
     totalVAT: roundMoney(filteredInvoices.reduce((sum, invoice) => sum + Number(invoice.totalVAT || 0), 0)),
     totalIncVAT: roundMoney(filteredInvoices.reduce((sum, invoice) => sum + Number(invoice.totalIncVAT || 0), 0)),
   }), [filteredInvoices]);
+  const ingredientSearchValue = ingredientSearch.trim().toLowerCase();
+  const filteredIngredients = useMemo(() => (
+    [...workspace.ingredients]
+      .filter((ingredient) => {
+        if (!ingredientSearchValue) return true;
+
+        return [
+          ingredient.name,
+          ingredient.category,
+          ingredient.preferredSupplier,
+          ingredient.unit,
+        ].some((part) => String(part || '').toLowerCase().includes(ingredientSearchValue));
+      })
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+  ), [ingredientSearchValue, workspace.ingredients]);
+  const ingredientSummary = useMemo(() => ({
+    total: workspace.ingredients.length,
+    priced: workspace.ingredients.filter((ingredient) => Number(ingredient.lastPriceExVAT || 0) > 0).length,
+    newThisMonth: workspace.ingredients.filter((ingredient) => {
+      const date = ingredient.lastInvoiceDate ? new Date(ingredient.lastInvoiceDate) : null;
+      const now = new Date();
+
+      return date
+        && date.getMonth() === now.getMonth()
+        && date.getFullYear() === now.getFullYear();
+    }).length,
+  }), [workspace.ingredients]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -536,13 +584,13 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
         id: existingDraft?.id || createInvoiceKey(lineItem.itemName),
         name: existingDraft?.name || lineItem.itemName,
         category: existingDraft?.category || 'Other',
-        unit: existingDraft?.unit || lineItem.baseUnit || lineItem.unit || 'each',
+        unit: existingDraft?.unit || lineItem.unit || lineItem.baseUnit || 'each',
         parLevel: existingDraft?.parLevel || '',
         reorderPoint: existingDraft?.reorderPoint || '',
         preferredSupplier: existingDraft?.preferredSupplier || supplierName,
         linkedMenuItemIds: existingDraft?.linkedMenuItemIds || [],
-        lastPriceExVAT: lineItem.priceExVAT,
-        lastPriceIncVAT: lineItem.priceIncVAT,
+        lastPriceExVAT: lineItem.unitPriceExVAT || lineItem.priceExVAT,
+        lastPriceIncVAT: lineItem.unitPriceIncVAT || lineItem.priceIncVAT,
       },
     }));
     setNewDrawerLineId(lineItem.id);
@@ -573,6 +621,34 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
       setMessage(`${draft.name} saved to ingredients.`);
     } catch (error) {
       setMessage(error?.message || 'Could not save this ingredient.');
+    }
+  };
+
+  const handleDeleteIngredient = async (ingredient) => {
+    if (!canManageInvoices) {
+      setMessage('Only an owner, manager, chef, or barista can delete raw ingredients.');
+      return;
+    }
+
+    if (!firebaseReady) {
+      setMessage('Firebase is not configured, so raw ingredients cannot be deleted yet.');
+      return;
+    }
+
+    if (!ingredient?.id || !window.confirm(`Delete ${ingredient.name} from the raw ingredient library?`)) {
+      return;
+    }
+
+    try {
+      setDeletingIngredientId(ingredient.id);
+      await deleteIngredient(ingredient.id);
+      onIngredientDeleted?.(ingredient);
+      await refreshWorkspace();
+      setMessage(`${ingredient.name} deleted from the raw ingredient library.`);
+    } catch (error) {
+      setMessage(error?.message || 'Could not delete this raw ingredient.');
+    } finally {
+      setDeletingIngredientId('');
     }
   };
 
@@ -632,6 +708,13 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
         lineItems,
         ingredientRows,
       });
+      onInvoicePricesUpdated?.({
+        invoiceId: result.invoiceId,
+        supplierName,
+        invoiceDate,
+        lineItems,
+        ingredientRows,
+      });
       setMessage('Invoice confirmed and saved. You can update stock now.');
       await refreshWorkspace();
     } catch (error) {
@@ -663,12 +746,13 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
   const renderPriceBadge = (lineItem) => {
     const match = matches.get(lineItem.id);
     const previousPrice = Number(match?.ingredient?.lastPriceExVAT || 0);
+    const nextPrice = Number(lineItem.unitPriceExVAT || lineItem.unitPrice || 0);
 
     if (!match?.ingredient || previousPrice <= 0) {
       return <span className="badge is-blue">New</span>;
     }
 
-    const change = ((lineItem.priceExVAT - previousPrice) / previousPrice) * 100;
+    const change = ((nextPrice - previousPrice) / previousPrice) * 100;
 
     if (change > 0.5) {
       return <span className="badge is-red">Up {formatPercent(change)}</span>;
@@ -695,6 +779,9 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
         <div className="segmented-control" aria-label="Invoice views">
           <button type="button" className={`segment-button${activeView === 'entry' ? ' is-active' : ''}`} onClick={() => setActiveView('entry')}>
             Entry
+          </button>
+          <button type="button" className={`segment-button${activeView === 'ingredients' ? ' is-active' : ''}`} onClick={() => setActiveView('ingredients')}>
+            Raw Library
           </button>
           <button type="button" className={`segment-button${activeView === 'history' ? ' is-active' : ''}`} onClick={() => setActiveView('history')}>
             History
@@ -947,7 +1034,7 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
               </div>
 
               {lineItems.length === 0 ? (
-                <div className="empty-state">Add invoice lines manually, then review them here.</div>
+                <div className="empty-state">Scan an invoice or add lines manually, then review them here.</div>
               ) : (
                 <div className="invoice-edit-table">
                   <div className="invoice-edit-head">
@@ -1018,6 +1105,7 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
                           ) : (
                             <>
                               <span className="badge is-yellow">New Item</span>
+                              <span className="small-text">Auto-added on confirm</span>
                               <button type="button" className="ghost-button compact-action" onClick={() => openNewIngredientDrawer(lineItem)}>
                                 Set up
                               </button>
@@ -1104,6 +1192,90 @@ function InvoiceScanner({ accessProfile, recipes, menuItems, onInvoiceSaved }) {
             </div>
           </section>
         </>
+      )}
+
+      {activeView === 'ingredients' && (
+        <section className="panel">
+          <div className="panel-body">
+            <div className="section-header">
+              <div>
+                <p className="eyebrow">Raw ingredients</p>
+                <h2 className="title">Ingredient Library</h2>
+                <p className="subtitle">Confirmed invoices update this library and sync prices into recipe and waste costing.</p>
+              </div>
+              <span className="badge">{ingredientSummary.total} raw items</span>
+            </div>
+
+            <div className="metrics-grid">
+              <div className="metric-card">
+                <span className="metric-value">{ingredientSummary.total}</span>
+                <span className="metric-label">Raw ingredients</span>
+              </div>
+              <div className="metric-card">
+                <span className="metric-value">{ingredientSummary.priced}</span>
+                <span className="metric-label">With invoice price</span>
+              </div>
+              <div className="metric-card">
+                <span className="metric-value">{ingredientSummary.newThisMonth}</span>
+                <span className="metric-label">Updated this month</span>
+              </div>
+            </div>
+
+            <div className="field-grid">
+              <input
+                type="search"
+                value={ingredientSearch}
+                onChange={(event) => setIngredientSearch(event.target.value)}
+                className="input"
+                placeholder="Search raw ingredients, category, supplier, or unit"
+              />
+            </div>
+
+            <div className="raw-ingredient-list">
+              {filteredIngredients.length === 0 ? (
+                <div className="empty-state">No raw ingredients match this search.</div>
+              ) : filteredIngredients.map((ingredient) => {
+                const catalogRecord = itemPriceCatalog?.[createItemPriceKey(ingredient.name)];
+                const historyCount = Array.isArray(ingredient.priceHistory) ? ingredient.priceHistory.length : 0;
+
+                return (
+                  <div key={ingredient.id} className="raw-ingredient-card">
+                    <div>
+                      <strong>{ingredient.name}</strong>
+                      <span className="small-text">
+                        {ingredient.category || 'Other'} · {ingredient.preferredSupplier || 'No supplier'} · {ingredient.lastInvoiceDate || 'No invoice date'}
+                      </span>
+                    </div>
+                    <div className="raw-ingredient-prices">
+                      <span className="badge is-blue">
+                        {formatMoney(ingredient.lastPriceExVAT)} / {ingredient.lastUnit || ingredient.unit || 'each'} ex
+                      </span>
+                      {Number(ingredient.costPerBaseUnitExVAT || 0) > 0 && (
+                        <span className="badge">
+                          {formatMoney(ingredient.costPerBaseUnitExVAT)} / {ingredient.baseUnit}
+                        </span>
+                      )}
+                      {catalogRecord && (
+                        <span className="badge is-green">
+                          App cost {formatMoney(catalogRecord.price)} / {catalogRecord.unit}
+                        </span>
+                      )}
+                      <span className="badge">{historyCount} prices</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="ghost-button compact-action"
+                      onClick={() => handleDeleteIngredient(ingredient)}
+                      disabled={!canManageInvoices || deletingIngredientId === ingredient.id}
+                    >
+                      {deletingIngredientId === ingredient.id ? 'Deleting...' : 'Delete'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </section>
       )}
 
       {activeView === 'history' && (

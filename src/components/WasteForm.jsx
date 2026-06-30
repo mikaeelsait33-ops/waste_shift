@@ -29,8 +29,11 @@ const WASTE_UNITS = [
 
 const PORTION_SIZE_UNITS = WASTE_UNITS.filter((unitOption) => unitOption.value !== 'portion');
 const MAX_PHOTO_INPUT_BYTES = 8 * 1024 * 1024;
-const MAX_PHOTO_DIMENSION = 1200;
-const PHOTO_QUALITY = 0.72;
+const PHOTO_TARGET_BYTES = 220 * 1024;
+const PHOTO_INITIAL_QUALITY = 0.74;
+const PHOTO_MIN_QUALITY = 0.46;
+const PHOTO_MAX_DIMENSION = 1100;
+const PHOTO_MIN_DIMENSION = 640;
 
 const COMMON_REASON_BY_CATEGORY = {
   Produce: 'Spoiled',
@@ -101,9 +104,24 @@ const loadImage = (src) => new Promise((resolve, reject) => {
   image.src = src;
 });
 
+const canvasToJpegBlob = (canvas, quality) => new Promise((resolve, reject) => {
+  canvas.toBlob((blob) => {
+    if (blob) {
+      resolve(blob);
+      return;
+    }
+
+    reject(new Error('Unable to prepare this photo.'));
+  }, 'image/jpeg', quality);
+});
+
 const compressWastePhoto = async (file) => {
-  if (!file.type.startsWith('image/')) {
-    throw new Error('Choose an image file for the waste photo.');
+  const isImage = file.type
+    ? file.type.startsWith('image/')
+    : /\.(jpe?g|png|webp)$/i.test(file.name || '');
+
+  if (!isImage) {
+    throw new Error('Choose a JPG, PNG, or WebP photo for the waste entry.');
   }
 
   if (file.size > MAX_PHOTO_INPUT_BYTES) {
@@ -112,23 +130,46 @@ const compressWastePhoto = async (file) => {
 
   const dataUrl = await readFileAsDataUrl(file);
   const image = await loadImage(dataUrl);
-  const scale = Math.min(1, MAX_PHOTO_DIMENSION / Math.max(image.width, image.height));
-  const width = Math.max(1, Math.round(image.width * scale));
-  const height = Math.max(1, Math.round(image.height * scale));
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
 
-  const context = canvas.getContext('2d');
-  if (!context) {
-    throw new Error('Unable to prepare this photo.');
+  let maxDimension = PHOTO_MAX_DIMENSION;
+  let quality = PHOTO_INITIAL_QUALITY;
+  let bestBlob = null;
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const scale = Math.min(1, maxDimension / Math.max(image.width, image.height));
+    const width = Math.max(1, Math.round(image.width * scale));
+    const height = Math.max(1, Math.round(image.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('Unable to prepare this photo.');
+    }
+
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
+
+    bestBlob = await canvasToJpegBlob(canvas, quality);
+
+    if (bestBlob.size <= PHOTO_TARGET_BYTES) {
+      break;
+    }
+
+    if (quality > PHOTO_MIN_QUALITY) {
+      quality = Math.max(PHOTO_MIN_QUALITY, quality - 0.08);
+    } else {
+      maxDimension = Math.max(PHOTO_MIN_DIMENSION, Math.round(maxDimension * 0.82));
+    }
   }
 
-  context.fillStyle = '#ffffff';
-  context.fillRect(0, 0, width, height);
-  context.drawImage(image, 0, 0, width, height);
+  if (!bestBlob || bestBlob.size > PHOTO_TARGET_BYTES * 1.8) {
+    throw new Error('This photo is still too large. Try a clearer cropped photo.');
+  }
 
-  return canvas.toDataURL('image/jpeg', PHOTO_QUALITY);
+  return readFileAsDataUrl(bestBlob);
 };
 
 const getMenuWasteCategory = (menuItem, recipe) => {
@@ -545,6 +586,11 @@ function WasteForm({
 
   const handleSubmit = (e) => {
     e.preventDefault();
+
+    if (isProcessingPhoto) {
+      setFormMessage('Wait a moment while WasteShift prepares the photo, then save again.');
+      return;
+    }
 
     if (formType === 'single' && !name.trim()) {
       setFormMessage('Enter the ingredient or stock item before saving.');
@@ -1217,8 +1263,12 @@ function WasteForm({
           </div>
         </div>
 
-        <button type="submit" disabled={formType === 'recipe' && safeMenuItems.length === 0} className="primary-button">
-          Log waste
+        <button
+          type="submit"
+          disabled={isProcessingPhoto || (formType === 'recipe' && safeMenuItems.length === 0)}
+          className="primary-button"
+        >
+          {isProcessingPhoto ? 'Preparing photo...' : 'Log waste'}
         </button>
 
         {formMessage && (

@@ -188,8 +188,44 @@ await setDoc(doc(db, 'stockLevels', 'smoke_salmon'), {
   reorderPoint: 1500,
 }, { merge: true });
 
+const deleteIngredientRef = doc(db, 'ingredients', 'firebase_smoke_delete_me');
+const deleteHistoryRef = doc(db, 'ingredients', 'firebase_smoke_delete_me', 'priceHistory', 'firebase_smoke_delete_invoice');
+const deleteStockRef = doc(db, 'stockLevels', 'firebase_smoke_delete_me');
+
+await setDoc(deleteIngredientRef, {
+  id: 'firebase_smoke_delete_me',
+  name: 'Firebase Smoke Delete Me',
+  category: 'Other',
+  unit: 'each',
+  updatedAt: serverTimestamp(),
+}, { merge: true });
+await setDoc(deleteHistoryRef, {
+  date: now.slice(0, 10),
+  supplier: 'Firebase smoke test',
+  priceExVAT: 1,
+  priceIncVAT: 1,
+  invoiceId: 'firebase_smoke_delete_invoice',
+  createdAt: serverTimestamp(),
+}, { merge: true });
+await setDoc(deleteStockRef, {
+  ingredientId: 'firebase_smoke_delete_me',
+  currentQty: 1,
+  unit: 'each',
+  lastUpdated: serverTimestamp(),
+}, { merge: true });
+await setDoc(deleteIngredientRef, {
+  id: 'firebase_smoke_delete_me',
+  name: 'Firebase Smoke Delete Me',
+  category: 'Other',
+  unit: 'each',
+  isDeleted: true,
+  deletedAt: serverTimestamp(),
+  updatedAt: serverTimestamp(),
+}, { merge: true });
+
 const invoiceSnapshot = await getDoc(doc(db, 'invoices', 'firebase_smoke_invoice'));
 const stockSnapshot = await getDoc(doc(db, 'stockLevels', 'smoke_salmon'));
+const deletedIngredientSnapshot = await getDoc(deleteIngredientRef);
 
 console.log(JSON.stringify({
   menuItem: {
@@ -212,6 +248,7 @@ console.log(JSON.stringify({
     invoiceSaved: invoiceSnapshot.exists(),
     stockSaved: stockSnapshot.exists(),
     ingredient: 'Smoke Salmon',
+    rawIngredientDeleteVerified: deletedIngredientSnapshot.data()?.isDeleted === true,
   },
 }, null, 2));
 

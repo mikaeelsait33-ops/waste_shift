@@ -33,6 +33,7 @@ const getFirestoreApi = async () => {
       getDocs: firestore.getDocs,
       getFirestore: firestore.getFirestore,
       getApps: firebaseApp.getApps,
+      deleteDoc: firestore.deleteDoc,
       increment: firestore.increment,
       initializeApp: firebaseApp.initializeApp,
       serverTimestamp: firestore.serverTimestamp,
@@ -121,6 +122,10 @@ const readCollection = async (collectionName) => {
 };
 
 const normalizeIngredient = (docData) => {
+  if (docData?.isDeleted || docData?.deletedAt) {
+    return null;
+  }
+
   const name = sanitizeString(docData?.name || docData?.ingredientName);
   const id = sanitizeString(docData?.id) || createInvoiceKey(name);
 
@@ -139,6 +144,13 @@ const normalizeIngredient = (docData) => {
     preferredSupplier: sanitizeString(docData?.preferredSupplier),
     lastPriceExVAT: sanitizeNumber(docData?.lastPriceExVAT ?? docData?.priceExVAT),
     lastPriceIncVAT: sanitizeNumber(docData?.lastPriceIncVAT ?? docData?.priceIncVAT),
+    lastLineTotalExVAT: sanitizeNumber(docData?.lastLineTotalExVAT),
+    lastLineTotalIncVAT: sanitizeNumber(docData?.lastLineTotalIncVAT),
+    lastQuantity: sanitizeNumber(docData?.lastQuantity),
+    lastUnit: sanitizeString(docData?.lastUnit || docData?.unit) || 'each',
+    baseUnit: sanitizeString(docData?.baseUnit),
+    baseQuantity: sanitizeNumber(docData?.baseQuantity),
+    costPerBaseUnitExVAT: sanitizeNumber(docData?.costPerBaseUnitExVAT),
     lastInvoiceDate: sanitizeString(docData?.lastInvoiceDate),
     priceHistory: Array.isArray(docData?.priceHistory) ? docData.priceHistory : [],
   };
@@ -289,6 +301,41 @@ export const saveIngredient = async (ingredientDraft) => {
   return { ok: true, ingredient: payload };
 };
 
+export const deleteIngredient = async (ingredientId) => {
+  const db = await getFirestoreDb();
+  const id = sanitizeString(ingredientId);
+
+  if (!db || !id) {
+    return { ok: false, skipped: true };
+  }
+
+  await ensureFirebaseAuth();
+  const { collection, deleteDoc, doc, getDoc, getDocs, serverTimestamp, setDoc } = await getFirestoreApi();
+  const ingredientRef = doc(db, 'ingredients', id);
+  const ingredientSnapshot = await getDoc(ingredientRef);
+  const ingredient = ingredientSnapshot.data() || {};
+
+  await setDoc(ingredientRef, {
+    id,
+    name: sanitizeString(ingredient.name || ingredient.ingredientName) || id,
+    category: sanitizeString(ingredient.category) || 'Other',
+    unit: sanitizeString(ingredient.unit) || 'each',
+    isDeleted: true,
+    deletedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+
+  const historySnapshot = await getDocs(collection(db, 'ingredients', id, 'priceHistory')).catch(() => ({ docs: [] }));
+
+  await Promise.all(historySnapshot.docs.map((docSnapshot) => deleteDoc(docSnapshot.ref).catch(() => {})));
+  await Promise.all([
+    deleteDoc(doc(db, 'stockLevels', id)).catch(() => {}),
+    deleteDoc(ingredientRef).catch(() => {}),
+  ]);
+
+  return { ok: true, ingredientId: id };
+};
+
 export const saveConfirmedInvoice = async ({
   invoiceId,
   supplierName,
@@ -352,12 +399,19 @@ export const saveConfirmedInvoice = async ({
         id: ingredientId,
         name: sanitizeString(row.ingredientName),
         category: sanitizeString(row.category) || 'Other',
-        unit: sanitizeString(row.unit) || 'each',
+        unit: sanitizeString(row.priceUnit || row.invoiceUnit || row.unit) || 'each',
         preferredSupplier: safeSupplierName,
         parLevel: sanitizeNumber(row.parLevel),
         reorderPoint: sanitizeNumber(row.reorderPoint),
-        lastPriceExVAT: roundMoney(row.priceExVAT),
-        lastPriceIncVAT: roundMoney(row.priceIncVAT),
+        lastPriceExVAT: roundMoney(row.unitPriceExVAT ?? row.priceExVAT),
+        lastPriceIncVAT: roundMoney(row.unitPriceIncVAT ?? row.priceIncVAT),
+        lastLineTotalExVAT: roundMoney(row.priceExVAT),
+        lastLineTotalIncVAT: roundMoney(row.priceIncVAT),
+        lastQuantity: sanitizeNumber(row.invoiceQuantity),
+        lastUnit: sanitizeString(row.invoiceUnit || row.priceUnit || row.unit) || 'each',
+        baseQuantity: sanitizeNumber(row.baseQuantity),
+        baseUnit: sanitizeString(row.baseUnit),
+        costPerBaseUnitExVAT: roundMoney(row.costPerBaseUnitExVAT),
         lastInvoiceDate: safeInvoiceDate,
         updatedAt: serverTimestamp(),
       }, { merge: true });
@@ -365,8 +419,15 @@ export const saveConfirmedInvoice = async ({
       await setDoc(doc(db, 'ingredients', ingredientId, 'priceHistory', historyId), {
         date: safeInvoiceDate,
         supplier: safeSupplierName,
-        priceExVAT: roundMoney(row.priceExVAT),
-        priceIncVAT: roundMoney(row.priceIncVAT),
+        priceExVAT: roundMoney(row.unitPriceExVAT ?? row.priceExVAT),
+        priceIncVAT: roundMoney(row.unitPriceIncVAT ?? row.priceIncVAT),
+        linePriceExVAT: roundMoney(row.priceExVAT),
+        linePriceIncVAT: roundMoney(row.priceIncVAT),
+        quantity: sanitizeNumber(row.invoiceQuantity),
+        unit: sanitizeString(row.invoiceUnit || row.priceUnit || row.unit) || 'each',
+        baseQuantity: sanitizeNumber(row.baseQuantity),
+        baseUnit: sanitizeString(row.baseUnit),
+        costPerBaseUnitExVAT: roundMoney(row.costPerBaseUnitExVAT),
         invoiceId: safeInvoiceId,
         createdAt: serverTimestamp(),
       }, { merge: true });

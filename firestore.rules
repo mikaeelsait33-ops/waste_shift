@@ -33,7 +33,7 @@ service cloud.firestore {
         && request.resource.data.name is string
         && request.resource.data.category is string
         && request.resource.data.unit is string;
-      allow delete: if false;
+      allow delete: if signedIn();
 
       match /priceHistory/{historyId} {
         allow read: if signedIn();
@@ -43,7 +43,7 @@ service cloud.firestore {
           && request.resource.data.priceExVAT is number
           && request.resource.data.priceIncVAT is number
           && request.resource.data.invoiceId is string;
-        allow delete: if false;
+        allow delete: if signedIn();
       }
     }
 
@@ -53,7 +53,7 @@ service cloud.firestore {
         && request.resource.data.ingredientId is string
         && request.resource.data.currentQty is number
         && request.resource.data.unit is string;
-      allow delete: if false;
+      allow delete: if signedIn();
     }
 
     match /invoices/{invoiceId} {
