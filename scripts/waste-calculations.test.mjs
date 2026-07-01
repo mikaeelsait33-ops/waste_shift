@@ -7,6 +7,7 @@ import {
 } from '../src/utils/wasteCalculations.js';
 import {
   calculateItemPriceCost,
+  calculateRecipeIngredientCost,
   createItemPriceCatalogFromInvoice,
   findItemPriceRecord,
   parseIngredientQuantity,
@@ -205,6 +206,20 @@ assert.equal(invoicePriceCatalog.tomatoes.price, 29.9);
 assert.equal(invoicePriceCatalog.tomatoes.unit, 'kg');
 assert.equal(invoicePriceCatalog.tomatoes.source, 'invoice');
 assert.equal(invoicePriceCatalog.strawberries.unit, 'punnet');
+assert.deepEqual(
+  calculateRecipeIngredientCost({
+    ingredient: { name: 'Tomatoes', quantity: '500g', cost: 0, category: 'Produce' },
+    itemPriceCatalog: invoicePriceCatalog,
+  }),
+  {
+    cost: 14.95,
+    baseCost: 14.95,
+    source: 'catalog',
+    priceCatalogKey: 'tomatoes',
+    pricePerUnit: 29.9,
+    priceUnit: 'kg',
+  }
+);
 assert.equal(
   calculateMenuWasteFinancials({
     recipe: {

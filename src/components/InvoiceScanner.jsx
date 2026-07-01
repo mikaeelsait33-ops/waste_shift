@@ -23,6 +23,7 @@ import {
   softDeleteInvoice,
   updateStockFromInvoice,
 } from '../services/invoiceFirestore';
+import { createLowStockAlerts } from '../utils/stockAlerts';
 
 const DEFAULT_VAT_RATE = 0.15;
 const UNIT_OPTIONS = ['kg', 'g', 'L', 'ml', 'each', '5L', 'case of 12', 'case', 'doz', 'pkt', 'bag', 'box', 'bottle', 'tray', 'tin', 'punnet', 'bunch', 'head', 'pillow'];
@@ -33,6 +34,26 @@ const SUPPORTED_SCAN_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/pn
 
 const formatMoney = (value) => `R${Number(value || 0).toFixed(2)}`;
 const formatPercent = (value) => `${Number(value || 0).toFixed(1)}%`;
+const escapeCsvValue = (value) => {
+  const text = String(value ?? '');
+  return `"${text.replace(/"/g, '""')}"`;
+};
+const downloadCsv = (filename, headers, rows) => {
+  const csv = [
+    headers.map(escapeCsvValue).join(','),
+    ...rows.map((row) => row.map(escapeCsvValue).join(',')),
+  ].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+};
 const EMPTY_MANUAL_LINE = {
   itemName: '',
   quantity: '1',
@@ -225,6 +246,7 @@ function InvoiceScanner({
   recipes,
   menuItems,
   itemPriceCatalog,
+  inventoryMovements = [],
   onInvoiceSaved,
   onInvoicePricesUpdated,
   onIngredientDeleted,
@@ -249,7 +271,11 @@ function InvoiceScanner({
   const [manualLineDraft, setManualLineDraft] = useState(EMPTY_MANUAL_LINE);
   const [manualIngredientLinks, setManualIngredientLinks] = useState({});
   const [scanFile, setScanFile] = useState(null);
+  const [scanFiles, setScanFiles] = useState([]);
+  const [batchDrafts, setBatchDrafts] = useState([]);
+  const [activeBatchDraftId, setActiveBatchDraftId] = useState('');
   const [isScanningInvoice, setIsScanningInvoice] = useState(false);
+  const [isBatchScanning, setIsBatchScanning] = useState(false);
   const [scanSummary, setScanSummary] = useState(null);
   const scanFileInputRef = useRef(null);
   const [newDrawerLineId, setNewDrawerLineId] = useState('');
@@ -260,10 +286,14 @@ function InvoiceScanner({
   const [historyStartDate, setHistoryStartDate] = useState('');
   const [historyEndDate, setHistoryEndDate] = useState('');
   const [ingredientSearch, setIngredientSearch] = useState('');
+  const [priceHistorySupplierFilter, setPriceHistorySupplierFilter] = useState('');
+  const [reportStartDate, setReportStartDate] = useState('');
+  const [reportEndDate, setReportEndDate] = useState('');
   const [deletingIngredientId, setDeletingIngredientId] = useState('');
   const [deletingInvoiceId, setDeletingInvoiceId] = useState('');
 
   const canManageInvoices = Boolean(accessProfile?.canManageStoreRoom || accessProfile?.canManageMenu);
+  const canExportInvoiceReports = Boolean(accessProfile?.canExportData);
   const firebaseReady = invoiceFirestoreIsConfigured();
   const localMenuItems = useMemo(() => createLocalMenuItems(recipes, menuItems), [recipes, menuItems]);
   const allMenuItems = useMemo(() => (
@@ -368,6 +398,141 @@ function InvoiceScanner({
     totalVAT: roundMoney(filteredInvoices.reduce((sum, invoice) => sum + Number(invoice.totalVAT || 0), 0)),
     totalIncVAT: roundMoney(filteredInvoices.reduce((sum, invoice) => sum + Number(invoice.totalIncVAT || 0), 0)),
   }), [filteredInvoices]);
+  const reportData = useMemo(() => {
+    const start = reportStartDate ? new Date(reportStartDate) : null;
+    const end = reportEndDate ? new Date(reportEndDate) : null;
+    const activeInvoices = workspace.invoices
+      .filter((invoice) => String(invoice.status || '').toLowerCase() !== 'deleted')
+      .filter((invoice) => {
+        const invoiceDateValue = new Date(invoice.invoiceDate || invoice.scannedAt || 0);
+
+        if (start && invoiceDateValue < start) return false;
+        if (end && invoiceDateValue > end) return false;
+        return true;
+      });
+    const supplierSpend = new Map();
+    const ingredientSpend = new Map();
+    const invoiceLineRows = [];
+
+    activeInvoices.forEach((invoice) => {
+      const supplier = invoice.supplier || invoice.supplierName || 'Unknown supplier';
+      const invoiceSpend = Number(invoice.totalExVAT || 0);
+      const currentSupplier = supplierSpend.get(supplier) || {
+        supplier,
+        invoices: 0,
+        spendExVAT: 0,
+        spendIncVAT: 0,
+      };
+
+      supplierSpend.set(supplier, {
+        ...currentSupplier,
+        invoices: currentSupplier.invoices + 1,
+        spendExVAT: roundMoney(currentSupplier.spendExVAT + invoiceSpend),
+        spendIncVAT: roundMoney(currentSupplier.spendIncVAT + Number(invoice.totalIncVAT || 0)),
+      });
+
+      (Array.isArray(invoice.lineItems) ? invoice.lineItems : []).forEach((lineItem) => {
+        const itemName = lineItem.itemName || lineItem.name || 'Unknown item';
+        const lineSpend = Number(lineItem.priceExVAT ?? lineItem.lineTotal ?? 0);
+        const currentIngredient = ingredientSpend.get(itemName) || {
+          name: itemName,
+          quantity: 0,
+          spendExVAT: 0,
+          unit: lineItem.unit || '',
+          suppliers: new Set(),
+        };
+
+        currentIngredient.quantity += Number(lineItem.quantity || 0);
+        currentIngredient.spendExVAT = roundMoney(currentIngredient.spendExVAT + lineSpend);
+        currentIngredient.suppliers.add(supplier);
+        ingredientSpend.set(itemName, currentIngredient);
+        invoiceLineRows.push({
+          invoiceDate: invoice.invoiceDate || '',
+          supplier,
+          invoiceNumber: invoice.invoiceNumber || '',
+          itemName,
+          quantity: lineItem.quantity || '',
+          unit: lineItem.unit || '',
+          unitPriceExVAT: Number(lineItem.unitPriceExVAT ?? lineItem.unitPrice ?? 0),
+          lineExVAT: lineSpend,
+          lineIncVAT: Number(lineItem.priceIncVAT ?? lineItem.inclusiveTotal ?? 0),
+        });
+      });
+    });
+
+    const priceHistoryRows = workspace.ingredients.flatMap((ingredient) => (
+      (Array.isArray(ingredient.priceHistory) ? ingredient.priceHistory : [])
+        .filter((history) => {
+          const historyDate = new Date(history.date || history.createdAt || 0);
+
+          if (start && historyDate < start) return false;
+          if (end && historyDate > end) return false;
+          return true;
+        })
+        .map((history) => ({
+          ingredient: ingredient.name,
+          date: history.date || history.createdAt || '',
+          supplier: history.supplier || history.supplierName || ingredient.preferredSupplier || '',
+          unit: history.unit || history.priceUnit || ingredient.lastUnit || ingredient.unit || '',
+          priceExVAT: Number(history.priceExVAT ?? history.price ?? 0),
+          priceIncVAT: Number(history.priceIncVAT ?? 0),
+          invoiceId: history.invoiceId || '',
+        }))
+    ));
+    const priceChanges = workspace.ingredients
+      .map((ingredient) => {
+        const history = (Array.isArray(ingredient.priceHistory) ? ingredient.priceHistory : [])
+          .filter((entry) => {
+            const entryDate = new Date(entry.date || entry.createdAt || 0);
+
+            if (start && entryDate < start) return false;
+            if (end && entryDate > end) return false;
+            return true;
+          })
+          .sort((a, b) => new Date(a.date || a.createdAt || 0) - new Date(b.date || b.createdAt || 0));
+        const latest = history[history.length - 1];
+        const previous = history[history.length - 2];
+        const latestPrice = Number(latest?.priceExVAT ?? latest?.price ?? 0);
+        const previousPrice = Number(previous?.priceExVAT ?? previous?.price ?? 0);
+
+        if (!latest || !previous || previousPrice <= 0 || latestPrice <= 0) return null;
+
+        return {
+          id: ingredient.id,
+          name: ingredient.name,
+          supplier: latest.supplier || latest.supplierName || ingredient.preferredSupplier || '',
+          unit: latest.unit || latest.priceUnit || ingredient.lastUnit || ingredient.unit || '',
+          previousPrice,
+          latestPrice,
+          changePercent: roundMoney(((latestPrice - previousPrice) / previousPrice) * 100),
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => Math.abs(b.changePercent) - Math.abs(a.changePercent))
+      .slice(0, 8);
+
+    return {
+      summary: {
+        invoiceCount: activeInvoices.length,
+        supplierCount: supplierSpend.size,
+        ingredientCount: ingredientSpend.size,
+        totalExVAT: roundMoney(activeInvoices.reduce((sum, invoice) => sum + Number(invoice.totalExVAT || 0), 0)),
+        totalVAT: roundMoney(activeInvoices.reduce((sum, invoice) => sum + Number(invoice.totalVAT || 0), 0)),
+        totalIncVAT: roundMoney(activeInvoices.reduce((sum, invoice) => sum + Number(invoice.totalIncVAT || 0), 0)),
+      },
+      supplierSpend: [...supplierSpend.values()].sort((a, b) => b.spendExVAT - a.spendExVAT).slice(0, 8),
+      ingredientSpend: [...ingredientSpend.values()]
+        .map((ingredient) => ({
+          ...ingredient,
+          suppliers: [...ingredient.suppliers].join('; '),
+        }))
+        .sort((a, b) => b.spendExVAT - a.spendExVAT)
+        .slice(0, 8),
+      invoiceLineRows,
+      priceHistoryRows,
+      priceChanges,
+    };
+  }, [reportEndDate, reportStartDate, workspace.ingredients, workspace.invoices]);
   const ingredientSearchValue = ingredientSearch.trim().toLowerCase();
   const filteredIngredients = useMemo(() => (
     [...workspace.ingredients]
@@ -395,6 +560,15 @@ function InvoiceScanner({
         && date.getFullYear() === now.getFullYear();
     }).length,
   }), [workspace.ingredients]);
+  const priceHistorySuppliers = useMemo(() => (
+    [...new Set(
+      workspace.ingredients.flatMap((ingredient) => (
+        (Array.isArray(ingredient.priceHistory) ? ingredient.priceHistory : [])
+          .map((history) => history.supplier || history.supplierName || '')
+          .filter(Boolean)
+      ))
+    )].sort((a, b) => a.localeCompare(b))
+  ), [workspace.ingredients]);
   const priceJumpCount = useMemo(() => (
     lineItems.filter((lineItem) => {
       const match = matches.get(lineItem.id);
@@ -404,6 +578,13 @@ function InvoiceScanner({
       return match?.ingredient && previousPrice > 0 && ((nextPrice - previousPrice) / previousPrice) * 100 > 10;
     }).length
   ), [lineItems, matches]);
+  const lowStockAlerts = useMemo(() => (
+    createLowStockAlerts({
+      ingredients: workspace.ingredients,
+      stockLevels: workspace.stockLevels,
+      inventoryMovements,
+    })
+  ), [inventoryMovements, workspace.ingredients, workspace.stockLevels]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -552,24 +733,143 @@ function InvoiceScanner({
     setMessage(`${nextLine.itemName} added as a manual invoice line.`);
   };
 
-  const handleScanFileChange = (event) => {
-    const file = event.target.files?.[0] || null;
+  const scanFileWithGemini = async (file) => {
+    const scanPayload = await createScanPayload(file);
+    const response = await fetch('/api/gemini-invoice', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          file: scanPayload,
+          vatMode,
+          vatRate,
+        }),
+      });
+    const body = await response.json().catch(() => ({}));
 
-    setScanSummary(null);
-    setScanFile(file);
+    if (!response.ok || !body?.ok) {
+      throw new Error(body?.message || 'Gemini could not read this invoice.');
+    }
 
-    if (!file) {
+    const invoice = body.invoice || {};
+    const nextVatMode = invoice.vatMode === 'exclusive' || invoice.vatMode === 'inclusive'
+      ? invoice.vatMode
+      : vatMode;
+    const nextVatRate = Number.isFinite(Number(invoice.vatRate))
+      ? Number(invoice.vatRate)
+      : vatRate;
+    const createdAt = Date.now();
+    const scannedLines = (Array.isArray(invoice.items) ? invoice.items : [])
+      .map((item, index) => {
+        const itemName = String(item?.itemName || '').trim();
+        const quantity = Number(item?.quantity) > 0 ? Number(item.quantity) : 1;
+        const lineTotal = getScannedLineTotal(item, nextVatMode);
+        const unitPrice = Number(item?.unitPrice) > 0
+          ? Number(item.unitPrice)
+          : quantity > 0
+            ? lineTotal / quantity
+            : lineTotal;
+
+        if (!itemName || lineTotal <= 0) {
+          return null;
+        }
+
+        return applyLineCalculations({
+          id: `gemini-${createdAt}-${index}-${createInvoiceKey(itemName) || Math.random().toString(36).slice(2)}`,
+          itemName,
+          quantity,
+          unit: normalizeInvoiceUnit(item?.unit || 'each'),
+          unitPrice: roundMoney(unitPrice),
+          lineTotal: roundMoney(lineTotal),
+          vatMode: nextVatMode,
+          vatRate: nextVatRate,
+          rawLine: item?.rawLine || `Gemini scan: ${itemName}`,
+          confidence: Number(item?.confidence) || 0.82,
+        }, { vatMode: nextVatMode, vatRate: nextVatRate });
+      })
+      .filter(Boolean);
+
+    if (scannedLines.length === 0) {
+      throw new Error('Gemini did not find usable invoice line items. Try a clearer, flatter photo.');
+    }
+
+    return {
+      file,
+      fileName: file.name,
+      supplierName: invoice.supplierName || '',
+      invoiceNumber: invoice.invoiceNumber || '',
+      invoiceDate: /^\d{4}-\d{2}-\d{2}$/.test(invoice.invoiceDate || '') ? invoice.invoiceDate : '',
+      vatMode: nextVatMode,
+      vatRate: nextVatRate,
+      extractedTotals: invoice.totals || null,
+      lineItems: scannedLines,
+      summary: {
+        fileName: file.name,
+        lineCount: scannedLines.length,
+        supplierName: invoice.supplierName || '',
+        invoiceNumber: invoice.invoiceNumber || '',
+        totals: invoice.totals || null,
+        model: body.model || 'Gemini',
+      },
+    };
+  };
+
+  const loadBatchDraftForReview = (draft) => {
+    if (!draft || !['ready', 'saved'].includes(draft.status)) {
       return;
     }
 
-    if (!SUPPORTED_SCAN_TYPES.has(file.type)) {
-      setMessage('Upload a JPG, PNG, WEBP, or PDF invoice.');
+    if (draft.supplierName) setSupplierName(draft.supplierName);
+    if (draft.invoiceNumber) setInvoiceNumber(draft.invoiceNumber);
+    if (draft.invoiceDate) setInvoiceDate(draft.invoiceDate);
+    setVatMode(draft.vatMode || vatMode);
+    setVatRate(Number(draft.vatRate) || vatRate);
+    setExtractedTotals(draft.extractedTotals || null);
+    setLineItems(draft.lineItems || []);
+    setManualIngredientLinks({});
+    setNewIngredientDrafts({});
+    setNewDrawerLineId('');
+    setConfirmedInvoice(null);
+    setStockUpdates([]);
+    setScanFile(draft.file || null);
+    setScanSummary(draft.summary || null);
+    setActiveBatchDraftId(draft.id);
+    setMessage(`${draft.fileName} loaded for review.`);
+  };
+
+  const handleScanFileChange = (event) => {
+    const files = Array.from(event.target.files || []);
+    const invalidFile = files.find((file) => !SUPPORTED_SCAN_TYPES.has(file.type));
+
+    setScanSummary(null);
+    setActiveBatchDraftId('');
+
+    if (invalidFile) {
+      setMessage('Upload JPG, PNG, WEBP, or PDF invoices only.');
       setScanFile(null);
+      setScanFiles([]);
+      setBatchDrafts([]);
       event.target.value = '';
       return;
     }
 
-    setMessage(`${file.name} selected for Gemini scanning.`);
+    setScanFiles(files);
+    setScanFile(files[0] || null);
+    setBatchDrafts(files.map((file, index) => ({
+      id: `batch-${Date.now()}-${index}`,
+      file,
+      fileName: file.name,
+      status: 'queued',
+      lineCount: 0,
+    })));
+
+    if (files.length === 0) {
+      setMessage('');
+      return;
+    }
+
+    setMessage(files.length === 1
+      ? `${files[0].name} selected for Gemini scanning.`
+      : `${files.length} invoices selected. Scan all or review them one at a time.`);
   };
 
   const scanInvoiceWithGemini = async () => {
@@ -583,95 +883,84 @@ function InvoiceScanner({
       setScanSummary(null);
       setMessage('Scanning invoice with Gemini...');
 
-      const scanPayload = await createScanPayload(scanFile);
-      const response = await fetch('/api/gemini-invoice', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          file: scanPayload,
-          vatMode,
-          vatRate,
-        }),
-      });
-      const body = await response.json().catch(() => ({}));
+      const scannedDraft = await scanFileWithGemini(scanFile);
 
-      if (!response.ok || !body?.ok) {
-        throw new Error(body?.message || 'Gemini could not read this invoice.');
-      }
-
-      const invoice = body.invoice || {};
-      const nextVatMode = invoice.vatMode === 'exclusive' || invoice.vatMode === 'inclusive'
-        ? invoice.vatMode
-        : vatMode;
-      const nextVatRate = Number.isFinite(Number(invoice.vatRate))
-        ? Number(invoice.vatRate)
-        : vatRate;
-      const createdAt = Date.now();
-      const scannedLines = (Array.isArray(invoice.items) ? invoice.items : [])
-        .map((item, index) => {
-          const itemName = String(item?.itemName || '').trim();
-          const quantity = Number(item?.quantity) > 0 ? Number(item.quantity) : 1;
-          const lineTotal = getScannedLineTotal(item, nextVatMode);
-          const unitPrice = Number(item?.unitPrice) > 0
-            ? Number(item.unitPrice)
-            : quantity > 0
-              ? lineTotal / quantity
-              : lineTotal;
-
-          if (!itemName || lineTotal <= 0) {
-            return null;
-          }
-
-          return applyLineCalculations({
-            id: `gemini-${createdAt}-${index}-${createInvoiceKey(itemName) || Math.random().toString(36).slice(2)}`,
-            itemName,
-            quantity,
-            unit: normalizeInvoiceUnit(item?.unit || 'each'),
-            unitPrice: roundMoney(unitPrice),
-            lineTotal: roundMoney(lineTotal),
-            vatMode: nextVatMode,
-            vatRate: nextVatRate,
-            rawLine: item?.rawLine || `Gemini scan: ${itemName}`,
-            confidence: Number(item?.confidence) || 0.82,
-          }, { vatMode: nextVatMode, vatRate: nextVatRate });
-        })
-        .filter(Boolean);
-
-      if (scannedLines.length === 0) {
-        throw new Error('Gemini did not find usable invoice line items. Try a clearer, flatter photo.');
-      }
-
-      if (invoice.supplierName) {
-        setSupplierName(invoice.supplierName);
-      }
-
-      if (invoice.invoiceNumber) {
-        setInvoiceNumber(invoice.invoiceNumber);
-      }
-
-      if (/^\d{4}-\d{2}-\d{2}$/.test(invoice.invoiceDate || '')) {
-        setInvoiceDate(invoice.invoiceDate);
-      }
-
-      setVatMode(nextVatMode);
-      setVatRate(nextVatRate);
-      setExtractedTotals(invoice.totals || null);
-      setLineItems((currentItems) => [...currentItems, ...scannedLines]);
+      if (scannedDraft.supplierName) setSupplierName(scannedDraft.supplierName);
+      if (scannedDraft.invoiceNumber) setInvoiceNumber(scannedDraft.invoiceNumber);
+      if (scannedDraft.invoiceDate) setInvoiceDate(scannedDraft.invoiceDate);
+      setVatMode(scannedDraft.vatMode);
+      setVatRate(scannedDraft.vatRate);
+      setExtractedTotals(scannedDraft.extractedTotals);
+      setLineItems((currentItems) => [...currentItems, ...scannedDraft.lineItems]);
       setConfirmedInvoice(null);
       setStockUpdates([]);
-      setScanSummary({
-        fileName: scanFile.name,
-        lineCount: scannedLines.length,
-        supplierName: invoice.supplierName || '',
-        invoiceNumber: invoice.invoiceNumber || '',
-        totals: invoice.totals || null,
-        model: body.model || 'Gemini',
-      });
-      setMessage(`Gemini added ${scannedLines.length} invoice line${scannedLines.length === 1 ? '' : 's'} for review.`);
+      setScanSummary(scannedDraft.summary);
+      setBatchDrafts((currentDrafts) => currentDrafts.map((draft) => (
+        draft.file === scanFile
+          ? {
+              ...draft,
+              ...scannedDraft,
+              status: 'ready',
+              lineCount: scannedDraft.lineItems.length,
+              error: '',
+            }
+          : draft
+      )));
+      setMessage(`Gemini added ${scannedDraft.lineItems.length} invoice line${scannedDraft.lineItems.length === 1 ? '' : 's'} for review.`);
     } catch (error) {
       setMessage(error?.message || 'Could not scan this invoice with Gemini.');
     } finally {
       setIsScanningInvoice(false);
+    }
+  };
+
+  const scanBatchInvoices = async () => {
+    if (batchDrafts.length === 0) {
+      setMessage('Choose invoice files before batch scanning.');
+      return;
+    }
+
+    try {
+      setIsBatchScanning(true);
+      setMessage(`Scanning ${batchDrafts.length} invoice${batchDrafts.length === 1 ? '' : 's'} with Gemini...`);
+
+      const readyDrafts = [];
+
+      for (const draft of batchDrafts) {
+        setBatchDrafts((currentDrafts) => currentDrafts.map((currentDraft) => (
+          currentDraft.id === draft.id ? { ...currentDraft, status: 'scanning', error: '' } : currentDraft
+        )));
+
+        try {
+          const scannedDraft = await scanFileWithGemini(draft.file);
+          const readyDraft = {
+            ...draft,
+            ...scannedDraft,
+            status: 'ready',
+            lineCount: scannedDraft.lineItems.length,
+            error: '',
+          };
+
+          readyDrafts.push(readyDraft);
+          setBatchDrafts((currentDrafts) => currentDrafts.map((currentDraft) => (
+            currentDraft.id === draft.id ? readyDraft : currentDraft
+          )));
+        } catch (error) {
+          setBatchDrafts((currentDrafts) => currentDrafts.map((currentDraft) => (
+            currentDraft.id === draft.id
+              ? { ...currentDraft, status: 'error', error: error?.message || 'Could not scan this invoice.' }
+              : currentDraft
+          )));
+        }
+      }
+
+      if (readyDrafts.length > 0) {
+        loadBatchDraftForReview(readyDrafts[0]);
+      }
+
+      setMessage(`Batch scan complete: ${readyDrafts.length} of ${batchDrafts.length} invoice${batchDrafts.length === 1 ? '' : 's'} ready for review.`);
+    } finally {
+      setIsBatchScanning(false);
     }
   };
 
@@ -793,6 +1082,62 @@ function InvoiceScanner({
     }
   };
 
+  const handleExportInvoiceLines = () => {
+    if (!canExportInvoiceReports) {
+      setMessage('Only an owner or manager can export invoice reports.');
+      return;
+    }
+
+    if (reportData.invoiceLineRows.length === 0) {
+      setMessage('No invoice lines match this report range.');
+      return;
+    }
+
+    downloadCsv(
+      `wasteshift-invoice-lines-${new Date().toISOString().slice(0, 10)}.csv`,
+      ['Date', 'Supplier', 'Invoice Number', 'Item', 'Quantity', 'Unit', 'Unit Price ex VAT', 'Line ex VAT', 'Line inc VAT'],
+      reportData.invoiceLineRows.map((row) => [
+        row.invoiceDate,
+        row.supplier,
+        row.invoiceNumber,
+        row.itemName,
+        row.quantity,
+        row.unit,
+        row.unitPriceExVAT,
+        row.lineExVAT,
+        row.lineIncVAT,
+      ])
+    );
+    setMessage(`Exported ${reportData.invoiceLineRows.length} invoice line${reportData.invoiceLineRows.length === 1 ? '' : 's'}.`);
+  };
+
+  const handleExportPriceHistory = () => {
+    if (!canExportInvoiceReports) {
+      setMessage('Only an owner or manager can export invoice reports.');
+      return;
+    }
+
+    if (reportData.priceHistoryRows.length === 0) {
+      setMessage('No ingredient price history matches this report range.');
+      return;
+    }
+
+    downloadCsv(
+      `wasteshift-price-history-${new Date().toISOString().slice(0, 10)}.csv`,
+      ['Ingredient', 'Date', 'Supplier', 'Unit', 'Price ex VAT', 'Price inc VAT', 'Invoice ID'],
+      reportData.priceHistoryRows.map((row) => [
+        row.ingredient,
+        row.date,
+        row.supplier,
+        row.unit,
+        row.priceExVAT,
+        row.priceIncVAT,
+        row.invoiceId,
+      ])
+    );
+    setMessage(`Exported ${reportData.priceHistoryRows.length} ingredient price histor${reportData.priceHistoryRows.length === 1 ? 'y row' : 'y rows'}.`);
+  };
+
   const handleVatRateSave = async () => {
     try {
       await saveInvoiceSettings({ vatRate });
@@ -862,6 +1207,11 @@ function InvoiceScanner({
         lineItems,
         ingredientRows,
       });
+      setBatchDrafts((currentDrafts) => currentDrafts.map((draft) => (
+        draft.id === activeBatchDraftId
+          ? { ...draft, status: 'saved', savedInvoiceId: result.invoiceId }
+          : draft
+      )));
       onInvoicePricesUpdated?.({
         invoiceId: result.invoiceId,
         supplierName,
@@ -943,6 +1293,9 @@ function InvoiceScanner({
           </button>
           <button type="button" className={`segment-button${activeView === 'history' ? ' is-active' : ''}`} onClick={() => setActiveView('history')}>
             History
+          </button>
+          <button type="button" className={`segment-button${activeView === 'reports' ? ' is-active' : ''}`} onClick={() => setActiveView('reports')}>
+            Reports
           </button>
         </div>
       </div>
@@ -1095,32 +1448,80 @@ function InvoiceScanner({
                     <input
                       ref={scanFileInputRef}
                       type="file"
+                      multiple
                       accept="image/jpeg,image/png,image/webp,application/pdf"
                       onChange={handleScanFileChange}
                       className="invoice-file-input"
                     />
-                    <span className="invoice-upload-label">{scanFile ? scanFile.name : 'Choose invoice file'}</span>
-                    <span className="small-text">JPG, PNG, WEBP, or PDF</span>
+                    <span className="invoice-upload-label">
+                      {scanFiles.length > 1 ? `${scanFiles.length} invoices selected` : scanFile ? scanFile.name : 'Choose invoice files'}
+                    </span>
+                    <span className="small-text">JPG, PNG, WEBP, or PDF. Select several invoices for batch review.</span>
                   </label>
                   <div className="invoice-manual-actions">
-                    <button type="button" className="primary-button" onClick={scanInvoiceWithGemini} disabled={!scanFile || isScanningInvoice}>
-                      {isScanningInvoice ? 'Scanning...' : 'Scan invoice'}
+                    <button type="button" className="primary-button" onClick={scanInvoiceWithGemini} disabled={!scanFile || isScanningInvoice || isBatchScanning}>
+                      {isScanningInvoice ? 'Scanning...' : 'Scan selected'}
+                    </button>
+                    <button type="button" className="ghost-button" onClick={scanBatchInvoices} disabled={batchDrafts.length === 0 || isScanningInvoice || isBatchScanning}>
+                      {isBatchScanning ? 'Scanning batch...' : 'Scan all'}
                     </button>
                     <button
                       type="button"
                       className="ghost-button"
                       onClick={() => {
                         setScanFile(null);
+                        setScanFiles([]);
+                        setBatchDrafts([]);
+                        setActiveBatchDraftId('');
                         setScanSummary(null);
                         if (scanFileInputRef.current) {
                           scanFileInputRef.current.value = '';
                         }
                       }}
-                      disabled={isScanningInvoice || !scanFile}
+                      disabled={isScanningInvoice || isBatchScanning || scanFiles.length === 0}
                     >
                       Clear file
                     </button>
                   </div>
+                  {batchDrafts.length > 0 && (
+                    <div className="invoice-batch-list">
+                      {batchDrafts.map((draft, index) => (
+                        <div key={draft.id} className={`invoice-batch-card${draft.id === activeBatchDraftId ? ' is-active' : ''}`}>
+                          <div>
+                            <strong>{index + 1}. {draft.fileName}</strong>
+                            <span className="small-text">
+                              {draft.status === 'ready' && `${draft.lineCount} lines ready`}
+                              {draft.status === 'queued' && 'Waiting to scan'}
+                              {draft.status === 'scanning' && 'Scanning with Gemini...'}
+                              {draft.status === 'saved' && `Saved${draft.savedInvoiceId ? ` as ${draft.savedInvoiceId}` : ''}`}
+                              {draft.status === 'error' && (draft.error || 'Could not scan')}
+                            </span>
+                          </div>
+                          <div className="manager-row">
+                            <span className={`badge${draft.status === 'ready' ? ' is-green' : draft.status === 'error' ? ' is-red' : draft.status === 'saved' ? ' is-blue' : ''}`}>
+                              {draft.status}
+                            </span>
+                            <button
+                              type="button"
+                              className="ghost-button compact-action"
+                              onClick={() => {
+                                setScanFile(draft.file);
+                                if (['ready', 'saved'].includes(draft.status)) {
+                                  loadBatchDraftForReview(draft);
+                                } else {
+                                  setActiveBatchDraftId(draft.id);
+                                  setMessage(`${draft.fileName} selected.`);
+                                }
+                              }}
+                              disabled={draft.status === 'scanning' || isBatchScanning}
+                            >
+                              {draft.status === 'ready' || draft.status === 'saved' ? 'Review' : 'Select'}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {scanSummary && (
                     <div className="invoice-scan-status">
                       <span className="badge is-green">{scanSummary.lineCount} lines</span>
@@ -1405,7 +1806,30 @@ function InvoiceScanner({
                 <button type="button" className="ghost-button is-warning" onClick={handleUpdateStock} disabled={!confirmedInvoice}>
                   Update Stock
                 </button>
+                <span className={`badge${lowStockAlerts.length > 0 ? ' is-red' : ' is-green'}`}>
+                  {lowStockAlerts.length} low-stock alert{lowStockAlerts.length === 1 ? '' : 's'}
+                </span>
               </div>
+
+              {lowStockAlerts.length > 0 && (
+                <div className="low-stock-alert-list">
+                  {lowStockAlerts.slice(0, 5).map((alert) => (
+                    <div key={alert.ingredientId || alert.ingredientName} className="low-stock-alert-row">
+                      <div>
+                        <strong>{alert.ingredientName}</strong>
+                        <span className="small-text">
+                          {alert.currentQty} {alert.unit} on hand
+                          {alert.projectedDaysLeft !== null ? ` · about ${alert.projectedDaysLeft} days left` : ''}
+                        </span>
+                      </div>
+                      <span className={`badge${alert.severity === 'critical' ? ' is-red' : ' is-yellow'}`}>
+                        {alert.severity === 'critical' ? 'Reorder' : 'Watch'}
+                      </span>
+                      <span className="small-text">{alert.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {stockUpdates.length > 0 && (
                 <div className="stock-update-list">
@@ -1453,6 +1877,10 @@ function InvoiceScanner({
                 <span className="metric-value">{ingredientSummary.newThisMonth}</span>
                 <span className="metric-label">Updated this month</span>
               </div>
+              <div className="metric-card">
+                <span className={`metric-value${lowStockAlerts.length > 0 ? ' is-danger' : ''}`}>{lowStockAlerts.length}</span>
+                <span className="metric-label">Low-stock alerts</span>
+              </div>
             </div>
 
             <div className="field-grid">
@@ -1463,6 +1891,17 @@ function InvoiceScanner({
                 className="input"
                 placeholder="Search raw ingredients, category, supplier, or unit"
               />
+              <select
+                value={priceHistorySupplierFilter}
+                onChange={(event) => setPriceHistorySupplierFilter(event.target.value)}
+                className="input"
+                aria-label="Filter price history by supplier"
+              >
+                <option value="">All price history suppliers</option>
+                {priceHistorySuppliers.map((supplier) => (
+                  <option key={supplier} value={supplier}>{supplier}</option>
+                ))}
+              </select>
             </div>
 
             <div className="raw-ingredient-list">
@@ -1470,7 +1909,20 @@ function InvoiceScanner({
                 <div className="empty-state">No raw ingredients match this search.</div>
               ) : filteredIngredients.map((ingredient) => {
                 const catalogRecord = itemPriceCatalog?.[createItemPriceKey(ingredient.name)];
-                const historyCount = Array.isArray(ingredient.priceHistory) ? ingredient.priceHistory.length : 0;
+                const priceHistory = Array.isArray(ingredient.priceHistory) ? ingredient.priceHistory : [];
+                const filteredPriceHistory = priceHistory
+                  .filter((history) => (
+                    !priceHistorySupplierFilter
+                    || String(history.supplier || history.supplierName || '') === priceHistorySupplierFilter
+                  ))
+                  .sort((a, b) => new Date(a.date || a.createdAt || 0) - new Date(b.date || b.createdAt || 0));
+                const historyCount = filteredPriceHistory.length;
+                const historyChartData = filteredPriceHistory
+                  .map((history) => ({
+                    date: history.date || history.createdAt || '',
+                    price: Number(history.priceExVAT ?? history.price ?? 0),
+                  }))
+                  .filter((history) => Number.isFinite(history.price) && history.price > 0);
 
                 return (
                   <div key={ingredient.id} className="raw-ingredient-card">
@@ -1494,8 +1946,32 @@ function InvoiceScanner({
                           App cost {formatMoney(catalogRecord.price)} / {catalogRecord.unit}
                         </span>
                       )}
-                      <span className="badge">{historyCount} prices</span>
+                      <span className="badge">{historyCount} price{historyCount === 1 ? '' : 's'}</span>
                     </div>
+                    {historyCount > 0 && (
+                      <details className="ingredient-history-panel">
+                        <summary>Price history</summary>
+                        {historyChartData.length > 1 && (
+                          <div className="ingredient-history-chart">
+                            <ResponsiveContainer width="100%" height={86}>
+                              <LineChart data={historyChartData}>
+                                <Line type="monotone" dataKey="price" stroke="currentColor" dot={false} strokeWidth={2} />
+                              </LineChart>
+                            </ResponsiveContainer>
+                          </div>
+                        )}
+                        <div className="ingredient-history-list">
+                          {filteredPriceHistory.slice().reverse().map((history) => (
+                            <div key={history.id || `${history.invoiceId}-${history.date}-${history.priceExVAT}`} className="ingredient-history-row">
+                              <span>{history.date || 'No date'}</span>
+                              <strong>{formatMoney(history.priceExVAT ?? history.price)}</strong>
+                              <span>{history.supplier || history.supplierName || 'Unknown supplier'}</span>
+                              <span>{history.unit || history.priceUnit || ingredient.lastUnit || ingredient.unit || 'each'}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
                     <button
                       type="button"
                       className="ghost-button compact-action"
@@ -1580,6 +2056,111 @@ function InvoiceScanner({
                     ))}
                   </div>
                 </details>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {activeView === 'reports' && (
+        <section className="panel">
+          <div className="panel-body">
+            <div className="section-header">
+              <div>
+                <p className="eyebrow">Reports</p>
+                <h2 className="title">Invoice Spend & Price Movement</h2>
+              </div>
+              <div className="manager-row">
+                <button type="button" className="ghost-button compact-action" onClick={handleExportInvoiceLines} disabled={!canExportInvoiceReports || reportData.invoiceLineRows.length === 0}>
+                  Export lines
+                </button>
+                <button type="button" className="ghost-button compact-action" onClick={handleExportPriceHistory} disabled={!canExportInvoiceReports || reportData.priceHistoryRows.length === 0}>
+                  Export prices
+                </button>
+              </div>
+            </div>
+
+            <div className="field-grid">
+              <input type="date" value={reportStartDate} onChange={(event) => setReportStartDate(event.target.value)} className="input" aria-label="Report start date" />
+              <input type="date" value={reportEndDate} onChange={(event) => setReportEndDate(event.target.value)} className="input" aria-label="Report end date" />
+              <button type="button" className="ghost-button compact-action" onClick={() => { setReportStartDate(''); setReportEndDate(''); }}>
+                Clear dates
+              </button>
+            </div>
+
+            {!canExportInvoiceReports && (
+              <div className="notice-panel notice-panel--warning">
+                <p className="small-text" style={{ margin: 0 }}>Exports are owner or manager only.</p>
+              </div>
+            )}
+
+            <div className="metrics-grid">
+              <div className="metric-card">
+                <span className="metric-value">{formatMoney(reportData.summary.totalExVAT)}</span>
+                <span className="metric-label">Spend excl VAT</span>
+              </div>
+              <div className="metric-card">
+                <span className="metric-value">{formatMoney(reportData.summary.totalVAT)}</span>
+                <span className="metric-label">VAT tracked</span>
+              </div>
+              <div className="metric-card">
+                <span className="metric-value">{reportData.summary.invoiceCount}</span>
+                <span className="metric-label">Invoices</span>
+              </div>
+              <div className="metric-card">
+                <span className="metric-value">{reportData.summary.ingredientCount}</span>
+                <span className="metric-label">Ingredients bought</span>
+              </div>
+            </div>
+
+            <div className="invoice-report-grid">
+              <div className="invoice-report-panel">
+                <h3 className="breakdown-title">Supplier Spend</h3>
+                {reportData.supplierSpend.length === 0 ? (
+                  <div className="empty-state">No supplier spend in this range.</div>
+                ) : reportData.supplierSpend.map((supplier) => (
+                  <div key={supplier.supplier} className="invoice-report-row">
+                    <div>
+                      <strong>{supplier.supplier}</strong>
+                      <span className="small-text">{supplier.invoices} invoice{supplier.invoices === 1 ? '' : 's'}</span>
+                    </div>
+                    <span>{formatMoney(supplier.spendExVAT)} ex</span>
+                    <span className="badge">{formatMoney(supplier.spendIncVAT)} incl</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="invoice-report-panel">
+                <h3 className="breakdown-title">Top Ingredients By Spend</h3>
+                {reportData.ingredientSpend.length === 0 ? (
+                  <div className="empty-state">No ingredient spend in this range.</div>
+                ) : reportData.ingredientSpend.map((ingredient) => (
+                  <div key={ingredient.name} className="invoice-report-row">
+                    <div>
+                      <strong>{ingredient.name}</strong>
+                      <span className="small-text">{Number(ingredient.quantity || 0).toFixed(2).replace(/0+$/, '').replace(/\.$/, '')} {ingredient.unit || 'units'} · {ingredient.suppliers || 'No supplier'}</span>
+                    </div>
+                    <span>{formatMoney(ingredient.spendExVAT)} ex</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="invoice-report-panel">
+              <h3 className="breakdown-title">Largest Price Changes</h3>
+              {reportData.priceChanges.length === 0 ? (
+                <div className="empty-state">No repeated ingredient prices in this range yet.</div>
+              ) : reportData.priceChanges.map((change) => (
+                <div key={change.id || change.name} className="invoice-report-row">
+                  <div>
+                    <strong>{change.name}</strong>
+                    <span className="small-text">{change.supplier || 'Unknown supplier'} · {change.unit || 'unit'}</span>
+                  </div>
+                  <span>{formatMoney(change.previousPrice)} to {formatMoney(change.latestPrice)}</span>
+                  <span className={change.changePercent > 0 ? 'badge is-red' : 'badge is-green'}>
+                    {change.changePercent > 0 ? '+' : ''}{formatPercent(change.changePercent)}
+                  </span>
+                </div>
               ))}
             </div>
           </div>

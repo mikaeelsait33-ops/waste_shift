@@ -14,6 +14,7 @@ import { inferStaffSection } from './utils/staffSections';
 import { getAccessProfile, inferRoleKey, requirePermission } from './utils/accessControl';
 import {
   calculateItemPriceCost,
+  calculateRecipeIngredientCost,
   createItemPriceCatalogFromInvoice,
   createItemPriceKey,
   sanitizeItemPriceCatalog,
@@ -130,6 +131,79 @@ const cloneRecipeMap = (recipeMap) => Object.fromEntries(
     },
   ])
 );
+
+const recalculateRecipesFromPriceCatalog = (recipeMap, itemPriceCatalog, updatedKeySet) => {
+  const nextRecipes = {};
+  const changedRecipes = [];
+
+  Object.entries(isRecipeMap(recipeMap) ? recipeMap : {}).forEach(([key, recipe]) => {
+    const ingredients = Array.isArray(recipe?.ingredients) ? recipe.ingredients : [];
+    let recipeChanged = false;
+
+    const nextIngredients = ingredients.map((ingredient) => {
+      const calculatedCost = calculateRecipeIngredientCost({ ingredient, itemPriceCatalog });
+      const ingredientKey = createItemPriceKey(ingredient?.name);
+      const affectedByInvoice = calculatedCost.source === 'catalog'
+        && (updatedKeySet.has(calculatedCost.priceCatalogKey) || updatedKeySet.has(ingredientKey));
+
+      if (!affectedByInvoice) {
+        return { ...ingredient };
+      }
+
+      const nextCost = roundCurrency(calculatedCost.baseCost);
+      const existingCost = roundCurrency(Number(ingredient?.cost) || 0);
+      const nextIngredient = {
+        ...ingredient,
+        cost: nextCost,
+        costSource: 'catalog',
+        priceCatalogKey: calculatedCost.priceCatalogKey,
+        pricePerUnit: calculatedCost.pricePerUnit,
+        priceUnit: calculatedCost.priceUnit,
+      };
+
+      if (
+        nextCost !== existingCost
+        || ingredient.costSource !== nextIngredient.costSource
+        || ingredient.priceCatalogKey !== nextIngredient.priceCatalogKey
+        || ingredient.pricePerUnit !== nextIngredient.pricePerUnit
+        || ingredient.priceUnit !== nextIngredient.priceUnit
+      ) {
+        recipeChanged = true;
+      }
+
+      return nextIngredient;
+    });
+
+    const totalCost = roundCurrency(
+      nextIngredients.reduce((sum, ingredient) => sum + (Number(ingredient.cost) || 0), 0)
+    );
+    const currentTotalCost = roundCurrency(Number(recipe?.totalCost) || 0);
+    const menuPrice = Number(recipe?.menuPrice);
+    const nextRecipe = {
+      ...recipe,
+      ingredients: nextIngredients,
+      totalCost,
+      ...(Number.isFinite(menuPrice) && menuPrice > 0
+        ? {
+            margin: roundCurrency(menuPrice - totalCost),
+            foodCostPercentage: roundCurrency((totalCost / menuPrice) * 100),
+          }
+        : {}),
+    };
+
+    if (recipeChanged || totalCost !== currentTotalCost) {
+      changedRecipes.push([key, nextRecipe]);
+    }
+
+    nextRecipes[key] = nextRecipe;
+  });
+
+  return {
+    nextRecipes,
+    changedRecipes,
+    repricedRecipes: changedRecipes.length,
+  };
+};
 
 const mergeDefaultRecipeUpdates = (savedRecipeMap) => {
   const savedRecipes = cloneRecipeMap(savedRecipeMap);
@@ -1906,6 +1980,11 @@ function App() {
       ...invoiceCatalog,
     });
     const updatedKeySet = new Set(updatedKeys);
+    const {
+      nextRecipes,
+      changedRecipes,
+      repricedRecipes,
+    } = recalculateRecipesFromPriceCatalog(recipes, nextCatalog, updatedKeySet);
     let repricedEntries = 0;
     const nextWasteItems = wasteItems.map((item) => {
       const itemKey = createItemPriceKey(item?.name);
@@ -1946,6 +2025,44 @@ function App() {
 
     setItemPriceCatalog(nextCatalog);
 
+    if (repricedRecipes > 0) {
+      setRecipes(nextRecipes);
+
+      changedRecipes.forEach(([key, recipe]) => {
+        const components = (Array.isArray(recipe.ingredients) ? recipe.ingredients : []).map((ingredient, index) => ({
+          key: ingredient.componentKey || createMenuItemKey(`${ingredient.name || 'ingredient'}-${index + 1}`),
+          name: ingredient.name,
+          cost: Number(ingredient.cost) || 0,
+        }));
+        const totalCost = roundCurrency(components.reduce((sum, component) => sum + component.cost, 0));
+        const nextMenuItem = {
+          key,
+          firestoreId: key,
+          name: recipe?.name || key,
+          menuPrice: recipe?.menuPrice ?? null,
+          totalCost,
+          components,
+        };
+
+        setFirestoreMenuItems(prevItems => {
+          const existingIndex = prevItems.findIndex((item) => item.key === key);
+
+          if (existingIndex === -1) {
+            return [...prevItems, nextMenuItem].sort((a, b) => a.name.localeCompare(b.name));
+          }
+
+          return prevItems.map((item, index) => (
+            index === existingIndex ? { ...item, ...nextMenuItem } : item
+          ));
+        });
+
+        saveFirestoreMenuItem(nextMenuItem)
+          .catch((error) => {
+            console.warn('Could not sync repriced recipe to Firebase:', error);
+          });
+      });
+    }
+
     if (repricedEntries > 0) {
       setWasteItems(nextWasteItems);
       setInventoryMovements(nextWasteItems.flatMap(createInventoryMovementsFromEntry));
@@ -1960,11 +2077,12 @@ function App() {
           invoiceId: invoiceUpdate?.invoiceId || '',
           updatedPrices: updatedKeys.length,
           repricedEntries,
+          repricedRecipes,
         },
       }),
       ...prevLog,
     ].slice(0, 500));
-  }, [activeStaffMember?.name, itemPriceCatalog, wasteItems]);
+  }, [activeStaffMember?.name, itemPriceCatalog, recipes, wasteItems]);
 
   const handleInvoiceIngredientDeleted = useCallback((ingredient) => {
     const key = createItemPriceKey(ingredient?.name);
@@ -2485,6 +2603,7 @@ function App() {
             recipes={effectiveRecipes}
             menuItems={menuItems}
             itemPriceCatalog={itemPriceCatalog}
+            inventoryMovements={inventoryMovements}
             onInvoiceSaved={refreshInvoiceDashboardStats}
             onInvoicePricesUpdated={handleInvoicePricesUpdated}
             onIngredientDeleted={handleInvoiceIngredientDeleted}

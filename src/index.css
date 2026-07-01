@@ -1767,6 +1767,33 @@ textarea.input {
   align-items: center;
 }
 
+.invoice-batch-list {
+  display: grid;
+  gap: 8px;
+}
+
+.invoice-batch-card {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.invoice-batch-card.is-active {
+  border-color: rgba(130, 199, 255, 0.54);
+  box-shadow: var(--inner-highlight), 0 0 0 1px rgba(130, 199, 255, 0.18);
+}
+
+.invoice-batch-card strong,
+.invoice-batch-card .small-text {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
 .invoice-manual-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1871,6 +1898,62 @@ textarea.input {
   gap: 8px;
 }
 
+.invoice-report-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.invoice-report-panel {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.invoice-report-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.invoice-report-row strong,
+.invoice-report-row .small-text {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.low-stock-alert-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.low-stock-alert-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto minmax(140px, 0.8fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  background: rgba(255, 209, 102, 0.08);
+  border: 1px solid rgba(255, 209, 102, 0.22);
+  border-radius: 8px;
+}
+
+.low-stock-alert-row strong,
+.low-stock-alert-row .small-text {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
 .invoice-impact-row,
 .invoice-history-row,
 .raw-ingredient-card {
@@ -1923,6 +2006,48 @@ textarea.input {
   flex-wrap: wrap;
   gap: 7px;
   align-items: center;
+}
+
+.ingredient-history-panel {
+  grid-column: 1 / -1;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.ingredient-history-panel summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.ingredient-history-chart {
+  height: 86px;
+  margin-top: 10px;
+  color: var(--accent);
+}
+
+.ingredient-history-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.ingredient-history-row {
+  display: grid;
+  grid-template-columns: minmax(92px, 0.9fr) minmax(80px, auto) minmax(120px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+.ingredient-history-row strong {
+  color: var(--text-main);
 }
 
 .drawer-backdrop {
@@ -2060,8 +2185,12 @@ textarea.input {
   .action-panel,
   .database-grid,
   .invoice-entry-grid,
+  .invoice-report-grid,
   .invoice-impact-row,
+  .invoice-report-row,
+  .invoice-batch-card,
   .raw-ingredient-card,
+  .ingredient-history-row,
   .invoice-history-row summary,
   .invoice-importer,
   .invoice-result-row,
