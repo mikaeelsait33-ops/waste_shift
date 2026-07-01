@@ -7,6 +7,7 @@ import {
   createInvoiceKey,
   getBaseUnitInfo,
   getIngredientMatch,
+  getLinkedMenuItemsForIngredient,
   normalizeInvoiceUnit,
   roundMoney,
   summarizeInvoiceItems,
@@ -19,11 +20,12 @@ import {
   saveConfirmedInvoice,
   saveIngredient,
   saveInvoiceSettings,
+  softDeleteInvoice,
   updateStockFromInvoice,
 } from '../services/invoiceFirestore';
 
 const DEFAULT_VAT_RATE = 0.15;
-const UNIT_OPTIONS = ['kg', 'g', 'L', 'ml', 'each', 'case', 'doz', 'pkt', 'bag', 'box', 'bottle', 'tray', 'tin', 'punnet', 'bunch', 'head', 'pillow'];
+const UNIT_OPTIONS = ['kg', 'g', 'L', 'ml', 'each', '5L', 'case of 12', 'case', 'doz', 'pkt', 'bag', 'box', 'bottle', 'tray', 'tin', 'punnet', 'bunch', 'head', 'pillow'];
 const SCAN_IMAGE_MAX_EDGE = 1800;
 const SCAN_IMAGE_QUALITY = 0.84;
 const MAX_SCAN_BYTES = 8 * 1024 * 1024;
@@ -171,7 +173,7 @@ const getScannedLineTotal = (item, nextVatMode) => {
   return 0;
 };
 
-const createIngredientRows = ({ lineItems, matches, newIngredientDrafts, supplierName }) => (
+const createIngredientRows = ({ lineItems, matches, newIngredientDrafts, supplierName, menuItems }) => (
   lineItems.map((lineItem) => {
     const match = matches.get(lineItem.id);
     const draft = newIngredientDrafts[lineItem.id];
@@ -180,6 +182,12 @@ const createIngredientRows = ({ lineItems, matches, newIngredientDrafts, supplie
     const ingredientId = ingredient?.id || draft?.id || createInvoiceKey(ingredientName);
     const previousPrice = Number(ingredient?.lastPriceExVAT || 0);
     const nextUnitPriceExVAT = Number(lineItem.unitPriceExVAT || lineItem.unitPrice || 0);
+    const inferredLinks = getLinkedMenuItemsForIngredient(ingredientName, menuItems);
+    const linkedMenuItemIds = [
+      ...(Array.isArray(ingredient?.linkedMenuItemIds) ? ingredient.linkedMenuItemIds : []),
+      ...(Array.isArray(draft?.linkedMenuItemIds) ? draft.linkedMenuItemIds : []),
+      ...inferredLinks.map(({ menuItem }) => menuItem.id || menuItem.key).filter(Boolean),
+    ].filter((value, index, values) => value && values.indexOf(value) === index);
     const changePercent = previousPrice > 0
       ? roundMoney(((nextUnitPriceExVAT - previousPrice) / previousPrice) * 100)
       : 0;
@@ -198,6 +206,9 @@ const createIngredientRows = ({ lineItems, matches, newIngredientDrafts, supplie
       parLevel: Number(draft?.parLevel ?? ingredient?.parLevel ?? 0) || 0,
       reorderPoint: Number(draft?.reorderPoint ?? ingredient?.reorderPoint ?? 0) || 0,
       preferredSupplier: draft?.preferredSupplier || ingredient?.preferredSupplier || supplierName,
+      linkedMenuItemIds,
+      linkedRecipeNames: inferredLinks.map(({ menuItem }) => menuItem.name).filter(Boolean),
+      matchScore: Number(match?.score || 0),
       priceExVAT: lineItem.priceExVAT,
       priceIncVAT: lineItem.priceIncVAT,
       unitPriceExVAT: lineItem.unitPriceExVAT,
@@ -229,11 +240,14 @@ function InvoiceScanner({
   const [activeView, setActiveView] = useState('entry');
   const [message, setMessage] = useState('');
   const [supplierName, setSupplierName] = useState('');
+  const [invoiceNumber, setInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [vatRate, setVatRate] = useState(DEFAULT_VAT_RATE);
   const [vatMode, setVatMode] = useState('inclusive');
   const [lineItems, setLineItems] = useState([]);
+  const [extractedTotals, setExtractedTotals] = useState(null);
   const [manualLineDraft, setManualLineDraft] = useState(EMPTY_MANUAL_LINE);
+  const [manualIngredientLinks, setManualIngredientLinks] = useState({});
   const [scanFile, setScanFile] = useState(null);
   const [isScanningInvoice, setIsScanningInvoice] = useState(false);
   const [scanSummary, setScanSummary] = useState(null);
@@ -247,6 +261,7 @@ function InvoiceScanner({
   const [historyEndDate, setHistoryEndDate] = useState('');
   const [ingredientSearch, setIngredientSearch] = useState('');
   const [deletingIngredientId, setDeletingIngredientId] = useState('');
+  const [deletingInvoiceId, setDeletingInvoiceId] = useState('');
 
   const canManageInvoices = Boolean(accessProfile?.canManageStoreRoom || accessProfile?.canManageMenu);
   const firebaseReady = invoiceFirestoreIsConfigured();
@@ -254,7 +269,7 @@ function InvoiceScanner({
   const allMenuItems = useMemo(() => (
     mergeMenuItems(workspace.menuItems, localMenuItems)
   ), [localMenuItems, workspace.menuItems]);
-  const matches = useMemo(() => {
+  const autoMatches = useMemo(() => {
     const lookup = new Map();
 
     lineItems.forEach((lineItem) => {
@@ -263,15 +278,69 @@ function InvoiceScanner({
 
     return lookup;
   }, [lineItems, workspace.ingredients]);
+  const matches = useMemo(() => {
+    const lookup = new Map();
+
+    lineItems.forEach((lineItem) => {
+      const manualLink = manualIngredientLinks[lineItem.id];
+
+      if (manualLink === '__new__') {
+        lookup.set(lineItem.id, { ingredient: null, score: 0, source: 'manual-new' });
+        return;
+      }
+
+      if (manualLink) {
+        const ingredient = workspace.ingredients.find((item) => item.id === manualLink);
+
+        lookup.set(lineItem.id, ingredient
+          ? { ingredient, score: 1, source: 'manual' }
+          : autoMatches.get(lineItem.id) || { ingredient: null, score: 0 });
+        return;
+      }
+
+      lookup.set(lineItem.id, autoMatches.get(lineItem.id) || { ingredient: null, score: 0 });
+    });
+
+    return lookup;
+  }, [autoMatches, lineItems, manualIngredientLinks, workspace.ingredients]);
   const matchedCount = [...matches.values()].filter((match) => match.ingredient).length;
   const newLineItems = lineItems.filter((lineItem) => !matches.get(lineItem.id)?.ingredient);
   const totals = useMemo(() => summarizeInvoiceItems(lineItems), [lineItems]);
+  const hasExtractedTotals = extractedTotals
+    && Number(extractedTotals.totalIncVAT || extractedTotals.totalExVAT || extractedTotals.totalVAT) > 0;
+  const duplicateInvoices = useMemo(() => {
+    const supplierKey = createInvoiceKey(supplierName);
+    const reviewedTotal = roundMoney(totals.totalIncVAT);
+    const printedInvoiceNumber = String(invoiceNumber || '').trim().toLowerCase();
+
+    if (!supplierKey || !invoiceDate || reviewedTotal <= 0) {
+      return [];
+    }
+
+    return workspace.invoices.filter((invoice) => {
+      if (String(invoice.status || '').toLowerCase() === 'deleted') {
+        return false;
+      }
+
+      const existingSupplierKey = createInvoiceKey(invoice.supplier || invoice.supplierName || '');
+      const existingDate = String(invoice.invoiceDate || invoice.date || '').slice(0, 10);
+      const existingTotal = roundMoney(invoice.totalIncVAT ?? invoice.total);
+      const existingInvoiceNumber = String(invoice.invoiceNumber || '').trim().toLowerCase();
+      const sameInvoiceNumber = printedInvoiceNumber && existingInvoiceNumber && printedInvoiceNumber === existingInvoiceNumber;
+      const sameSupplierDateTotal = existingSupplierKey === supplierKey
+        && existingDate === invoiceDate
+        && Math.abs(existingTotal - reviewedTotal) <= 0.02;
+
+      return sameInvoiceNumber || sameSupplierDateTotal;
+    });
+  }, [invoiceDate, invoiceNumber, supplierName, totals.totalIncVAT, workspace.invoices]);
   const ingredientRows = useMemo(() => createIngredientRows({
     lineItems,
     matches,
     newIngredientDrafts,
     supplierName,
-  }), [lineItems, matches, newIngredientDrafts, supplierName]);
+    menuItems: allMenuItems,
+  }), [allMenuItems, lineItems, matches, newIngredientDrafts, supplierName]);
   const recipeImpact = useMemo(() => calculateRecipeCostImpact({
     lineItems,
     menuItems: allMenuItems,
@@ -283,6 +352,8 @@ function InvoiceScanner({
     const end = historyEndDate ? new Date(historyEndDate) : null;
 
     return workspace.invoices.filter((invoice) => {
+      if (String(invoice.status || '').toLowerCase() === 'deleted') return false;
+
       const invoiceDateValue = new Date(invoice.invoiceDate || invoice.scannedAt || 0);
       const matchesSearch = !search || String(invoice.supplier || '').toLowerCase().includes(search);
 
@@ -324,6 +395,15 @@ function InvoiceScanner({
         && date.getFullYear() === now.getFullYear();
     }).length,
   }), [workspace.ingredients]);
+  const priceJumpCount = useMemo(() => (
+    lineItems.filter((lineItem) => {
+      const match = matches.get(lineItem.id);
+      const previousPrice = Number(match?.ingredient?.lastPriceExVAT || 0);
+      const nextPrice = Number(lineItem.unitPriceExVAT || lineItem.unitPrice || 0);
+
+      return match?.ingredient && previousPrice > 0 && ((nextPrice - previousPrice) / previousPrice) * 100 > 10;
+    }).length
+  ), [lineItems, matches]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -432,13 +512,26 @@ function InvoiceScanner({
 
   const removeLineItem = (lineId) => {
     setLineItems((currentItems) => currentItems.filter((item) => item.id !== lineId));
+    setManualIngredientLinks((currentLinks) => {
+      const nextLinks = { ...currentLinks };
+      delete nextLinks[lineId];
+      return nextLinks;
+    });
+    setNewIngredientDrafts((currentDrafts) => {
+      const nextDrafts = { ...currentDrafts };
+      delete nextDrafts[lineId];
+      return nextDrafts;
+    });
     setConfirmedInvoice(null);
     setStockUpdates([]);
   };
 
   const clearParsedLines = () => {
     setLineItems([]);
+    setExtractedTotals(null);
+    setManualIngredientLinks({});
     setNewDrawerLineId('');
+    setNewIngredientDrafts({});
     setConfirmedInvoice(null);
     setStockUpdates([]);
     setMessage('Invoice lines cleared. Add the lines again when ready.');
@@ -552,12 +645,17 @@ function InvoiceScanner({
         setSupplierName(invoice.supplierName);
       }
 
+      if (invoice.invoiceNumber) {
+        setInvoiceNumber(invoice.invoiceNumber);
+      }
+
       if (/^\d{4}-\d{2}-\d{2}$/.test(invoice.invoiceDate || '')) {
         setInvoiceDate(invoice.invoiceDate);
       }
 
       setVatMode(nextVatMode);
       setVatRate(nextVatRate);
+      setExtractedTotals(invoice.totals || null);
       setLineItems((currentItems) => [...currentItems, ...scannedLines]);
       setConfirmedInvoice(null);
       setStockUpdates([]);
@@ -565,6 +663,8 @@ function InvoiceScanner({
         fileName: scanFile.name,
         lineCount: scannedLines.length,
         supplierName: invoice.supplierName || '',
+        invoiceNumber: invoice.invoiceNumber || '',
+        totals: invoice.totals || null,
         model: body.model || 'Gemini',
       });
       setMessage(`Gemini added ${scannedLines.length} invoice line${scannedLines.length === 1 ? '' : 's'} for review.`);
@@ -652,6 +752,47 @@ function InvoiceScanner({
     }
   };
 
+  const handleDeleteInvoice = async (invoice) => {
+    if (!canManageInvoices) {
+      setMessage('Only an owner, manager, chef, or barista can delete invoices.');
+      return;
+    }
+
+    if (!firebaseReady) {
+      setMessage('Firebase is not configured, so invoices cannot be deleted yet.');
+      return;
+    }
+
+    if (!invoice?.id) {
+      setMessage('This invoice is missing an ID and cannot be deleted.');
+      return;
+    }
+
+    const label = invoice.invoiceNumber
+      ? `${invoice.supplier || 'Unknown supplier'} invoice #${invoice.invoiceNumber}`
+      : `${invoice.supplier || 'Unknown supplier'} invoice from ${invoice.invoiceDate || 'unknown date'}`;
+
+    if (!window.confirm(`Delete ${label}? This will soft-delete the invoice and remove its price history from ingredient costs.`)) {
+      return;
+    }
+
+    try {
+      setDeletingInvoiceId(invoice.id);
+      const result = await softDeleteInvoice(invoice.id, { deletedBy: 'WasteShift user' });
+
+      await refreshWorkspace();
+      setConfirmedInvoice((currentInvoice) => (
+        currentInvoice?.invoiceId === invoice.id ? null : currentInvoice
+      ));
+      setStockUpdates([]);
+      setMessage(`Invoice deleted. Removed ${result.removedHistoryCount || 0} price histor${result.removedHistoryCount === 1 ? 'y entry' : 'y entries'} and refreshed ${result.affectedIngredientCount || 0} ingredient${result.affectedIngredientCount === 1 ? '' : 's'}.`);
+    } catch (error) {
+      setMessage(error?.message || 'Could not delete this invoice.');
+    } finally {
+      setDeletingInvoiceId('');
+    }
+  };
+
   const handleVatRateSave = async () => {
     try {
       await saveInvoiceSettings({ vatRate });
@@ -681,6 +822,11 @@ function InvoiceScanner({
       return;
     }
 
+    if (duplicateInvoices.length > 0 && !window.confirm(`Possible duplicate invoice found (${duplicateInvoices.length}). Save this invoice anyway?`)) {
+      setMessage('Invoice save cancelled so you can review the possible duplicate first.');
+      return;
+    }
+
     const invoiceId = `invoice_${Date.now()}`;
     const manualSourceText = lineItems
       .map((item) => `${item.itemName} | ${item.quantity} ${item.unit} | ${formatMoney(item.unitPrice)} | ${formatMoney(item.lineTotal)}`)
@@ -689,14 +835,21 @@ function InvoiceScanner({
     try {
       const result = await saveConfirmedInvoice({
         invoiceId,
+        invoiceNumber,
         supplierName,
         invoiceDate,
         lineItems,
         ingredientRows,
         totals,
+        extractedTotals,
         vatRate,
         vatMode,
-        rawText: manualSourceText,
+        rawText: [
+          `Supplier: ${supplierName || 'Unknown supplier'}`,
+          `Invoice number: ${invoiceNumber || invoiceId}`,
+          `Invoice date: ${invoiceDate}`,
+          manualSourceText,
+        ].join('\n'),
       });
 
       if (!result?.ok) {
@@ -705,6 +858,7 @@ function InvoiceScanner({
 
       setConfirmedInvoice({
         invoiceId: result.invoiceId,
+        invoiceNumber,
         lineItems,
         ingredientRows,
       });
@@ -754,6 +908,10 @@ function InvoiceScanner({
 
     const change = ((nextPrice - previousPrice) / previousPrice) * 100;
 
+    if (change > 10) {
+      return <span className="badge is-red">Review +{formatPercent(change)}</span>;
+    }
+
     if (change > 0.5) {
       return <span className="badge is-red">Up {formatPercent(change)}</span>;
     }
@@ -798,6 +956,10 @@ function InvoiceScanner({
         </div>
       )}
 
+      <datalist id="invoice-unit-options">
+        {UNIT_OPTIONS.map((unit) => <option key={unit} value={unit} />)}
+      </datalist>
+
       {activeView === 'entry' && (
         <>
           <div className="invoice-entry-grid">
@@ -828,9 +990,22 @@ function InvoiceScanner({
 
                 <div className="field-grid">
                   <div className="field">
+                    <label htmlFor="invoice-number">Invoice number</label>
+                    <input
+                      id="invoice-number"
+                      value={invoiceNumber}
+                      onChange={(event) => setInvoiceNumber(event.target.value)}
+                      className="input"
+                      placeholder="From supplier invoice"
+                    />
+                  </div>
+                  <div className="field">
                     <label htmlFor="invoice-date">Invoice date</label>
                     <input id="invoice-date" type="date" value={invoiceDate} onChange={(event) => setInvoiceDate(event.target.value)} className="input" />
                   </div>
+                </div>
+
+                <div className="field-grid">
                   <div className="field">
                     <label htmlFor="invoice-vat-rate">VAT rate</label>
                     <input
@@ -889,6 +1064,18 @@ function InvoiceScanner({
                     <span className="metric-label">Total incl VAT</span>
                   </div>
                 </div>
+
+                {hasExtractedTotals && (
+                  <div className="notice-panel notice-panel--info">
+                    <div>
+                      <h3 className="breakdown-title">Gemini extracted totals</h3>
+                      <p className="small-text" style={{ margin: 0 }}>
+                        Ex {formatMoney(extractedTotals.totalExVAT)} | VAT {formatMoney(extractedTotals.totalVAT)} | Incl {formatMoney(extractedTotals.totalIncVAT)}
+                      </p>
+                    </div>
+                    <span className="badge">Compare before confirm</span>
+                  </div>
+                )}
               </div>
             </section>
 
@@ -938,6 +1125,8 @@ function InvoiceScanner({
                     <div className="invoice-scan-status">
                       <span className="badge is-green">{scanSummary.lineCount} lines</span>
                       {scanSummary.supplierName && <span className="badge">{scanSummary.supplierName}</span>}
+                      {scanSummary.invoiceNumber && <span className="badge">#{scanSummary.invoiceNumber}</span>}
+                      {scanSummary.totals?.totalIncVAT > 0 && <span className="badge">{formatMoney(scanSummary.totals.totalIncVAT)} incl</span>}
                       <span className="small-text">{scanSummary.model}</span>
                     </div>
                   )}
@@ -966,13 +1155,13 @@ function InvoiceScanner({
                   </label>
                   <label className="field">
                     <span className="field-label">Unit</span>
-                    <select
+                    <input
                       value={manualLineDraft.unit}
                       onChange={(event) => setManualLineDraft((draft) => ({ ...draft, unit: event.target.value }))}
-                      className="select"
-                    >
-                      {UNIT_OPTIONS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
-                    </select>
+                      className="input"
+                      list="invoice-unit-options"
+                      placeholder="kg, 5L, case of 12"
+                    />
                   </label>
                   <label className="field">
                     <span className="field-label">Unit price</span>
@@ -1014,6 +1203,18 @@ function InvoiceScanner({
 
           {message && <div className="inline-message" role="status">{message}</div>}
 
+          {duplicateInvoices.length > 0 && (
+            <div className="notice-panel notice-panel--warning">
+              <div>
+                <h3 className="breakdown-title">Possible duplicate invoice</h3>
+                <p className="small-text" style={{ margin: 0 }}>
+                  WasteShift found {duplicateInvoices.length} saved invoice{duplicateInvoices.length === 1 ? '' : 's'} with the same invoice number or matching supplier, date, and total.
+                </p>
+              </div>
+              <span className="badge is-yellow">Review before save</span>
+            </div>
+          )}
+
           <section className="panel">
             <div className="panel-body">
               <div className="section-header">
@@ -1025,6 +1226,7 @@ function InvoiceScanner({
                 <div className="manager-row">
                   <span className="badge is-green">{matchedCount} matched</span>
                   <span className={`badge${newLineItems.length > 0 ? ' is-yellow' : ''}`}>{newLineItems.length} new</span>
+                  {priceJumpCount > 0 && <span className="badge is-red">{priceJumpCount} price jump{priceJumpCount === 1 ? '' : 's'}</span>}
                   {lineItems.length > 0 && (
                     <button type="button" className="ghost-button compact-action" onClick={clearParsedLines}>
                       Clear lines
@@ -1067,9 +1269,13 @@ function InvoiceScanner({
                         </label>
                         <label className="invoice-field-control">
                           <span className="invoice-field-label">Unit</span>
-                          <select value={lineItem.unit} onChange={(event) => updateLineItem(lineItem.id, 'unit', event.target.value)} className="select">
-                            {UNIT_OPTIONS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
-                          </select>
+                          <input
+                            value={lineItem.unit}
+                            onChange={(event) => updateLineItem(lineItem.id, 'unit', event.target.value)}
+                            className="input"
+                            list="invoice-unit-options"
+                            placeholder="kg, 5L, case of 12"
+                          />
                         </label>
                         <label className="invoice-field-control">
                           <span className="invoice-field-label">Unit price</span>
@@ -1088,9 +1294,37 @@ function InvoiceScanner({
                         </div>
                         <div className="invoice-match-cell">
                           <span className="invoice-field-label">Status</span>
+                          <select
+                            value={manualIngredientLinks[lineItem.id] || 'auto'}
+                            onChange={(event) => {
+                              const nextValue = event.target.value;
+                              setManualIngredientLinks((currentLinks) => {
+                                const nextLinks = { ...currentLinks };
+
+                                if (nextValue === 'auto') {
+                                  delete nextLinks[lineItem.id];
+                                } else {
+                                  nextLinks[lineItem.id] = nextValue;
+                                }
+
+                                return nextLinks;
+                              });
+                              setConfirmedInvoice(null);
+                              setStockUpdates([]);
+                            }}
+                            className="select"
+                            aria-label={`Ingredient link for ${lineItem.itemName}`}
+                          >
+                            <option value="auto">Auto match</option>
+                            <option value="__new__">Create new ingredient</option>
+                            {workspace.ingredients.map((ingredient) => (
+                              <option key={ingredient.id} value={ingredient.id}>{ingredient.name}</option>
+                            ))}
+                          </select>
                           {match?.ingredient ? (
                             <>
                               <span className="badge is-green">{match.ingredient.name}</span>
+                              {match.source === 'manual' && <span className="badge is-blue">Manual link</span>}
                               {renderPriceBadge(lineItem)}
                               {sparklineData.length > 1 && (
                                 <div className="invoice-sparkline">
@@ -1317,11 +1551,25 @@ function InvoiceScanner({
                 <details key={invoice.id} className="invoice-history-row">
                   <summary>
                     <strong>{invoice.supplier || 'Unknown supplier'}</strong>
+                    <span>{invoice.invoiceNumber ? `#${invoice.invoiceNumber}` : 'No invoice no.'}</span>
                     <span>{invoice.invoiceDate || 'No date'}</span>
                     <span>{formatMoney(invoice.totalExVAT)} ex VAT</span>
                     <span className="badge">{invoice.status || 'confirmed'}</span>
                   </summary>
                   <div className="invoice-history-lines">
+                    <div className="stock-movement-row">
+                      <span className="small-text">
+                        {invoice.invoiceNumber ? `Invoice #${invoice.invoiceNumber}` : 'No invoice number'} | {invoice.lineItems?.length || 0} line{invoice.lineItems?.length === 1 ? '' : 's'}
+                      </span>
+                      <button
+                        type="button"
+                        className="ghost-button compact-action is-danger"
+                        onClick={() => handleDeleteInvoice(invoice)}
+                        disabled={!canManageInvoices || deletingInvoiceId === invoice.id}
+                      >
+                        {deletingInvoiceId === invoice.id ? 'Deleting...' : 'Delete invoice'}
+                      </button>
+                    </div>
                     {(Array.isArray(invoice.lineItems) ? invoice.lineItems : []).map((item) => (
                       <div key={item.id || item.itemName} className="stock-movement-row">
                         <strong>{item.itemName}</strong>
@@ -1363,9 +1611,14 @@ function InvoiceScanner({
               </div>
               <div className="field">
                 <label htmlFor="new-ingredient-unit">Unit</label>
-                <select id="new-ingredient-unit" className="select" value={activeNewDraft.unit} onChange={(event) => updateNewIngredientDraft(newDrawerLineId, { unit: event.target.value })}>
-                  {UNIT_OPTIONS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
-                </select>
+                <input
+                  id="new-ingredient-unit"
+                  className="input"
+                  value={activeNewDraft.unit}
+                  onChange={(event) => updateNewIngredientDraft(newDrawerLineId, { unit: event.target.value })}
+                  list="invoice-unit-options"
+                  placeholder="kg, 5L, case of 12"
+                />
               </div>
             </div>
 

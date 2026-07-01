@@ -32,6 +32,7 @@ const getFirestoreApi = async () => {
       getApps: firebaseApp.getApps,
       collection: firestore.collection,
       doc: firestore.doc,
+      getDoc: firestore.getDoc,
       getDocs: firestore.getDocs,
       getFirestore: firestore.getFirestore,
       serverTimestamp: firestore.serverTimestamp,
@@ -154,6 +155,32 @@ const sanitizeWasteComponent = (component, index) => {
   };
 };
 
+const stripLargeLocalFields = (entry) => {
+  const photoUrl = toSafeString(entry?.photoUrl);
+
+  if (!photoUrl.startsWith('data:image/')) {
+    return entry;
+  }
+
+  return {
+    ...entry,
+    photoUrl: '',
+    photoCapturedAt: '',
+    hasPhoto: true,
+  };
+};
+
+const createFirestoreAppDataPayload = (databaseData) => {
+  const data = databaseData && typeof databaseData === 'object' ? databaseData : {};
+
+  return removeUndefinedValues({
+    ...data,
+    wasteItems: Array.isArray(data.wasteItems)
+      ? data.wasteItems.map(stripLargeLocalFields)
+      : [],
+  });
+};
+
 const createFirestoreWasteEntryPayload = (entry) => {
   const createdAt = toSafeString(entry?.createdAt) || new Date().toISOString();
   const wastedComponents = (Array.isArray(entry?.wastedComponents) ? entry.wastedComponents : [])
@@ -217,6 +244,22 @@ const createFirestoreWasteEntryPayload = (entry) => {
   });
 };
 
+const normalizeFirestoreWasteEntry = (docSnapshot) => {
+  const data = docSnapshot.data();
+
+  return removeUndefinedValues({
+    ...data,
+    id: toSafeString(data?.localEntryId) || docSnapshot.id,
+    name: toSafeString(data?.name),
+    quantity: toSafeNumber(data?.quantity, 1),
+    cost: toSafeCurrency(data?.cost ?? data?.foodCostLost),
+    foodCostLost: toSafeCurrency(data?.foodCostLost ?? data?.cost),
+    photoUrl: '',
+    photoName: toSafeString(data?.photoName),
+    photoCapturedAt: toSafeString(data?.photoCapturedAt),
+  });
+};
+
 export const normalizeFirestoreMenuItem = (docSnapshot) => {
   const data = docSnapshot.data();
   const name = String(data?.name || '').trim();
@@ -255,6 +298,75 @@ export const loadFirestoreMenuItems = async () => {
   const { collection, getDocs } = await getFirestoreApi();
   const snapshot = await getDocs(collection(db, 'menuItems'));
   return snapshot.docs.map(normalizeFirestoreMenuItem).filter(Boolean);
+};
+
+export const loadFirestoreWasteEntries = async () => {
+  const db = await getFirestoreDb();
+
+  if (!db) {
+    return [];
+  }
+
+  await ensureFirebaseAuth();
+  const { collection, getDocs } = await getFirestoreApi();
+  const snapshot = await getDocs(collection(db, 'wasteEntries'));
+  return snapshot.docs
+    .map(normalizeFirestoreWasteEntry)
+    .filter((entry) => entry.name && entry.reason)
+    .sort((a, b) => new Date(a.createdAt || a.timestamp || 0).getTime() - new Date(b.createdAt || b.timestamp || 0).getTime());
+};
+
+export const loadFirestoreDatabaseSnapshot = async () => {
+  const db = await getFirestoreDb();
+
+  if (!db) {
+    return { ok: false, skipped: true };
+  }
+
+  await ensureFirebaseAuth();
+  const { doc, getDoc } = await getFirestoreApi();
+  const snapshot = await getDoc(doc(db, 'appData', 'main'));
+
+  if (!snapshot.exists()) {
+    return { ok: true, exists: false, data: null, updatedAt: '' };
+  }
+
+  const snapshotData = snapshot.data();
+
+  return {
+    ok: true,
+    exists: true,
+    data: snapshotData?.data || {},
+    updatedAt: toSafeString(snapshotData?.updatedAtClient || snapshotData?.exportedAt),
+  };
+};
+
+export const saveFirestoreDatabaseSnapshot = async (databaseData) => {
+  const db = await getFirestoreDb();
+
+  if (!db) {
+    return { ok: false, skipped: true };
+  }
+
+  const safeData = createFirestoreAppDataPayload(databaseData);
+  const exportedAt = new Date().toISOString();
+
+  await ensureFirebaseAuth();
+  const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
+  await setDoc(doc(db, 'appData', 'main'), {
+    data: safeData,
+    exportedAt,
+    updatedAtClient: exportedAt,
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+
+  await Promise.all((Array.isArray(databaseData?.wasteItems) ? databaseData.wasteItems : [])
+    .map((entry) => saveFirestoreWasteEntry(entry).catch((error) => {
+      console.warn('Could not sync waste entry while saving Firebase database snapshot.', error);
+      return null;
+    })));
+
+  return { ok: true, updatedAt: exportedAt };
 };
 
 export const saveFirestoreMenuItem = async ({ key, name, totalCost, menuPrice = null, components }) => {

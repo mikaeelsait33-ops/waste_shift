@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import {
   parseInvoiceText,
   parseMoney,
+  getBaseUnitInfo,
+  getLinkedMenuItemsForIngredient,
   roundMoney,
 } from '../src/utils/invoiceParsing.js';
 import {
@@ -18,6 +20,8 @@ const getOnlyItem = (text) => {
 
 assert.equal(parseMoney('R1 234,50'), 1234.5);
 assert.equal(parseMoney('ZAR 1,234.50'), 1234.5);
+assert.deepEqual(getBaseUnitInfo(1, '5L'), { quantity: 5000, unit: 'ml' });
+assert.deepEqual(getBaseUnitInfo(2, 'case of 12'), { quantity: 24, unit: 'each' });
 
 let item = getOnlyItem(`
 Cape Foods
@@ -149,5 +153,50 @@ assert.deepEqual(
   [geminiInvoice.items[0].itemName, geminiInvoice.items[0].quantity, geminiInvoice.items[0].unit, geminiInvoice.items[0].unitPrice, geminiInvoice.items[0].lineTotal],
   ['Tomatoes', 2.1, 'kg', 29.9, 62.79]
 );
+
+const invoiceWithGrandTotalOnly = normalizeGeminiInvoicePayload({
+  supplierName: 'Cape Foods',
+  invoiceNumber: 'INV-1007',
+  invoiceDate: '2026-07-01',
+  vatMode: 'inclusive',
+  totals: {
+    grandTotal: 115,
+  },
+  items: [
+    {
+      itemName: 'Olive Oil',
+      quantity: 1,
+      unit: 'L',
+      unitPrice: 115,
+      lineTotal: 115,
+    },
+  ],
+}, { fallbackVatRate: 0.15, fallbackVatMode: 'inclusive' });
+
+assert.equal(invoiceWithGrandTotalOnly.invoiceNumber, 'INV-1007');
+assert.equal(invoiceWithGrandTotalOnly.totals.totalExVAT, 100);
+assert.equal(invoiceWithGrandTotalOnly.totals.totalVAT, 15);
+assert.equal(invoiceWithGrandTotalOnly.totals.totalIncVAT, 115);
+
+const linkedMenuItems = getLinkedMenuItemsForIngredient('Tender Stem Broccoli', [
+  {
+    id: 'salmon_benedict',
+    name: 'Salmon Benedict',
+    recipe: [
+      { ingredientName: 'Salmon', quantity: 1, unit: 'each' },
+      { ingredientName: 'Tenderstem Broccoli', quantity: 80, unit: 'g' },
+    ],
+  },
+  {
+    id: 'flat_white',
+    name: 'Flat White',
+    recipe: [
+      { ingredientName: 'Milk', quantity: 180, unit: 'ml' },
+    ],
+  },
+]);
+
+assert.equal(linkedMenuItems.length, 1);
+assert.equal(linkedMenuItems[0].menuItem.id, 'salmon_benedict');
 
 console.log('invoice parsing tests passed');

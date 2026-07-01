@@ -27,6 +27,15 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /appData/{snapshotId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && snapshotId == "main"
+        && request.resource.data.data is map
+        && request.resource.data.exportedAt is string;
+      allow delete: if false;
+    }
+
     match /ingredients/{ingredientId} {
       allow read: if signedIn();
       allow create, update: if signedIn()
@@ -45,6 +54,18 @@ service cloud.firestore {
           && request.resource.data.invoiceId is string;
         allow delete: if signedIn();
       }
+    }
+
+    match /priceHistory/{historyId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && request.resource.data.ingredientId is string
+        && request.resource.data.supplierId is string
+        && request.resource.data.date is string
+        && request.resource.data.priceExVAT is number
+        && request.resource.data.priceIncVAT is number
+        && request.resource.data.invoiceId is string;
+      allow delete: if signedIn();
     }
 
     match /stockLevels/{stockId} {

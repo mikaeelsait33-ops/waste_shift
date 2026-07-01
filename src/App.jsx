@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import Navbar from './components/Navbar';
 import Dashboard from './components/Dashboard';
 import WasteForm from './components/WasteForm';
@@ -37,7 +37,10 @@ import {
 import {
   firestoreIsConfigured,
   getFirestoreRuntimeInfo,
+  loadFirestoreDatabaseSnapshot,
   loadFirestoreMenuItems,
+  loadFirestoreWasteEntries,
+  saveFirestoreDatabaseSnapshot,
   saveFirestoreMenuItem,
   saveFirestoreWasteEntry,
 } from './services/firestoreMenuItems';
@@ -586,7 +589,7 @@ function App() {
   const [serverSync, setServerSync] = useState({
     status: FIRESTORE_CONFIGURED ? 'ready' : 'checking',
     message: FIRESTORE_CONFIGURED
-      ? 'Vercel is hosting the app. Firebase is handling live records; Vercel backup is manual.'
+      ? 'Firebase is the primary database. Local browser storage is only a fallback.'
       : 'Checking for Vercel backup database...',
     lastSavedAt: '',
   });
@@ -934,6 +937,11 @@ function App() {
     inventoryMovements,
     auditLog,
   }), [wasteItems, budget, recipes, staffList, customStaffList, customMenuItems, portionProfiles, itemPriceCatalog, storeRoomItems, storeRoomMovements, settings, authSettings, activeStaffId, inventoryMovements, auditLog]);
+  const latestDatabaseDataRef = useRef(null);
+
+  useEffect(() => {
+    latestDatabaseDataRef.current = buildDatabaseData();
+  }, [buildDatabaseData]);
 
   const applyDatabaseData = useCallback((databaseData) => {
     setWasteItems(Array.isArray(databaseData.wasteItems) ? databaseData.wasteItems : []);
@@ -972,11 +980,34 @@ function App() {
       ...prev,
       status: 'saving',
       message: FIRESTORE_CONFIGURED
-        ? 'Saving full database backup to Vercel...'
+        ? 'Saving database to Firebase...'
         : mode === 'manual' ? 'Saving database to server...' : 'Auto-saving database to server...',
     }));
 
     try {
+      if (FIRESTORE_CONFIGURED) {
+        const payload = await saveFirestoreDatabaseSnapshot(buildDatabaseData());
+
+        if (payload?.skipped) {
+          throw new Error('Firebase is not configured for this build.');
+        }
+
+        setServerSyncEnabled(true);
+        setServerSync({
+          status: 'synced',
+          message: 'Firebase database synced.',
+          lastSavedAt: payload.updatedAt || new Date().toISOString(),
+        });
+        setFirebaseSync(prev => ({
+          ...prev,
+          status: 'synced',
+          message: 'Firebase is the primary database and is up to date.',
+          lastSavedAt: payload.updatedAt || new Date().toISOString(),
+        }));
+
+        return true;
+      }
+
       const response = await fetch(SERVER_DATABASE_ENDPOINT, {
         method: 'POST',
         headers: getSyncHeaders({ 'content-type': 'application/json' }),
@@ -994,9 +1025,7 @@ function App() {
 
       setServerSync({
         status: 'synced',
-        message: FIRESTORE_CONFIGURED
-          ? 'Vercel backup saved. Firebase remains the live data source.'
-          : 'Server database synced.',
+        message: 'Server database synced.',
         lastSavedAt: payload.updatedAt || new Date().toISOString(),
       });
 
@@ -1004,7 +1033,7 @@ function App() {
     } catch (error) {
       setServerSync({
         status: 'error',
-        message: `${error?.message || (FIRESTORE_CONFIGURED ? 'Vercel backup failed.' : 'Server save failed.')} Local browser copy is still saved.`,
+        message: `${error?.message || (FIRESTORE_CONFIGURED ? 'Firebase save failed.' : 'Server save failed.')} Local browser copy is still saved.`,
         lastSavedAt: '',
       });
 
@@ -1155,14 +1184,87 @@ function App() {
 
     const loadServerDatabase = async () => {
       if (FIRESTORE_CONFIGURED) {
-        setServerSyncEnabled(false);
-        setServerLoadComplete(true);
         setServerSync(prev => ({
           ...prev,
-          status: 'ready',
-          message: 'Vercel is hosting the app. Firebase is handling live records; Vercel backup is manual.',
+          status: 'checking',
+          message: 'Loading primary database from Firebase...',
         }));
-        return;
+
+        try {
+          const [firebaseSnapshot, firebaseWasteItems] = await Promise.all([
+            loadFirestoreDatabaseSnapshot(),
+            loadFirestoreWasteEntries(),
+          ]);
+
+          if (isCancelled) {
+            return;
+          }
+
+          const snapshotData = firebaseSnapshot?.data || {};
+          const hasSnapshot = Boolean(firebaseSnapshot?.exists);
+          const hasWasteEntries = firebaseWasteItems.length > 0;
+          const localFallbackData = latestDatabaseDataRef.current || {};
+          const firebaseDatabaseData = {
+            ...localFallbackData,
+            ...snapshotData,
+            wasteItems: hasWasteEntries
+              ? firebaseWasteItems
+              : Array.isArray(snapshotData.wasteItems)
+                ? snapshotData.wasteItems
+                : localFallbackData.wasteItems,
+          };
+
+          setServerSyncEnabled(true);
+          setServerLoadComplete(true);
+
+          if (hasSnapshot || hasWasteEntries) {
+            applyDatabaseData(firebaseDatabaseData);
+            setServerSync({
+              status: 'synced',
+              message: `Loaded primary database from Firebase${hasWasteEntries ? ` with ${firebaseWasteItems.length} waste entr${firebaseWasteItems.length === 1 ? 'y' : 'ies'}` : ''}.`,
+              lastSavedAt: firebaseSnapshot?.updatedAt || '',
+            });
+            setFirebaseSync(prev => ({
+              ...prev,
+              status: 'ready',
+              message: 'Firebase is connected and serving the app database.',
+              lastSavedAt: firebaseSnapshot?.updatedAt || new Date().toISOString(),
+            }));
+            return;
+          }
+
+          setServerSync({
+            status: 'ready',
+            message: 'Firebase database is ready. No shared app data has been saved yet.',
+            lastSavedAt: '',
+          });
+          setFirebaseSync(prev => ({
+            ...prev,
+            status: 'ready',
+            message: 'Firebase is connected. Current local data will sync to Firebase on the next save.',
+            lastSavedAt: '',
+          }));
+          return;
+        } catch (error) {
+          if (isCancelled) {
+            return;
+          }
+
+          console.warn('Firebase primary database unavailable. Using local fallback.', error);
+          setServerSyncEnabled(false);
+          setServerLoadComplete(false);
+          setServerSync({
+            status: 'error',
+            message: `${error?.message || 'Firebase database is unavailable.'} Local browser data is still available.`,
+            lastSavedAt: '',
+          });
+          setFirebaseSync(prev => ({
+            ...prev,
+            status: 'error',
+            message: `${error?.message || 'Firebase database is unavailable.'} Local browser data is still available.`,
+          }));
+          return;
+        }
       }
 
       try {

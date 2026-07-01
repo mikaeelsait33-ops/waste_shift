@@ -255,7 +255,7 @@ function DataManager({
           <div>
             <p className="eyebrow">Database</p>
             <h2 className="title">Data Health</h2>
-            <p className="subtitle">Vercel hosts the app, Firebase stores live records, and this browser keeps a local fallback.</p>
+            <p className="subtitle">Vercel hosts the app, Firebase is the primary database, and this browser keeps a local fallback.</p>
           </div>
         </div>
 
@@ -291,9 +291,9 @@ function DataManager({
 
         <div className={`notice-panel${serverNoticeClass}`}>
           <div>
-            <h3 className="breakdown-title">Vercel backup</h3>
+            <h3 className="breakdown-title">Primary database sync</h3>
             <p className="small-text" style={{ margin: 0 }}>
-              {serverSync?.message || 'Vercel backup status has not started.'}
+              {serverSync?.message || 'Database sync status has not started.'}
             </p>
           </div>
           <div className="manager-row">
@@ -308,15 +308,15 @@ function DataManager({
               className="ghost-button is-warning"
               disabled={serverSync?.status === 'saving' || !canManageServerSync}
             >
-              {serverSync?.status === 'saving' ? 'Saving...' : canManageServerSync ? 'Save backup' : 'Owner only'}
+              {serverSync?.status === 'saving' ? 'Saving...' : canManageServerSync ? 'Save database' : 'Owner only'}
             </button>
           </div>
         </div>
 
         <div className="database-card">
-          <h3 className="breakdown-title">Vercel backup access key</h3>
+          <h3 className="breakdown-title">Vercel fallback access key</h3>
           <p className="small-text">
-            If `WASTESHIFT_SYNC_SECRET` is set in Vercel, this device must send the matching key before it can save or load backups.
+            If Firebase is unavailable and `WASTESHIFT_SYNC_SECRET` is set in Vercel, this device must send the matching key before it can save or load fallback backups.
           </p>
           <div className="field-grid">
             <input

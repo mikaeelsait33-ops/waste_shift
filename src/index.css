@@ -709,6 +709,20 @@ button:disabled {
   font-size: 0.78rem;
 }
 
+.ghost-button.is-danger,
+.compact-action.is-danger {
+  color: #ffb4b4;
+  border-color: rgba(255, 69, 58, 0.42);
+  background: rgba(255, 69, 58, 0.09);
+}
+
+.ghost-button.is-danger:hover,
+.compact-action.is-danger:hover {
+  color: #fff;
+  border-color: rgba(255, 69, 58, 0.7);
+  background: rgba(255, 69, 58, 0.2);
+}
+
 .database-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));

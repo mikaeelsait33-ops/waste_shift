@@ -138,9 +138,89 @@ const firstPositiveNumber = (...values) => {
   return 0;
 };
 
+const firstFiniteNumber = (...values) => {
+  for (const value of values) {
+    const number = Number(value);
+
+    if (Number.isFinite(number)) {
+      return number;
+    }
+  }
+
+  return 0;
+};
+
 const roundMoney = (value) => {
   const number = Number(value);
   return Number.isFinite(number) ? Math.round(number * 100) / 100 : 0;
+};
+
+const normalizeTotals = ({ totals, vatRate }) => {
+  const totalExVAT = roundMoney(firstFiniteNumber(
+    totals?.totalExVAT,
+    totals?.subtotal,
+    totals?.subTotal,
+    totals?.exclusiveTotal,
+    totals?.totalExclusive
+  ));
+  const totalVAT = roundMoney(firstFiniteNumber(
+    totals?.totalVAT,
+    totals?.vat,
+    totals?.vatAmount,
+    totals?.tax,
+    totals?.taxAmount
+  ));
+  const totalIncVAT = roundMoney(firstFiniteNumber(
+    totals?.totalIncVAT,
+    totals?.grandTotal,
+    totals?.total,
+    totals?.invoiceTotal,
+    totals?.inclusiveTotal,
+    totals?.totalInclusive
+  ));
+  const safeVatRate = normalizeVatRate(vatRate);
+
+  if (totalExVAT > 0 && totalVAT > 0 && totalIncVAT <= 0) {
+    return {
+      totalExVAT,
+      totalVAT,
+      totalIncVAT: roundMoney(totalExVAT + totalVAT),
+    };
+  }
+
+  if (totalIncVAT > 0 && totalVAT > 0 && totalExVAT <= 0) {
+    return {
+      totalExVAT: roundMoney(totalIncVAT - totalVAT),
+      totalVAT,
+      totalIncVAT,
+    };
+  }
+
+  if (totalIncVAT > 0 && totalVAT <= 0 && totalExVAT <= 0 && safeVatRate > 0) {
+    const calculatedExVAT = roundMoney(totalIncVAT / (1 + safeVatRate));
+
+    return {
+      totalExVAT: calculatedExVAT,
+      totalVAT: roundMoney(totalIncVAT - calculatedExVAT),
+      totalIncVAT,
+    };
+  }
+
+  if (totalExVAT > 0 && totalVAT <= 0 && totalIncVAT <= 0 && safeVatRate > 0) {
+    const calculatedVAT = roundMoney(totalExVAT * safeVatRate);
+
+    return {
+      totalExVAT,
+      totalVAT: calculatedVAT,
+      totalIncVAT: roundMoney(totalExVAT + calculatedVAT),
+    };
+  }
+
+  return {
+    totalExVAT,
+    totalVAT,
+    totalIncVAT,
+  };
 };
 
 const normalizeVatMode = (value, fallback = 'inclusive') => (
@@ -239,6 +319,7 @@ export const normalizeGeminiInvoicePayload = (payload, options = {}) => {
   const items = (Array.isArray(payload?.items) ? payload.items : [])
     .map((item, index) => normalizeLineItem(item, index))
     .filter(Boolean);
+  const normalizedTotals = normalizeTotals({ totals: payload?.totals || payload, vatRate });
 
   return {
     supplierName: String(payload?.supplierName || '').trim(),
@@ -247,11 +328,7 @@ export const normalizeGeminiInvoicePayload = (payload, options = {}) => {
     vatMode,
     vatRate,
     notes: String(payload?.notes || '').trim(),
-    totals: {
-      totalExVAT: roundMoney(payload?.totals?.totalExVAT),
-      totalVAT: roundMoney(payload?.totals?.totalVAT),
-      totalIncVAT: roundMoney(payload?.totals?.totalIncVAT),
-    },
+    totals: normalizedTotals,
     items,
   };
 };
@@ -266,7 +343,10 @@ Important for South African invoices:
 - Columns may include Description, Quantity, Excl Price, Disc %, VAT %, Exclusive Total, Inclusive Total.
 - If a VAT % column is 0.00% for the product rows, return vatRate as 0.
 - If VAT is not clear, use vatRate ${fallbackVatRate} and vatMode ${fallbackVatMode}.
+- Extract invoiceNumber exactly as printed when visible.
 - Return invoiceDate as YYYY-MM-DD when possible.
+- In totals, return totalExVAT as subtotal before VAT, totalVAT as VAT/tax, and totalIncVAT as grand total.
+- If VAT is not itemized but the grand total is visible, calculate VAT from the grand total using South African VAT at ${fallbackVatRate}.
 - itemName should be the readable food/product name without supplier item codes.
 - quantity must be the invoice quantity.
 - unit should be one short unit such as kg, g, L, ml, each, case, doz, pkt, bag, box, bottle, tray, tin, punnet, bunch, head, or pillow.

@@ -81,11 +81,13 @@ export const roundMoney = (value) => {
 
 export const normalizeInvoiceUnit = (unit) => {
   const value = String(unit || '').trim().toLowerCase();
+  const compactPack = value.match(/^(\d+(?:[.,]\d+)?)\s*x?\s*(kg|kgs|kilogram|kilograms|g|gram|grams|l|lt|ltr|liter|litre|liters|litres|ml)$/i);
 
   if (['kg', 'kgs', 'kilogram', 'kilograms'].includes(value)) return 'kg';
   if (['g', 'gram', 'grams'].includes(value)) return 'g';
   if (['l', 'lt', 'ltr', 'liter', 'litre', 'liters', 'litres'].includes(value)) return 'L';
   if (value === 'ml') return 'ml';
+  if (compactPack) return `${Number(compactPack[1])}${normalizeInvoiceUnit(compactPack[2])}`;
   if (['ea', 'each', 'unit', 'units'].includes(value)) return 'each';
   if (['case', 'cases'].includes(value)) return 'case';
   if (['doz', 'dozen'].includes(value)) return 'doz';
@@ -106,6 +108,24 @@ export const normalizeInvoiceUnit = (unit) => {
 export const getBaseUnitInfo = (quantity, unit) => {
   const numericQuantity = Number(quantity);
   const safeQuantity = Number.isFinite(numericQuantity) && numericQuantity > 0 ? numericQuantity : 1;
+  const rawUnit = String(unit || '').trim().toLowerCase();
+  const sizedUnit = rawUnit.match(/^(\d+(?:[.,]\d+)?)\s*x?\s*(kg|kgs|kilogram|kilograms|g|gram|grams|l|lt|ltr|liter|litre|liters|litres|ml)$/i);
+  const caseOfUnits = rawUnit.match(/^(?:case|box|pack|pkt)\s*(?:of)?\s*(\d+(?:[.,]\d+)?)$/i);
+
+  if (sizedUnit) {
+    const packSize = Number(String(sizedUnit[1]).replace(',', '.')) || 1;
+    const packUnit = normalizeInvoiceUnit(sizedUnit[2]);
+
+    if (packUnit === 'kg') return { quantity: safeQuantity * packSize * 1000, unit: 'g' };
+    if (packUnit === 'g') return { quantity: safeQuantity * packSize, unit: 'g' };
+    if (packUnit === 'L') return { quantity: safeQuantity * packSize * 1000, unit: 'ml' };
+    if (packUnit === 'ml') return { quantity: safeQuantity * packSize, unit: 'ml' };
+  }
+
+  if (caseOfUnits) {
+    return { quantity: safeQuantity * (Number(String(caseOfUnits[1]).replace(',', '.')) || 1), unit: 'each' };
+  }
+
   const normalizedUnit = normalizeInvoiceUnit(unit);
 
   if (normalizedUnit === 'kg') return { quantity: safeQuantity * 1000, unit: 'g' };
@@ -607,9 +627,39 @@ export const summarizeInvoiceItems = (items) => (
   }), { totalExVAT: 0, totalVAT: 0, totalIncVAT: 0 })
 );
 
+const getSharedTokenCount = (sourceTokens, targetTokens) => (
+  sourceTokens.filter((sourceToken) => (
+    targetTokens.some((targetToken) => (
+      sourceToken === targetToken
+      || (sourceToken.length > 3 && targetToken.includes(sourceToken))
+      || (targetToken.length > 3 && sourceToken.includes(targetToken))
+    ))
+  )).length
+);
+
+const calculateNameMatchScore = (sourceName, targetName) => {
+  const source = normalizeInvoiceName(sourceName);
+  const target = normalizeInvoiceName(targetName);
+  const sourceTokens = source.split(' ').filter(Boolean);
+  const targetTokens = target.split(' ').filter(Boolean);
+
+  if (!source || !target) {
+    return 0;
+  }
+
+  if (source === target) {
+    return 1;
+  }
+
+  if (source.includes(target) || target.includes(source)) {
+    return 0.86;
+  }
+
+  return getSharedTokenCount(sourceTokens, targetTokens) / Math.max(sourceTokens.length || 1, targetTokens.length || 1);
+};
+
 export const getIngredientMatch = (itemName, ingredients) => {
   const source = normalizeInvoiceName(itemName);
-  const sourceTokens = source.split(' ').filter(Boolean);
 
   if (!source) {
     return { ingredient: null, score: 0 };
@@ -617,14 +667,7 @@ export const getIngredientMatch = (itemName, ingredients) => {
 
   const ranked = (Array.isArray(ingredients) ? ingredients : [])
     .map((ingredient) => {
-      const target = normalizeInvoiceName(ingredient?.name || ingredient?.ingredientName);
-      const targetTokens = target.split(' ').filter(Boolean);
-      const shared = sourceTokens.filter((token) => targetTokens.includes(token));
-      const score = source === target
-        ? 1
-        : source.includes(target) || target.includes(source)
-          ? 0.86
-          : shared.length / Math.max(sourceTokens.length || 1, targetTokens.length || 1);
+      const score = calculateNameMatchScore(itemName, ingredient?.name || ingredient?.ingredientName);
 
       return { ingredient, score };
     })
@@ -632,6 +675,8 @@ export const getIngredientMatch = (itemName, ingredients) => {
 
   return ranked[0]?.score >= 0.42 ? ranked[0] : { ingredient: null, score: ranked[0]?.score || 0 };
 };
+
+export const getNameMatchScore = (sourceName, targetName) => calculateNameMatchScore(sourceName, targetName);
 
 const getRecipeIngredientName = (ingredient) => (
   ingredient?.ingredientName || ingredient?.name || ingredient?.componentName || ''
@@ -655,6 +700,23 @@ export const getMenuRecipeRows = (menuItem) => {
     }))
     .filter((ingredient) => ingredient.ingredientName);
 };
+
+export const getLinkedMenuItemsForIngredient = (ingredientName, menuItems, minimumScore = 0.42) => (
+  (Array.isArray(menuItems) ? menuItems : [])
+    .map((menuItem) => {
+      const recipeRows = getMenuRecipeRows(menuItem);
+      const bestScore = recipeRows.reduce((score, recipeRow) => (
+        Math.max(score, getNameMatchScore(ingredientName, recipeRow.ingredientName))
+      ), getNameMatchScore(ingredientName, menuItem?.name));
+
+      return {
+        menuItem,
+        score: bestScore,
+      };
+    })
+    .filter((match) => match.score >= minimumScore)
+    .sort((a, b) => b.score - a.score)
+);
 
 export const calculateRecipeCostImpact = ({ lineItems, menuItems, ingredients }) => {
   const matchedItems = (Array.isArray(lineItems) ? lineItems : [])
