@@ -1553,9 +1553,10 @@ function App() {
 
   const handleLogin = useCallback(async ({ mode, name, staffSection, pin }) => {
     const trimmedName = String(name || '').trim();
+    let authenticatedStaffMember = null;
 
     if (!trimmedName) {
-      return { ok: false, message: mode === 'management' ? 'Enter your management name.' : 'Enter your staff name.' };
+      return { ok: false, message: mode === 'management' ? 'Enter your management name.' : 'Choose your staff profile.' };
     }
 
     if (mode === 'staff') {
@@ -1563,31 +1564,16 @@ function App() {
       const existingMember = staffList.find((member) => member.id === accountId);
       const existingStaffCode = sanitizePinRecord(existingMember?.staffCode);
 
+      if (!existingMember) {
+        return { ok: false, message: 'Ask a manager to add you in Settings > Staff before logging in.' };
+      }
+
       if (!existingStaffCode) {
-        const generatedStaffCode = createRandomPin(6);
-        const staffCodeRecord = await createPinRecord(generatedStaffCode);
-        const staffMember = upsertLoginAccount({
-          mode,
-          name: trimmedName,
-          staffSection,
-          staffCode: staffCodeRecord,
-        });
+        return { ok: false, message: 'This staff member does not have a code yet. Ask a manager to reset or issue one.' };
+      }
 
-        setAuditLog(prevLog => [
-          createAuditLogEntry({
-            action: 'Staff code generated',
-            user: staffMember.name,
-            relatedItem: 'Staff login',
-            afterValue: { staffId: staffMember.id },
-          }),
-          ...prevLog,
-        ].slice(0, 500));
-
-        return {
-          ok: false,
-          generatedStaffCode,
-          message: `Staff account created. Your personal code is ${generatedStaffCode}. Write it down, then enter it to start logging.`,
-        };
+      if (!String(pin || '').trim()) {
+        return { ok: false, message: 'Enter your personal staff code.' };
       }
 
       const staffCodeMatches = await verifyPin(pin, existingStaffCode);
@@ -1595,6 +1581,8 @@ function App() {
       if (!staffCodeMatches) {
         return { ok: false, message: 'Incorrect staff code.' };
       }
+
+      authenticatedStaffMember = existingMember;
     } else {
       const pinMatches = await verifyPin(pin, authSettings.managementPin);
 
@@ -1603,7 +1591,7 @@ function App() {
       }
     }
 
-    const staffMember = upsertLoginAccount({
+    const staffMember = authenticatedStaffMember || upsertLoginAccount({
       mode,
       name: trimmedName,
       staffSection,
@@ -1652,22 +1640,26 @@ function App() {
     }
   }, [authSession]);
 
-  const handleAddStaff = (newStaffMember) => {
+  const handleAddStaff = async (newStaffMember) => {
     const permission = requirePermission(accessProfile, 'canManageStaff', 'manage staff');
     if (!permission.ok) {
       alert(permission.message);
-      return;
+      return { ok: false, message: permission.message };
     }
 
+    const generatedStaffCode = createRandomPin(6);
+    const staffCodeRecord = await createPinRecord(generatedStaffCode);
+    const nextStaffMember = {
+      ...newStaffMember,
+      id: createStaffMemberId(newStaffMember.name),
+      staffSection: inferStaffSection(newStaffMember.staffSection || newStaffMember.role),
+      staffCode: staffCodeRecord,
+      removed: false,
+      removedAt: '',
+      isCsvSeed: false,
+    };
+
     setCustomStaffList(prev => {
-      const nextStaffMember = {
-        ...newStaffMember,
-        id: createStaffMemberId(newStaffMember.name),
-        staffSection: inferStaffSection(newStaffMember.staffSection || newStaffMember.role),
-        removed: false,
-        removedAt: '',
-        isCsvSeed: false,
-      };
       const existingIndex = prev.findIndex((member) => member.id === nextStaffMember.id);
 
       if (existingIndex === -1) {
@@ -1678,6 +1670,27 @@ function App() {
         index === existingIndex ? nextStaffMember : member
       ));
     });
+
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: 'Staff added',
+        user: activeStaffMember?.name || 'System',
+        relatedItem: nextStaffMember.name,
+        afterValue: {
+          staffId: nextStaffMember.id,
+          role: nextStaffMember.role,
+          staffCodeGenerated: true,
+        },
+      }),
+      ...prevLog,
+    ].slice(0, 500));
+
+    return {
+      ok: true,
+      staffName: nextStaffMember.name,
+      generatedStaffCode,
+      message: `Staff member added. Code for ${nextStaffMember.name}: ${generatedStaffCode}`,
+    };
   };
 
   const handleDeleteStaff = (staffId) => {
@@ -2531,6 +2544,7 @@ function App() {
     return (
       <AuthGate
         isPreparingAuth={isPreparingAuth}
+        staffList={staffList}
         onLogin={handleLogin}
       />
     );

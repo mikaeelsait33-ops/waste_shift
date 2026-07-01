@@ -1480,7 +1480,7 @@ function InvoiceScanner({
                       }}
                       disabled={isScanningInvoice || isBatchScanning || scanFiles.length === 0}
                     >
-                      Clear file
+                      {scanFiles.length > 1 ? 'Clear files' : 'Clear file'}
                     </button>
                   </div>
                   {batchDrafts.length > 0 && (

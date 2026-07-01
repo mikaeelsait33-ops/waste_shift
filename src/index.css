@@ -55,7 +55,6 @@ body {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.015) 220px, rgba(255, 255, 255, 0) 520px),
     linear-gradient(180deg, #050506 0%, #101012 44%, #080809 100%);
-  background-attachment: fixed;
   line-height: 1.5;
 }
 

@@ -1,48 +1,45 @@
 import { useState } from 'react';
 
-const STAFF_SECTIONS = [
-  { value: 'kitchen', label: 'Kitchen staff' },
-  { value: 'waiters', label: 'Waiter / floor staff' },
-  { value: 'barista', label: 'Barista / beverage staff' },
-];
-
 function AuthGate({
   isPreparingAuth,
+  staffList = [],
   onLogin,
 }) {
   const [mode, setMode] = useState('staff');
   const [name, setName] = useState('');
-  const [staffSection, setStaffSection] = useState('kitchen');
   const [pin, setPin] = useState('');
   const [message, setMessage] = useState('');
-  const [generatedStaffCode, setGeneratedStaffCode] = useState('');
   const [isBusy, setIsBusy] = useState(false);
+  const staffLoginOptions = (Array.isArray(staffList) ? staffList : [])
+    .filter((member) => (
+      member?.id
+      && !member.removed
+      && member.staffCode
+      && member.staffSection !== 'management'
+      && !/\b(owner|manager)\b/i.test(String(member.role || ''))
+    ))
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
 
   const handleLoginSubmit = async (event) => {
     event.preventDefault();
 
     if (!name.trim()) {
-      setMessage(mode === 'management' ? 'Enter your management name.' : 'Enter your staff name.');
+      setMessage(mode === 'management' ? 'Enter your management name.' : 'Choose your staff profile.');
       return;
     }
 
     setIsBusy(true);
     setMessage('');
-    setGeneratedStaffCode('');
 
     try {
       const result = await onLogin?.({
         mode,
         name: name.trim(),
-        staffSection,
         pin,
       });
 
       if (!result?.ok) {
         setMessage(result?.message || 'PIN login failed.');
-        if (result?.generatedStaffCode) {
-          setGeneratedStaffCode(result.generatedStaffCode);
-        }
         return;
       }
 
@@ -75,12 +72,12 @@ function AuthGate({
         ) : (
           <form onSubmit={handleLoginSubmit} className="auth-form">
             <div>
-              <p className="eyebrow">{mode === 'management' ? 'Management login' : 'Staff account'}</p>
+              <p className="eyebrow">{mode === 'management' ? 'Management login' : 'Staff login'}</p>
               <h2 className="title">{mode === 'management' ? 'Unlock Management' : 'Start Waste Logging'}</h2>
               <p className="subtitle">
                 {mode === 'management'
                   ? 'Enter your name and the management PIN to create or open a manager account.'
-                  : 'Create your staff account to receive a personal code, or enter your existing staff code.'}
+                  : 'Choose a manager-added staff profile and enter the personal code issued in Settings.'}
               </p>
             </div>
 
@@ -89,21 +86,21 @@ function AuthGate({
                 type="button"
                 onClick={() => {
                   setMode('staff');
+                  setName('');
                   setPin('');
                   setMessage('');
-                  setGeneratedStaffCode('');
                 }}
                 className={`segment-button${mode === 'staff' ? ' is-active' : ''}`}
               >
-                Staff Account
+                Staff Login
               </button>
               <button
                 type="button"
                 onClick={() => {
                   setMode('management');
+                  setName('');
                   setPin('');
                   setMessage('');
-                  setGeneratedStaffCode('');
                 }}
                 className={`segment-button${mode === 'management' ? ' is-active' : ''}`}
               >
@@ -111,35 +108,44 @@ function AuthGate({
               </button>
             </div>
 
-            <div className="field">
-              <label htmlFor="login-name">{mode === 'management' ? 'Management name' : 'Staff name'}</label>
-              <input
-                id="login-name"
-                type="text"
-                autoComplete="name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder={mode === 'management' ? 'e.g. Nadia' : 'e.g. Mikaeel'}
-                className="input"
-              />
-            </div>
-
-            {mode === 'staff' && (
+            {mode === 'management' ? (
               <div className="field">
-                <label htmlFor="staff-section-login">Staff section</label>
-                <select
-                  id="staff-section-login"
-                  value={staffSection}
-                  onChange={(event) => setStaffSection(event.target.value)}
-                  className="select"
-                >
-                  {STAFF_SECTIONS.map((section) => (
-                    <option key={section.value} value={section.value}>
-                      {section.label}
-                    </option>
-                  ))}
-                </select>
+                <label htmlFor="login-name">Management name</label>
+                <input
+                  id="login-name"
+                  type="text"
+                  autoComplete="name"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="e.g. Nadia"
+                  className="input"
+                />
               </div>
+            ) : (
+              <>
+                <div className="field">
+                  <label htmlFor="login-name">Staff profile</label>
+                  <select
+                    id="login-name"
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    className="select"
+                  >
+                    <option value="">Choose staff member</option>
+                    {staffLoginOptions.map((member) => (
+                      <option key={member.id} value={member.name}>
+                        {member.name} - {member.role}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {staffLoginOptions.length === 0 && (
+                  <div className="muted-box" style={{ marginBottom: 0 }}>
+                    No staff codes have been issued yet. A manager must add staff in Settings and share their code.
+                  </div>
+                )}
+              </>
             )}
 
             <div className="field">
@@ -151,7 +157,7 @@ function AuthGate({
                 autoComplete="current-password"
                 value={pin}
                 onChange={(event) => setPin(event.target.value)}
-                placeholder={mode === 'management' ? 'Enter PIN' : 'Enter code, or leave blank to create one'}
+                placeholder={mode === 'management' ? 'Enter PIN' : 'Enter staff code'}
                 className="input"
               />
             </div>
@@ -160,14 +166,6 @@ function AuthGate({
               {isBusy ? 'Checking...' : mode === 'management' ? 'Unlock management' : 'Continue'}
             </button>
           </form>
-        )}
-
-        {generatedStaffCode && (
-          <div className="staff-code-reveal" role="status">
-            <span className="field-label">Generated staff code</span>
-            <strong>{generatedStaffCode}</strong>
-            <p className="small-text">Write this down. It will not be shown again after you leave this screen.</p>
-          </div>
         )}
 
         {message && (

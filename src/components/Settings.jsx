@@ -85,7 +85,7 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
     setMessage(`New code for ${result.staffName}: ${result.generatedStaffCode}. Share it once with that staff member.`);
   };
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
 
     const trimmedName = name.trim();
@@ -101,11 +101,17 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
       return;
     }
 
-    onAddStaff({ name: trimmedName, role: trimmedRole, staffSection });
+    const result = await onAddStaff({ name: trimmedName, role: trimmedRole, staffSection });
+
+    if (!result?.ok) {
+      setMessage(result?.message || 'Could not add this staff member.');
+      return;
+    }
+
     setName('');
     setRole('');
     setStaffSection('kitchen');
-    setMessage('Staff member saved.');
+    setMessage(`Staff member saved. New code for ${result.staffName}: ${result.generatedStaffCode}. Share it once with that staff member.`);
   };
 
   return (
@@ -115,7 +121,7 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
           <div>
             <p className="eyebrow">Staff setup</p>
             <h2 className="title">Staff Members</h2>
-            <p className="subtitle">Manage the names available when logging responsibility.</p>
+            <p className="subtitle">Managers add staff profiles and issue personal codes. Staff cannot create their own accounts.</p>
           </div>
           <span className="badge">{safeStaffList.length} total</span>
         </div>
@@ -172,7 +178,7 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
           </div>
 
           <button type="submit" className="primary-button" disabled={!accessProfile?.canManageStaff}>
-            {accessProfile?.canManageStaff ? 'Save staff member' : 'Manager only'}
+            {accessProfile?.canManageStaff ? 'Add staff + generate code' : 'Manager only'}
           </button>
         </form>
 
@@ -231,6 +237,9 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
                   {section.label}
                 </span>
                 {member.isCsvSeed && <span className="badge">CSV</span>}
+                <span className={`badge${member.staffCode ? ' is-green' : ' is-yellow'}`}>
+                  {member.staffCode ? 'Code issued' : 'No code'}
+                </span>
               </div>
               <div className="manager-row">
                 {section.key !== 'management' && (
