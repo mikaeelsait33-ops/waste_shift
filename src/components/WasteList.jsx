@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import DateNavigator from './DateNavigator';
 import {
   DEFAULT_WASTE_CLASSIFICATION,
@@ -9,12 +9,17 @@ import {
   getEntryPotentialRevenueLost,
   getWasteClassificationMeta,
 } from '../utils/wasteCalculations';
+import { getWasteEntrySyncStatus, wasteEntryNeedsCostReview } from '../utils/wasteSync';
+import { DEFAULT_PAGE_SIZE, getVisiblePage } from '../utils/listPerformance';
 
 function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, activeStaffMember }) {
   const [activeFilter, setActiveFilter] = useState('All');
   const [classificationFilter, setClassificationFilter] = useState('All');
   const [searchTerm, setSearchTerm] = useState('');
   const [sortMode, setSortMode] = useState('newest');
+  const [syncFilter, setSyncFilter] = useState('All');
+  const [costReviewFilter, setCostReviewFilter] = useState('All');
+  const [visibleLimit, setVisibleLimit] = useState(DEFAULT_PAGE_SIZE);
   const [viewMode, setViewMode] = useState('day');
   const [deletedEntry, setDeletedEntry] = useState(null);
   const [selectedDate, setSelectedDate] = useState(() => {
@@ -22,15 +27,15 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
     d.setHours(0, 0, 0, 0);
     return d;
   });
-  const safeItems = Array.isArray(items) ? items : [];
+  const safeItems = useMemo(() => (Array.isArray(items) ? items : []), [items]);
   const canViewFinancials = Boolean(accessProfile?.canViewFinancials);
   const formatMoney = (value) => (canViewFinancials ? `R${Number(value || 0).toFixed(2)}` : 'Restricted');
-  const visibleItems = canViewFinancials
+  const visibleItems = useMemo(() => (canViewFinancials
     ? safeItems
     : safeItems.filter((item) => (
       item?.staffId === activeStaffMember?.id
       || String(item?.staff || '').trim().toLowerCase() === String(activeStaffMember?.name || '').trim().toLowerCase()
-    ));
+    ))), [activeStaffMember?.id, activeStaffMember?.name, canViewFinancials, safeItems]);
 
   const parseDate = (dateStr) => {
     if (!dateStr) return new Date(0);
@@ -42,7 +47,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
     return new Date(dateStr);
   };
 
-  const dateFilteredItems = visibleItems.filter((item) => {
+  const dateFilteredItems = useMemo(() => visibleItems.filter((item) => {
     if (viewMode === 'all') return true;
 
     const itemDate = parseDate(item?.date);
@@ -59,7 +64,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
     }
 
     return true;
-  });
+  }), [selectedDate, viewMode, visibleItems]);
 
   const searchValue = searchTerm.trim().toLowerCase();
   const getItemWasteClassification = (item) => item?.wasteClassification || DEFAULT_WASTE_CLASSIFICATION;
@@ -70,14 +75,20 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
     return item.category === category;
   };
 
-  const classificationFilteredItems = dateFilteredItems.filter((item) => {
+  const classificationFilteredItems = useMemo(() => dateFilteredItems.filter((item) => {
     if (classificationFilter === 'All') return true;
     return getItemWasteClassification(item) === classificationFilter;
-  });
+  }), [classificationFilter, dateFilteredItems]);
 
-  const filteredItems = classificationFilteredItems.filter((item) => {
+  const filteredItems = useMemo(() => classificationFilteredItems.filter((item) => {
     if (activeFilter === 'All') return true;
     return itemMatchesCategory(item, activeFilter);
+  }).filter((item) => {
+    if (syncFilter === 'All') return true;
+    return getWasteEntrySyncStatus(item) === syncFilter;
+  }).filter((item) => {
+    if (costReviewFilter === 'All') return true;
+    return costReviewFilter === 'needsReview' ? wasteEntryNeedsCostReview(item) : !wasteEntryNeedsCostReview(item);
   }).filter((item) => {
     if (!searchValue) return true;
 
@@ -100,12 +111,18 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
     if (sortMode === 'highestCost') return getEntryFoodCostLost(b) - getEntryFoodCostLost(a);
     if (sortMode === 'name') return String(a?.name || '').localeCompare(String(b?.name || ''));
     return parseDate(b?.date).getTime() - parseDate(a?.date).getTime();
-  });
+  }), [activeFilter, classificationFilteredItems, costReviewFilter, searchValue, sortMode, syncFilter]);
+  const visiblePage = useMemo(() => getVisiblePage(filteredItems, { limit: visibleLimit }), [filteredItems, visibleLimit]);
+  const visibleFilteredItems = visiblePage.records;
+
+  useEffect(() => {
+    setVisibleLimit(DEFAULT_PAGE_SIZE);
+  }, [activeFilter, classificationFilter, costReviewFilter, searchValue, selectedDate, sortMode, syncFilter, viewMode]);
 
   const totalCost = dateFilteredItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
   const totalCount = dateFilteredItems.length;
   const filteredCost = filteredItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
-  const hasActiveFilters = activeFilter !== 'All' || classificationFilter !== 'All' || Boolean(searchValue);
+  const hasActiveFilters = activeFilter !== 'All' || classificationFilter !== 'All' || syncFilter !== 'All' || costReviewFilter !== 'All' || Boolean(searchValue);
   const categoryFilters = [
     { value: 'All', label: 'All' },
     ...WASTE_CATEGORY_OPTIONS,
@@ -261,6 +278,8 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
   const clearFilters = () => {
     setActiveFilter('All');
     setClassificationFilter('All');
+    setSyncFilter('All');
+    setCostReviewFilter('All');
     setSearchTerm('');
   };
 
@@ -301,6 +320,18 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
             </option>
           ))}
         </select>
+        <select value={syncFilter} onChange={(e) => setSyncFilter(e.target.value)} className="select">
+          <option value="All">All sync</option>
+          <option value="synced">Synced</option>
+          <option value="pending">Pending</option>
+          <option value="failed">Failed</option>
+          <option value="local">Local</option>
+        </select>
+        <select value={costReviewFilter} onChange={(e) => setCostReviewFilter(e.target.value)} className="select">
+          <option value="All">All costs</option>
+          <option value="needsReview">Needs cost review</option>
+          <option value="complete">Cost complete</option>
+        </select>
         <button type="button" onClick={exportFilteredItems} className="ghost-button is-warning" disabled={filteredItems.length === 0 || !accessProfile?.canExportData}>
           {accessProfile?.canExportData ? 'Export CSV' : 'Manager only'}
         </button>
@@ -337,7 +368,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
         <div className="budget-panel" style={{ marginBottom: '14px' }}>
           <div className="budget-row">
             <span className="small-text">
-              <strong>{hasActiveFilters ? filteredItems.length : totalCount}</strong> item{(hasActiveFilters ? filteredItems.length : totalCount) !== 1 ? 's' : ''} shown
+              <strong>{visiblePage.visibleCount}</strong> of <strong>{hasActiveFilters ? filteredItems.length : totalCount}</strong> item{(hasActiveFilters ? filteredItems.length : totalCount) !== 1 ? 's' : ''} shown
             </span>
             <span className="price">{formatMoney(hasActiveFilters ? filteredCost : totalCost)}</span>
           </div>
@@ -382,7 +413,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
         </div>
       ) : (
         <ul className="log-list">
-          {filteredItems.map((item) => {
+          {visibleFilteredItems.map((item) => {
             const itemCost = getEntryFoodCostLost(item);
             const revenueLost = getEntryPotentialRevenueLost(item);
             const grossProfitLost = getEntryGrossProfitLost(item);
@@ -410,6 +441,9 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
                     {item.costStatus === 'needs_item_price' && (
                       <span className="badge is-red cost-status-badge">Needs price</span>
                     )}
+                    <span className={getWasteEntrySyncStatus(item) === 'synced' ? 'badge is-green cost-status-badge' : 'badge cost-status-badge'}>
+                      {getWasteEntrySyncStatus(item)}
+                    </span>
                     {item.partialWaste && (
                       <span className="badge is-green cost-status-badge">
                         Partial: {item.wastedComponentCount || wastedComponentNames.length}/{item.totalComponentCount || item.ingredients?.length || '?'}
@@ -485,6 +519,21 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
             );
           })}
         </ul>
+      )}
+
+      {visiblePage.hasMore && (
+        <div className="load-more-row">
+          <button
+            type="button"
+            className="ghost-button is-warning"
+            onClick={() => setVisibleLimit(visiblePage.nextLimit)}
+          >
+            Load more entries
+          </button>
+          <span className="small-text">
+            Showing {visiblePage.visibleCount} of {visiblePage.totalCount}
+          </span>
+        </div>
       )}
     </section>
   );

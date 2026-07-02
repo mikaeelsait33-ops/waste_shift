@@ -24,6 +24,13 @@ import {
   updateStockFromInvoice,
 } from '../services/invoiceFirestore';
 import { createLowStockAlerts } from '../utils/stockAlerts';
+import { createRecordId } from '../utils/ids';
+import {
+  buildCostReviewQueue,
+  getLatestPriceChange,
+  normalizeIngredientRecord,
+} from '../utils/ingredientIntelligence';
+import { DEFAULT_PAGE_SIZE, getVisiblePage } from '../utils/listPerformance';
 
 const DEFAULT_VAT_RATE = 0.15;
 const UNIT_OPTIONS = ['kg', 'g', 'L', 'ml', 'each', '5L', 'case of 12', 'case', 'doz', 'pkt', 'bag', 'box', 'bottle', 'tray', 'tin', 'punnet', 'bunch', 'head', 'pillow'];
@@ -31,6 +38,8 @@ const SCAN_IMAGE_MAX_EDGE = 1800;
 const SCAN_IMAGE_QUALITY = 0.84;
 const MAX_SCAN_BYTES = 8 * 1024 * 1024;
 const SUPPORTED_SCAN_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
+const INVOICE_REVIEW_PAGE_SIZE = 20;
+const INGREDIENT_LIBRARY_PAGE_SIZE = 30;
 
 const formatMoney = (value) => `R${Number(value || 0).toFixed(2)}`;
 const formatPercent = (value) => `${Number(value || 0).toFixed(1)}%`;
@@ -235,6 +244,7 @@ const createIngredientRows = ({ lineItems, matches, newIngredientDrafts, supplie
       unitPriceExVAT: lineItem.unitPriceExVAT,
       unitPriceIncVAT: lineItem.unitPriceIncVAT,
       costPerBaseUnitExVAT: lineItem.costPerBaseUnitExVAT,
+      previousPriceExVAT: previousPrice,
       priceChangePercent: changePercent,
       priceDirection: previousPrice <= 0 ? 'new' : changePercent > 0 ? 'up' : changePercent < 0 ? 'down' : 'flat',
     };
@@ -289,6 +299,9 @@ function InvoiceScanner({
   const [priceHistorySupplierFilter, setPriceHistorySupplierFilter] = useState('');
   const [reportStartDate, setReportStartDate] = useState('');
   const [reportEndDate, setReportEndDate] = useState('');
+  const [visibleLineLimit, setVisibleLineLimit] = useState(INVOICE_REVIEW_PAGE_SIZE);
+  const [visibleIngredientLimit, setVisibleIngredientLimit] = useState(INGREDIENT_LIBRARY_PAGE_SIZE);
+  const [visibleInvoiceLimit, setVisibleInvoiceLimit] = useState(DEFAULT_PAGE_SIZE);
   const [deletingIngredientId, setDeletingIngredientId] = useState('');
   const [deletingInvoiceId, setDeletingInvoiceId] = useState('');
 
@@ -335,6 +348,10 @@ function InvoiceScanner({
   }, [autoMatches, lineItems, manualIngredientLinks, workspace.ingredients]);
   const matchedCount = [...matches.values()].filter((match) => match.ingredient).length;
   const newLineItems = lineItems.filter((lineItem) => !matches.get(lineItem.id)?.ingredient);
+  const visibleLinePage = useMemo(() => getVisiblePage(lineItems, {
+    limit: visibleLineLimit,
+    fallbackLimit: INVOICE_REVIEW_PAGE_SIZE,
+  }), [lineItems, visibleLineLimit]);
   const totals = useMemo(() => summarizeInvoiceItems(lineItems), [lineItems]);
   const hasExtractedTotals = extractedTotals
     && Number(extractedTotals.totalIncVAT || extractedTotals.totalExVAT || extractedTotals.totalVAT) > 0;
@@ -393,6 +410,10 @@ function InvoiceScanner({
       return true;
     });
   }, [historyEndDate, historySearch, historyStartDate, workspace.invoices]);
+  const visibleInvoicePage = useMemo(() => getVisiblePage(filteredInvoices, {
+    limit: visibleInvoiceLimit,
+    fallbackLimit: DEFAULT_PAGE_SIZE,
+  }), [filteredInvoices, visibleInvoiceLimit]);
   const historySummary = useMemo(() => ({
     totalExVAT: roundMoney(filteredInvoices.reduce((sum, invoice) => sum + Number(invoice.totalExVAT || 0), 0)),
     totalVAT: roundMoney(filteredInvoices.reduce((sum, invoice) => sum + Number(invoice.totalVAT || 0), 0)),
@@ -548,9 +569,14 @@ function InvoiceScanner({
       })
       .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
   ), [ingredientSearchValue, workspace.ingredients]);
+  const visibleIngredientPage = useMemo(() => getVisiblePage(filteredIngredients, {
+    limit: visibleIngredientLimit,
+    fallbackLimit: INGREDIENT_LIBRARY_PAGE_SIZE,
+  }), [filteredIngredients, visibleIngredientLimit]);
   const ingredientSummary = useMemo(() => ({
     total: workspace.ingredients.length,
-    priced: workspace.ingredients.filter((ingredient) => Number(ingredient.lastPriceExVAT || 0) > 0).length,
+    priced: workspace.ingredients.filter((ingredient) => Number(ingredient.lastPriceExVAT || ingredient.latestCost || 0) > 0).length,
+    missingCost: workspace.ingredients.filter((ingredient) => Number(ingredient.lastPriceExVAT || ingredient.latestCost || 0) <= 0).length,
     newThisMonth: workspace.ingredients.filter((ingredient) => {
       const date = ingredient.lastInvoiceDate ? new Date(ingredient.lastInvoiceDate) : null;
       const now = new Date();
@@ -560,6 +586,13 @@ function InvoiceScanner({
         && date.getFullYear() === now.getFullYear();
     }).length,
   }), [workspace.ingredients]);
+  const costReviewQueue = useMemo(() => buildCostReviewQueue({
+    ingredients: workspace.ingredients,
+    invoiceLines: lineItems,
+    recipes,
+    itemPriceCatalog,
+  }), [itemPriceCatalog, lineItems, recipes, workspace.ingredients]);
+  const visibleCostReviewQueue = useMemo(() => costReviewQueue.slice(0, 6), [costReviewQueue]);
   const priceHistorySuppliers = useMemo(() => (
     [...new Set(
       workspace.ingredients.flatMap((ingredient) => (
@@ -585,6 +618,18 @@ function InvoiceScanner({
       inventoryMovements,
     })
   ), [inventoryMovements, workspace.ingredients, workspace.stockLevels]);
+
+  useEffect(() => {
+    setVisibleLineLimit(INVOICE_REVIEW_PAGE_SIZE);
+  }, [lineItems.length]);
+
+  useEffect(() => {
+    setVisibleIngredientLimit(INGREDIENT_LIBRARY_PAGE_SIZE);
+  }, [ingredientSearchValue, priceHistorySupplierFilter]);
+
+  useEffect(() => {
+    setVisibleInvoiceLimit(DEFAULT_PAGE_SIZE);
+  }, [historyEndDate, historySearch, historyStartDate]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -657,7 +702,7 @@ function InvoiceScanner({
     const itemName = String(draft.itemName || '').trim();
 
     return applyLineCalculations({
-      id: `manual-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    id: createRecordId('invoice_line'),
       itemName,
       quantity,
       unit: draft.unit || 'each',
@@ -757,7 +802,7 @@ function InvoiceScanner({
     const nextVatRate = Number.isFinite(Number(invoice.vatRate))
       ? Number(invoice.vatRate)
       : vatRate;
-    const createdAt = Date.now();
+    const scanId = createRecordId('scan');
     const scannedLines = (Array.isArray(invoice.items) ? invoice.items : [])
       .map((item, index) => {
         const itemName = String(item?.itemName || '').trim();
@@ -774,7 +819,7 @@ function InvoiceScanner({
         }
 
         return applyLineCalculations({
-          id: `gemini-${createdAt}-${index}-${createInvoiceKey(itemName) || Math.random().toString(36).slice(2)}`,
+          id: `${scanId}_${index}_${createInvoiceKey(itemName) || 'line'}`,
           itemName,
           quantity,
           unit: normalizeInvoiceUnit(item?.unit || 'each'),
@@ -854,8 +899,8 @@ function InvoiceScanner({
 
     setScanFiles(files);
     setScanFile(files[0] || null);
-    setBatchDrafts(files.map((file, index) => ({
-      id: `batch-${Date.now()}-${index}`,
+    setBatchDrafts(files.map((file) => ({
+      id: createRecordId('invoice_batch'),
       file,
       fileName: file.name,
       status: 'queued',
@@ -1004,7 +1049,11 @@ function InvoiceScanner({
     }
 
     try {
-      await saveIngredient(draft);
+      const result = await saveIngredient(draft);
+      if (result?.duplicate) {
+        setMessage(result.message || `${draft.name} already exists in the raw ingredient library.`);
+        return;
+      }
       await refreshWorkspace();
       setNewDrawerLineId('');
       setMessage(`${draft.name} saved to ingredients.`);
@@ -1172,7 +1221,7 @@ function InvoiceScanner({
       return;
     }
 
-    const invoiceId = `invoice_${Date.now()}`;
+    const invoiceId = createRecordId('invoice');
     const manualSourceText = lineItems
       .map((item) => `${item.itemName} | ${item.quantity} ${item.unit} | ${formatMoney(item.unitPrice)} | ${formatMoney(item.lineTotal)}`)
       .join('\n');
@@ -1650,7 +1699,7 @@ function InvoiceScanner({
                     <span>Status</span>
                     <span>Action</span>
                   </div>
-                  {lineItems.map((lineItem) => {
+                  {visibleLinePage.records.map((lineItem) => {
                     const match = matches.get(lineItem.id);
                     const priceHistory = match?.ingredient?.priceHistory || [];
                     const sparklineData = [
@@ -1756,6 +1805,20 @@ function InvoiceScanner({
                       </div>
                     );
                   })}
+                  {visibleLinePage.hasMore && (
+                    <div className="load-more-row invoice-load-more-row">
+                      <button
+                        type="button"
+                        className="ghost-button is-warning"
+                        onClick={() => setVisibleLineLimit(visibleLinePage.nextLimit)}
+                      >
+                        Load more invoice lines
+                      </button>
+                      <span className="small-text">
+                        Showing {visibleLinePage.visibleCount} of {visibleLinePage.totalCount}
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1874,6 +1937,10 @@ function InvoiceScanner({
                 <span className="metric-label">With invoice price</span>
               </div>
               <div className="metric-card">
+                <span className={`metric-value${ingredientSummary.missingCost > 0 ? ' is-danger' : ''}`}>{ingredientSummary.missingCost}</span>
+                <span className="metric-label">Missing cost</span>
+              </div>
+              <div className="metric-card">
                 <span className="metric-value">{ingredientSummary.newThisMonth}</span>
                 <span className="metric-label">Updated this month</span>
               </div>
@@ -1882,6 +1949,22 @@ function InvoiceScanner({
                 <span className="metric-label">Low-stock alerts</span>
               </div>
             </div>
+
+            {costReviewQueue.length > 0 && (
+              <div className="notice-panel notice-panel--warning">
+                <div>
+                  <h3 className="breakdown-title">Cost review queue</h3>
+                  <div className="import-summary-grid">
+                    {visibleCostReviewQueue.map((item) => (
+                      <span key={item.id} className={item.severity === 'high' ? 'badge is-red' : 'badge is-yellow'}>
+                        {item.label}: {item.detail}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <span className="badge">{costReviewQueue.length} open</span>
+              </div>
+            )}
 
             <div className="field-grid">
               <input
@@ -1907,7 +1990,9 @@ function InvoiceScanner({
             <div className="raw-ingredient-list">
               {filteredIngredients.length === 0 ? (
                 <div className="empty-state">No raw ingredients match this search.</div>
-              ) : filteredIngredients.map((ingredient) => {
+              ) : visibleIngredientPage.records.map((ingredient) => {
+                const normalizedIngredient = normalizeIngredientRecord(ingredient);
+                const priceChange = getLatestPriceChange(ingredient);
                 const catalogRecord = itemPriceCatalog?.[createItemPriceKey(ingredient.name)];
                 const priceHistory = Array.isArray(ingredient.priceHistory) ? ingredient.priceHistory : [];
                 const filteredPriceHistory = priceHistory
@@ -1947,6 +2032,12 @@ function InvoiceScanner({
                         </span>
                       )}
                       <span className="badge">{historyCount} price{historyCount === 1 ? '' : 's'}</span>
+                      {Number(normalizedIngredient?.latestCost || 0) <= 0 && <span className="badge is-red">Missing cost</span>}
+                      {priceChange.significant && (
+                        <span className={priceChange.direction === 'up' ? 'badge is-red' : 'badge is-green'}>
+                          {priceChange.direction === 'up' ? '+' : ''}{formatPercent(priceChange.changePercent)}
+                        </span>
+                      )}
                     </div>
                     {historyCount > 0 && (
                       <details className="ingredient-history-panel">
@@ -1984,6 +2075,20 @@ function InvoiceScanner({
                 );
               })}
             </div>
+            {visibleIngredientPage.hasMore && (
+              <div className="load-more-row">
+                <button
+                  type="button"
+                  className="ghost-button is-warning"
+                  onClick={() => setVisibleIngredientLimit(visibleIngredientPage.nextLimit)}
+                >
+                  Load more ingredients
+                </button>
+                <span className="small-text">
+                  Showing {visibleIngredientPage.visibleCount} of {visibleIngredientPage.totalCount}
+                </span>
+              </div>
+            )}
           </div>
         </section>
       )}
@@ -2023,7 +2128,7 @@ function InvoiceScanner({
             <div className="invoice-history-list">
               {filteredInvoices.length === 0 ? (
                 <div className="empty-state">No confirmed invoices match this filter.</div>
-              ) : filteredInvoices.map((invoice) => (
+              ) : visibleInvoicePage.records.map((invoice) => (
                 <details key={invoice.id} className="invoice-history-row">
                   <summary>
                     <strong>{invoice.supplier || 'Unknown supplier'}</strong>
@@ -2058,6 +2163,20 @@ function InvoiceScanner({
                 </details>
               ))}
             </div>
+            {visibleInvoicePage.hasMore && (
+              <div className="load-more-row">
+                <button
+                  type="button"
+                  className="ghost-button is-warning"
+                  onClick={() => setVisibleInvoiceLimit(visibleInvoicePage.nextLimit)}
+                >
+                  Load more invoices
+                </button>
+                <span className="small-text">
+                  Showing {visibleInvoicePage.visibleCount} of {visibleInvoicePage.totalCount}
+                </span>
+              </div>
+            )}
           </div>
         </section>
       )}

@@ -574,6 +574,7 @@ function Settings({
   onClearRecipes,
   onSaveMenuItem,
   onRemoveCustomMenuItem,
+  onImportMenuItems,
   onSaveItemPrice,
   onDeleteItemPrice,
   onSaveToServer,
@@ -581,12 +582,15 @@ function Settings({
   onSavePinSettings,
   onLogout,
   onRestoreDatabase,
+  onResetRestaurantData,
 }) {
   const [activeSection, setActiveSection] = useState('security');
   const [draftBudget, setDraftBudget] = useState(String(budget || 0));
   const [dailyWasteValueLimit, setDailyWasteValueLimit] = useState(String(settings?.dailyWasteValueLimit || ''));
   const [dailyWasteEntryLimit, setDailyWasteEntryLimit] = useState(String(settings?.dailyWasteEntryLimit || ''));
   const [message, setMessage] = useState('');
+  const [resetConfirmation, setResetConfirmation] = useState('');
+  const [isResettingRestaurant, setIsResettingRestaurant] = useState(false);
 
   useEffect(() => {
     setDraftBudget(String(budget || 0));
@@ -837,6 +841,8 @@ function Settings({
             onClearRecipes={onClearRecipes}
             onSaveMenuItem={onSaveMenuItem}
             onRemoveCustomMenuItem={onRemoveCustomMenuItem}
+            onImportMenuItems={onImportMenuItems}
+            activeStaffMember={activeStaffMember}
           />
         </>
       )}
@@ -902,6 +908,47 @@ function Settings({
                 </button>
               </div>
             </div>
+
+            <div className="notice-panel">
+              <div>
+                <h3 className="breakdown-title">Reset restaurant data</h3>
+                <p className="small-text" style={{ margin: 0 }}>
+                  Clears staff, menu items, ingredients, recipes, inventory, waste entries, invoices, audit logs, and setup status.
+                </p>
+              </div>
+              <div className="field" style={{ minWidth: 220 }}>
+                <label htmlFor="restaurant-reset-confirmation">Type RESET</label>
+                <input
+                  id="restaurant-reset-confirmation"
+                  value={resetConfirmation}
+                  onChange={(event) => setResetConfirmation(event.target.value)}
+                  className="input"
+                  placeholder="RESET"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  setIsResettingRestaurant(true);
+                  const result = await onResetRestaurantData?.(resetConfirmation);
+                  setMessage(result?.message || 'Reset request finished.');
+                  if (result?.ok) {
+                    setResetConfirmation('');
+                  }
+                  setIsResettingRestaurant(false);
+                }}
+                className="danger-button"
+                disabled={!accessProfile?.canClearData || isResettingRestaurant}
+              >
+                {isResettingRestaurant ? 'Resetting...' : accessProfile?.canClearData ? 'Reset restaurant' : 'Owner only'}
+              </button>
+            </div>
+
+            {message && (
+              <div className="empty-state" style={{ marginTop: 14, padding: 14 }}>
+                {message}
+              </div>
+            )}
           </div>
         </div>
       )}

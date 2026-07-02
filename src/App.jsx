@@ -1,17 +1,11 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { lazy, Suspense, useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import Navbar from './components/Navbar';
-import Dashboard from './components/Dashboard';
 import WasteForm from './components/WasteForm';
-import WasteList from './components/WasteList';
-import Settings from './components/Settings';
-import StoreRoom from './components/StoreRoom';
-import InvoiceScanner from './components/InvoiceScanner';
 import AuthGate from './components/AuthGate';
-import defaultRecipes from './data/defaultRecipes';
-import menuItemsCsv from './data/menuItems.csv?raw';
-import staffMembersCsv from './data/staffMembers.csv?raw';
+import ErrorBoundary from './components/ErrorBoundary';
 import { inferStaffSection } from './utils/staffSections';
 import { getAccessProfile, inferRoleKey, requirePermission } from './utils/accessControl';
+import { createRecordId } from './utils/ids';
 import {
   calculateItemPriceCost,
   calculateRecipeIngredientCost,
@@ -46,22 +40,45 @@ import {
   saveFirestoreWasteEntry,
 } from './services/firestoreMenuItems';
 import { loadInvoiceDashboardStats } from './services/invoiceFirestore';
+import {
+  createDefaultRestaurantProfile,
+  loadRestaurantProfile,
+  resetRestaurantFirestoreData,
+  saveMenuImportHistory,
+  saveRestaurantProfile,
+} from './services/restaurantFirestore';
+import {
+  createEmptyRestaurantData,
+  getRestaurantResetStorageKeys,
+  validateRestaurantResetConfirmation,
+} from './utils/restaurantReset';
 
-// Seed recipes from the bundled menu catalog.
-const DEFAULT_RECIPES = defaultRecipes;
-const DEFAULT_RECIPE_SEED_VERSION = 'makeline-guide-recipes-v5';
+const DEFAULT_RECIPES = {};
+const DEFAULT_RECIPE_SEED_VERSION = 'fresh-restaurant-empty-v1';
 const SERVER_DATABASE_ENDPOINT = '/api/database';
 const FIRESTORE_RUNTIME_INFO = getFirestoreRuntimeInfo();
 const FIRESTORE_CONFIGURED = firestoreIsConfigured();
 const OLD_DEFAULT_COST_BASIS = 'Menu price from menuItems.csv split evenly across listed ingredients.';
-const DEFAULT_STAFF_PIN = '1904';
-const DEFAULT_MANAGEMENT_PIN = '1905';
-const DEFAULT_PIN_PRESET_VERSION = 'shared-default-1904-1905-v1';
 const STAFF_FRESH_START_VERSION = 'empty-staff-roster-v1';
 const DEFAULT_SETTINGS = {
   dailyWasteValueLimit: 0,
   dailyWasteEntryLimit: 0,
 };
+
+const Dashboard = lazy(() => import('./components/Dashboard'));
+const InvoiceScanner = lazy(() => import('./components/InvoiceScanner'));
+const Settings = lazy(() => import('./components/Settings'));
+const SetupWizard = lazy(() => import('./components/SetupWizard'));
+const StoreRoom = lazy(() => import('./components/StoreRoom'));
+const WasteList = lazy(() => import('./components/WasteList'));
+
+const PageFallback = ({ label = 'Loading screen' }) => (
+  <div className="panel">
+    <div className="panel-body">
+      <div className="muted-box" style={{ marginBottom: 0 }}>{label}...</div>
+    </div>
+  </div>
+);
 
 const staffFreshStartIsPending = () => (
   localStorage.getItem('wasteShiftStaffFreshStartVersion') !== STAFF_FRESH_START_VERSION
@@ -101,7 +118,7 @@ const sanitizeAuthSession = (session) => {
 };
 
 const createAuditLogEntry = ({ action, user, relatedItem, beforeValue = null, afterValue = null }) => ({
-  id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  id: createRecordId('audit'),
   date: new Date().toISOString(),
   user: user || 'System',
   action,
@@ -205,21 +222,12 @@ const recalculateRecipesFromPriceCatalog = (recipeMap, itemPriceCatalog, updated
   };
 };
 
-const mergeDefaultRecipeUpdates = (savedRecipeMap) => {
-  const savedRecipes = cloneRecipeMap(savedRecipeMap);
-  const updatedRecipes = { ...savedRecipes };
-  const defaultRecipesToMerge = cloneRecipeMap(DEFAULT_RECIPES);
-
-  Object.entries(defaultRecipesToMerge).forEach(([key, defaultRecipe]) => {
-    const savedRecipe = updatedRecipes[key];
-
-    if (!savedRecipe || savedRecipe.costBasis === OLD_DEFAULT_COST_BASIS) {
-      updatedRecipes[key] = defaultRecipe;
-    }
-  });
-
-  return updatedRecipes;
-};
+const removeOldSeededRecipes = (savedRecipeMap) => Object.fromEntries(
+  Object.entries(cloneRecipeMap(savedRecipeMap)).filter(([, recipe]) => {
+    const costBasis = String(recipe?.costBasis || '');
+    return costBasis !== OLD_DEFAULT_COST_BASIS && !costBasis.includes('menuItems.csv');
+  })
+);
 
 const buildInitialRecipes = () => {
   const savedRecipes = localStorage.getItem('customRecipes');
@@ -230,8 +238,12 @@ const buildInitialRecipes = () => {
     return cloneRecipeMap(DEFAULT_RECIPES);
   }
 
-  if (!savedRecipes || savedSeedVersion !== DEFAULT_RECIPE_SEED_VERSION) {
-    return mergeDefaultRecipeUpdates(savedRecipeMap);
+  if (!savedRecipes) {
+    return cloneRecipeMap(DEFAULT_RECIPES);
+  }
+
+  if (savedSeedVersion !== DEFAULT_RECIPE_SEED_VERSION) {
+    return removeOldSeededRecipes(savedRecipeMap);
   }
 
   return cloneRecipeMap(savedRecipeMap);
@@ -252,94 +264,6 @@ const parsePriceValue = (value) => {
 };
 
 const createStaffMemberId = (name) => `staff_${createMenuItemKey(name)}`;
-
-const parseCsvRows = (csvText) => {
-  const rows = [];
-  let row = [];
-  let field = '';
-  let isInsideQuotes = false;
-
-  for (let i = 0; i < csvText.length; i += 1) {
-    const char = csvText[i];
-    const nextChar = csvText[i + 1];
-
-    if (char === '"' && isInsideQuotes && nextChar === '"') {
-      field += '"';
-      i += 1;
-    } else if (char === '"') {
-      isInsideQuotes = !isInsideQuotes;
-    } else if (char === ',' && !isInsideQuotes) {
-      row.push(field);
-      field = '';
-    } else if ((char === '\n' || char === '\r') && !isInsideQuotes) {
-      if (char === '\r' && nextChar === '\n') {
-        i += 1;
-      }
-
-      row.push(field);
-      if (row.some((cell) => cell.trim())) {
-        rows.push(row);
-      }
-
-      row = [];
-      field = '';
-    } else {
-      field += char;
-    }
-  }
-
-  row.push(field);
-  if (row.some((cell) => cell.trim())) {
-    rows.push(row);
-  }
-
-  return rows;
-};
-
-const createMenuItemsFromCsv = (csvText, recipes) => {
-  const rows = parseCsvRows(csvText);
-  const [headers = [], ...dataRows] = rows;
-  const nameColumnIndex = headers.findIndex((header) => header.trim().toLowerCase() === 'name');
-  const priceColumnIndex = headers.findIndex((header) => {
-    const normalizedHeader = header.trim().toLowerCase().replace(/\s+/g, '_');
-    return normalizedHeader === 'price' || normalizedHeader === 'menu_price';
-  });
-
-  if (nameColumnIndex === -1) {
-    return [];
-  }
-
-  const seenKeys = new Set();
-
-  return dataRows
-    .map((row) => {
-      const name = row[nameColumnIndex]?.trim();
-
-      if (!name) {
-        return null;
-      }
-
-      const key = createMenuItemKey(name);
-      const recipe = recipes?.[key];
-      const menuPrice = priceColumnIndex === -1 ? null : parsePriceValue(row?.[priceColumnIndex]);
-
-      return {
-        key,
-        name,
-        menuPrice,
-        ingredientCount: Array.isArray(recipe?.ingredients) ? recipe.ingredients.length : 0,
-      };
-    })
-    .filter(Boolean)
-    .filter((menuItem) => {
-      if (!menuItem.key || seenKeys.has(menuItem.key)) {
-        return false;
-      }
-
-      seenKeys.add(menuItem.key);
-      return true;
-    });
-};
 
 const sanitizeMenuItems = (items) => {
   if (!Array.isArray(items)) {
@@ -480,47 +404,6 @@ const createRecipeMapFromFirestoreMenuItems = (firestoreMenuItems) => (
   }, {})
 );
 
-const createStaffMembersFromCsv = (csvText) => {
-  const rows = parseCsvRows(csvText);
-  const [headers = [], ...dataRows] = rows;
-  const nameColumnIndex = headers.findIndex((header) => header.trim().toLowerCase() === 'name');
-  const roleColumnIndex = headers.findIndex((header) => header.trim().toLowerCase() === 'role');
-
-  if (nameColumnIndex === -1) {
-    return [];
-  }
-
-  const seenIds = new Set();
-
-  return dataRows
-    .map((row) => {
-      const name = row[nameColumnIndex]?.trim();
-
-      if (!name) {
-        return null;
-      }
-
-      const id = createStaffMemberId(name);
-
-      return {
-        id,
-        name,
-        role: roleColumnIndex === -1 ? 'Team' : row[roleColumnIndex]?.trim() || 'Team',
-        staffSection: inferStaffSection(roleColumnIndex === -1 ? 'Team' : row[roleColumnIndex]?.trim() || 'Team'),
-        isCsvSeed: true,
-      };
-    })
-    .filter(Boolean)
-    .filter((member) => {
-      if (seenIds.has(member.id)) {
-        return false;
-      }
-
-      seenIds.add(member.id);
-      return true;
-    });
-};
-
 const sanitizeStaffMembers = (members) => {
   if (!Array.isArray(members)) {
     return [];
@@ -625,7 +508,7 @@ const sanitizeStoreRoomMovements = (movements) => {
       }
 
       return {
-        id: String(movement?.id || `${Date.now()}-${Math.random().toString(36).slice(2)}`),
+        id: String(movement?.id || createRecordId('store_movement')),
         itemId: String(movement.itemId),
         itemName: String(movement.itemName),
         type,
@@ -676,6 +559,11 @@ function App() {
     menuItemCount: 0,
     projectId: FIRESTORE_RUNTIME_INFO.projectId,
   });
+  const [restaurantProfile, setRestaurantProfile] = useState(() => createDefaultRestaurantProfile());
+  const [restaurantProfileStatus, setRestaurantProfileStatus] = useState(FIRESTORE_CONFIGURED ? 'loading' : 'missing-config');
+  const [isOnline, setIsOnline] = useState(() => (
+    typeof navigator === 'undefined' ? true : navigator.onLine
+  ));
   const [syncAccessKey, setSyncAccessKey] = useState(() => localStorage.getItem('wasteShiftSyncAccessKey') || '');
   const [authSession, setAuthSession] = useState(() => {
     try {
@@ -874,6 +762,59 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const loadProfile = async () => {
+      if (!FIRESTORE_CONFIGURED) {
+        setRestaurantProfile(createDefaultRestaurantProfile());
+        setRestaurantProfileStatus('missing-config');
+        return;
+      }
+
+      setRestaurantProfileStatus('loading');
+
+      try {
+        const result = await loadRestaurantProfile();
+
+        if (!isCancelled) {
+          setRestaurantProfile(result.profile || createDefaultRestaurantProfile());
+          setRestaurantProfileStatus('ready');
+        }
+      } catch (error) {
+        console.warn('Restaurant profile unavailable.', error);
+
+        if (!isCancelled) {
+          setRestaurantProfile(createDefaultRestaurantProfile());
+          setRestaurantProfileStatus('error');
+          setFirebaseSync(prev => ({
+            ...prev,
+            status: 'error',
+            message: `${error?.message || 'Restaurant profile could not load.'} Setup cannot finish until Firebase is available.`,
+          }));
+        }
+      }
+    };
+
+    loadProfile();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     let isCancelled = false;
 
     const loadMenuItems = async () => {
@@ -951,10 +892,6 @@ function App() {
   const baseMenuItems = useMemo(() => {
     const mergedByKey = new Map();
 
-    createMenuItemsFromCsv(menuItemsCsv, effectiveRecipes).forEach((item) => {
-      mergedByKey.set(item.key, item);
-    });
-
     firestoreMenuItemCatalogRows.forEach((item) => {
       if (item.key) {
         mergedByKey.set(item.key, item);
@@ -962,7 +899,7 @@ function App() {
     });
 
     return [...mergedByKey.values()];
-  }, [effectiveRecipes, firestoreMenuItemCatalogRows]);
+  }, [firestoreMenuItemCatalogRows]);
   const menuItems = useMemo(() => (
     mergeMenuItems(baseMenuItems, customMenuItems, effectiveRecipes)
   ), [baseMenuItems, customMenuItems, effectiveRecipes]);
@@ -973,7 +910,7 @@ function App() {
       console.warn('Invoice dashboard stats unavailable.', error);
     }
   }, []);
-  const baseStaffList = useMemo(() => createStaffMembersFromCsv(staffMembersCsv), []);
+  const baseStaffList = useMemo(() => [], []);
   const staffList = useMemo(() => (
     mergeStaffMembers(baseStaffList, customStaffList)
   ), [baseStaffList, customStaffList]);
@@ -1474,36 +1411,8 @@ function App() {
   }, [activeStaffMember?.name, authSettings]);
 
   useEffect(() => {
-    let isCancelled = false;
-
-    const ensureDefaultPins = async () => {
-      if (authPinsAreConfigured(authSettings) && authSettings.pinPresetVersion) {
-        setIsPreparingAuth(false);
-        return;
-      }
-
-      setIsPreparingAuth(true);
-      const result = await handleSavePinSettings({
-        staffPin: DEFAULT_STAFF_PIN,
-        managementPin: DEFAULT_MANAGEMENT_PIN,
-        pinPresetVersion: DEFAULT_PIN_PRESET_VERSION,
-      });
-
-      if (!isCancelled && !result?.ok) {
-        console.error(result?.message || 'Could not prepare default PINs.');
-      }
-
-      if (!isCancelled) {
-        setIsPreparingAuth(false);
-      }
-    };
-
-    ensureDefaultPins();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [authSettings, handleSavePinSettings]);
+    setIsPreparingAuth(false);
+  }, []);
 
   const upsertLoginAccount = useCallback(({ mode, name, staffSection, staffCode }) => {
     const trimmedName = String(name || '').trim();
@@ -1550,6 +1459,51 @@ function App() {
 
     return { ...existingMember, ...nextMember };
   }, [staffList]);
+
+  const handleInitialManagerSetup = useCallback(async ({ name, managementPin }) => {
+    const trimmedName = String(name || '').trim();
+    const trimmedManagementPin = String(managementPin || '').trim();
+
+    if (!trimmedName) {
+      return { ok: false, message: 'Enter the first manager name.' };
+    }
+
+    const pinResult = await handleSavePinSettings({
+      managementPin: trimmedManagementPin,
+      pinPresetVersion: 'manager-created-v1',
+    });
+
+    if (!pinResult?.ok) {
+      return pinResult;
+    }
+
+    const managerMember = upsertLoginAccount({
+      mode: 'management',
+      name: trimmedName,
+    });
+    const nextSession = {
+      mode: 'management',
+      staffId: managerMember.id,
+      staffName: managerMember.name,
+      roleKey: inferRoleKey(managerMember.role),
+      startedAt: new Date().toISOString(),
+    };
+
+    setAuthSession(nextSession);
+    setActiveStaffId(managerMember.id);
+    setActiveTab('settings');
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: 'First manager setup',
+        user: managerMember.name,
+        relatedItem: 'Access settings',
+        afterValue: { staffId: managerMember.id, managementPinConfigured: true },
+      }),
+      ...prevLog,
+    ].slice(0, 500));
+
+    return { ok: true, message: 'Manager access created.' };
+  }, [handleSavePinSettings, upsertLoginAccount]);
 
   const handleLogin = useCallback(async ({ mode, name, staffSection, pin }) => {
     const trimmedName = String(name || '').trim();
@@ -1799,57 +1753,116 @@ function App() {
     };
   };
 
-  const handleAddEntry = (newEntry) => {
-    setWasteItems(prevItems => [...prevItems, newEntry]);
+  const updateWasteEntrySyncStatus = useCallback((entryId, syncStatus, syncError = '') => {
+    setWasteItems(prevItems => prevItems.map((item) => (
+      item.id === entryId
+        ? {
+          ...item,
+          syncStatus,
+          syncError,
+          syncedAt: syncStatus === 'synced' ? new Date().toISOString() : item.syncedAt || '',
+        }
+        : item
+    )));
+  }, []);
+
+  const syncWasteEntryToFirestore = useCallback(async (entry) => {
+    if (!FIRESTORE_CONFIGURED) {
+      return { ok: true, syncStatus: 'local', message: 'Firebase is not configured.' };
+    }
+
+    if (!isOnline) {
+      updateWasteEntrySyncStatus(entry.id, 'pending');
+      return { ok: true, syncStatus: 'pending', message: 'Entry queued until this device is online.' };
+    }
+
+    try {
+      const result = await saveFirestoreWasteEntry(entry);
+
+      if (result?.skipped) {
+        updateWasteEntrySyncStatus(entry.id, 'failed', 'Required fields were missing.');
+        return { ok: false, syncStatus: 'failed', message: 'Firebase skipped this entry because required fields were missing.' };
+      }
+
+      updateWasteEntrySyncStatus(entry.id, 'synced');
+      setFirebaseSync(prev => ({
+        ...prev,
+        status: 'synced',
+        message: 'Waste entry saved to Firebase.',
+        lastSavedAt: new Date().toISOString(),
+      }));
+      return { ok: true, syncStatus: 'synced' };
+    } catch (error) {
+      console.warn('Could not save waste entry to Firestore.', error);
+      const message = error?.message || 'Could not save waste entry to Firebase.';
+      updateWasteEntrySyncStatus(entry.id, 'failed', message);
+      setFirebaseSync(prev => ({
+        ...prev,
+        status: 'error',
+        message: `${message} Local copy is still saved.`,
+      }));
+      return { ok: false, syncStatus: 'failed', message };
+    }
+  }, [isOnline, updateWasteEntrySyncStatus]);
+
+  const handleAddEntry = async (newEntry) => {
+    const entryWithSync = {
+      ...newEntry,
+      syncStatus: FIRESTORE_CONFIGURED ? 'pending' : 'local',
+      syncError: '',
+    };
+
+    setWasteItems(prevItems => [...prevItems, entryWithSync]);
     setInventoryMovements(prevMovements => [
       ...prevMovements,
-      ...createInventoryMovementsFromEntry(newEntry),
+      ...createInventoryMovementsFromEntry(entryWithSync),
     ]);
-
-    if (FIRESTORE_CONFIGURED) {
-      saveFirestoreWasteEntry(newEntry)
-        .then((result) => {
-          if (result?.skipped) {
-            setFirebaseSync(prev => ({
-              ...prev,
-              status: 'error',
-              message: 'Firebase skipped this waste entry because required fields were missing.',
-            }));
-            return;
-          }
-
-          setFirebaseSync(prev => ({
-            ...prev,
-            status: 'synced',
-            message: 'Waste entry saved to Firebase.',
-            lastSavedAt: new Date().toISOString(),
-          }));
-        })
-        .catch((error) => {
-          console.warn('Could not save waste entry to Firestore.', error);
-          setFirebaseSync(prev => ({
-            ...prev,
-            status: 'error',
-            message: `${error?.message || 'Could not save waste entry to Firebase.'} Local copy is still saved.`,
-          }));
-        });
-    }
 
     setAuditLog(prevLog => [
       createAuditLogEntry({
         action: 'Waste entry created',
-        user: newEntry.createdBy || newEntry.staff,
-        relatedItem: newEntry.name,
+        user: entryWithSync.createdBy || entryWithSync.staff,
+        relatedItem: entryWithSync.name,
         afterValue: {
-          id: newEntry.id,
-          foodCostLost: getEntryFoodCostLost(newEntry),
-          potentialRevenueLost: Number(newEntry.potentialRevenueLost) || 0,
-          reason: newEntry.reason,
+          id: entryWithSync.id,
+          foodCostLost: getEntryFoodCostLost(entryWithSync),
+          potentialRevenueLost: Number(entryWithSync.potentialRevenueLost) || 0,
+          reason: entryWithSync.reason,
         },
       }),
       ...prevLog,
     ].slice(0, 500));
+
+    return syncWasteEntryToFirestore(entryWithSync);
   };
+
+  const handleRetryWasteEntrySync = useCallback(async (entryId) => {
+    const entry = wasteItems.find((item) => item.id === entryId);
+
+    if (!entry) {
+      return { ok: false, message: 'Entry not found.' };
+    }
+
+    return syncWasteEntryToFirestore({
+      ...entry,
+      syncStatus: 'pending',
+      syncError: '',
+    });
+  }, [syncWasteEntryToFirestore, wasteItems]);
+
+  useEffect(() => {
+    if (!FIRESTORE_CONFIGURED || !isOnline) {
+      return;
+    }
+
+    const retryableEntries = wasteItems.filter((item) => (
+      item?.id && ['pending', 'failed'].includes(item.syncStatus)
+    )).slice(0, 8);
+
+    retryableEntries.forEach((entry) => {
+      syncWasteEntryToFirestore(entry);
+    });
+  }, [isOnline, syncWasteEntryToFirestore, wasteItems]);
 
   const handleSavePortionProfile = (profile) => {
     const name = String(profile?.name || '').trim();
@@ -2121,7 +2134,7 @@ function App() {
   }, [activeStaffMember?.name]);
 
   const createStoreRoomMovement = ({ item, type, quantity, previousQuantity, nextQuantity, reason, notes }) => ({
-    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    id: createRecordId('store_movement'),
     itemId: item.id,
     itemName: item.name,
     type,
@@ -2308,6 +2321,249 @@ function App() {
       ...prevLog,
     ].slice(0, 500));
   };
+
+  const saveApprovedMenuItems = useCallback(async ({ items, historyRecord, skipPermission = false }) => {
+    const permission = skipPermission
+      ? { ok: true }
+      : requirePermission(accessProfile, 'canManageMenu', 'import menu items');
+
+    if (!permission.ok) {
+      return { ok: false, message: permission.message };
+    }
+
+    const safeItems = (Array.isArray(items) ? items : [])
+      .map((item) => {
+        const name = String(item?.name || '').trim();
+        const key = item?.key || createMenuItemKey(name);
+        const menuPrice = parsePriceValue(item?.sellingPrice ?? item?.menuPrice ?? item?.price);
+        const ingredients = (Array.isArray(item?.components) ? item.components : [])
+          .map((component) => ({
+            name: String(component?.name || '').trim(),
+            quantity: '',
+            cost: parsePriceValue(component?.cost) || 0,
+            category: item?.category || 'Other',
+          }))
+          .filter((component) => component.name);
+
+        if (!name || !key || menuPrice === null) {
+          return null;
+        }
+
+        return {
+          key,
+          name,
+          menuPrice,
+          category: String(item?.category || '').trim(),
+          description: String(item?.description || '').trim(),
+          portion: String(item?.portion || '').trim(),
+          ingredients,
+        };
+      })
+      .filter(Boolean);
+
+    if (safeItems.length === 0) {
+      return { ok: false, message: 'No valid approved menu items to save.' };
+    }
+
+    setRecipes(prevRecipes => {
+      const nextRecipes = { ...prevRecipes };
+
+      safeItems.forEach((item) => {
+        nextRecipes[item.key] = {
+          ...(nextRecipes[item.key] || {}),
+          name: item.name,
+          menuPrice: item.menuPrice,
+          category: item.category,
+          description: item.description,
+          portion: item.portion,
+          ingredients: item.ingredients,
+        };
+      });
+
+      return nextRecipes;
+    });
+
+    setCustomMenuItems(prevItems => {
+      const nextItems = new Map(prevItems.map((item) => [item.key, item]));
+
+      safeItems.forEach((item) => {
+        nextItems.set(item.key, {
+          key: item.key,
+          name: item.name,
+          menuPrice: item.menuPrice,
+        });
+      });
+
+      return [...nextItems.values()];
+    });
+
+    await Promise.all(safeItems.map(async (item) => {
+      const components = item.ingredients.map((ingredient, index) => ({
+        key: createMenuItemKey(`${ingredient.name}-${index}`),
+        name: ingredient.name,
+        cost: Number(ingredient.cost) || 0,
+      }));
+      const totalCost = roundCurrency(components.reduce((sum, component) => sum + component.cost, 0));
+
+      await saveFirestoreMenuItem({
+        key: item.key,
+        name: item.name,
+        menuPrice: item.menuPrice,
+        totalCost,
+        components,
+      });
+
+      setFirestoreMenuItems(prevItems => {
+        const nextItem = {
+          key: item.key,
+          firestoreId: item.key,
+          name: item.name,
+          menuPrice: item.menuPrice,
+          totalCost,
+          components,
+        };
+        const existingIndex = prevItems.findIndex((menuItem) => menuItem.key === item.key);
+
+        if (existingIndex === -1) {
+          return [...prevItems, nextItem].sort((a, b) => a.name.localeCompare(b.name));
+        }
+
+        return prevItems.map((menuItem, index) => (
+          index === existingIndex ? { ...menuItem, ...nextItem } : menuItem
+        ));
+      });
+    }));
+
+    if (historyRecord) {
+      await saveMenuImportHistory(historyRecord);
+    }
+
+    setFirebaseSync(prev => ({
+      ...prev,
+      status: 'synced',
+      message: `${safeItems.length} menu item${safeItems.length === 1 ? '' : 's'} saved to Firebase.`,
+      lastSavedAt: new Date().toISOString(),
+      menuItemCount: Math.max(prev.menuItemCount, firestoreMenuItems.length + safeItems.length),
+    }));
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: 'Menu import saved',
+        user: activeStaffMember?.name || 'Setup manager',
+        relatedItem: historyRecord?.sourceName || 'Menu import',
+        afterValue: {
+          importedItems: safeItems.length,
+          importId: historyRecord?.id || '',
+        },
+      }),
+      ...prevLog,
+    ].slice(0, 500));
+
+    return { ok: true, message: `${safeItems.length} menu item${safeItems.length === 1 ? '' : 's'} saved.` };
+  }, [accessProfile, activeStaffMember?.name, firestoreMenuItems.length]);
+
+  const handleFinishSetup = useCallback(async (setupProgress) => {
+    const restaurantName = String(setupProgress?.restaurantName || '').trim();
+    const managerName = String(setupProgress?.managerName || '').trim();
+    const managerPin = String(setupProgress?.managerPin || '').trim();
+
+    if (!restaurantName) {
+      return { ok: false, message: 'Enter the restaurant name.' };
+    }
+
+    if (!managerName || !managerPin) {
+      return { ok: false, message: 'Manager setup is required.' };
+    }
+
+    const profileResult = await saveRestaurantProfile({
+      restaurantName,
+      branchName: setupProgress?.branchName,
+      currency: 'ZAR',
+      timezone: 'Africa/Johannesburg',
+    }, { completeSetup: true });
+
+    if (!profileResult?.ok) {
+      return { ok: false, message: 'Could not save restaurant profile to Firebase.' };
+    }
+
+    const pinResult = await handleSavePinSettings({
+      managementPin: managerPin,
+      pinPresetVersion: 'setup-wizard-v1',
+    });
+
+    if (!pinResult?.ok) {
+      return pinResult;
+    }
+
+    const managerMember = {
+      id: createStaffMemberId(managerName),
+      name: managerName,
+      role: 'Manager',
+      staffSection: 'management',
+      removed: false,
+      removedAt: '',
+      isCsvSeed: false,
+    };
+    const setupStaffMembers = await Promise.all(
+      (Array.isArray(setupProgress?.staffMembers) ? setupProgress.staffMembers : [])
+        .filter((member) => String(member?.name || '').trim())
+        .map(async (member) => ({
+          id: createStaffMemberId(member.name),
+          name: String(member.name || '').trim(),
+          role: String(member.role || 'Team').trim(),
+          staffSection: member.staffSection || inferStaffSection(member.role),
+          staffCode: await createPinRecord(member.code),
+          removed: member.active === false,
+          removedAt: member.active === false ? new Date().toISOString() : '',
+          isCsvSeed: false,
+        }))
+    );
+
+    setCustomStaffList([managerMember, ...setupStaffMembers]);
+    setBudget(parseFloat(setupProgress?.budget) || 0);
+    setSettings(sanitizeSettings({
+      dailyWasteValueLimit: setupProgress?.dailyWasteValueLimit,
+      dailyWasteEntryLimit: setupProgress?.dailyWasteEntryLimit,
+    }));
+
+    if (Array.isArray(setupProgress?.menuItems) && setupProgress.menuItems.length > 0) {
+      await saveApprovedMenuItems({
+        skipPermission: true,
+        items: setupProgress.menuItems.map((item) => ({
+          ...item,
+          sellingPrice: item.sellingPrice ?? item.menuPrice,
+        })),
+      });
+    }
+
+    const nextSession = {
+      mode: 'management',
+      staffId: managerMember.id,
+      staffName: managerMember.name,
+      roleKey: inferRoleKey(managerMember.role),
+      startedAt: new Date().toISOString(),
+    };
+
+    setRestaurantProfile(profileResult.profile);
+    setRestaurantProfileStatus('ready');
+    setAuthSession(nextSession);
+    setActiveStaffId(managerMember.id);
+    setActiveTab('dashboard');
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: 'Setup completed',
+        user: managerMember.name,
+        relatedItem: restaurantName,
+        afterValue: {
+          staffCreated: setupStaffMembers.length,
+          menuItemsCreated: setupProgress?.menuItems?.length || 0,
+          setupCompleted: true,
+        },
+      }),
+      ...prevLog,
+    ].slice(0, 500));
+
+    return { ok: true, message: 'Setup complete.' };
+  }, [handleSavePinSettings, saveApprovedMenuItems]);
 
   const handleAddNewRecipe = (key, recipeObject) => {
     const permission = requirePermission(accessProfile, 'canManageMenu', 'manage menu items and recipes');
@@ -2528,6 +2784,63 @@ function App() {
     }
   };
 
+  const handleResetRestaurantData = async (confirmationPhrase) => {
+    const permission = requirePermission(accessProfile, 'canClearData', 'reset restaurant data');
+
+    if (!permission.ok) {
+      return { ok: false, message: permission.message };
+    }
+
+    if (!validateRestaurantResetConfirmation(confirmationPhrase)) {
+      return { ok: false, message: 'Type RESET to confirm.' };
+    }
+
+    try {
+      if (FIRESTORE_CONFIGURED) {
+        await resetRestaurantFirestoreData();
+      }
+
+      getRestaurantResetStorageKeys().forEach((key) => {
+        localStorage.removeItem(key);
+        sessionStorage.removeItem(key);
+      });
+
+      const emptyData = createEmptyRestaurantData();
+      setWasteItems(emptyData.wasteItems);
+      setRecipes(emptyData.recipes);
+      setCustomStaffList(emptyData.customStaffList);
+      setCustomMenuItems(emptyData.customMenuItems);
+      setPortionProfiles(emptyData.portionProfiles);
+      setItemPriceCatalog(emptyData.itemPriceCatalog);
+      setStoreRoomItems(emptyData.storeRoomItems);
+      setStoreRoomMovements(emptyData.storeRoomMovements);
+      setInventoryMovements(emptyData.inventoryMovements);
+      setAuditLog(emptyData.auditLog);
+      setFirestoreMenuItems([]);
+      setAuthSettings(DEFAULT_AUTH_SETTINGS);
+      setAuthSession(null);
+      setActiveStaffId('');
+      setBudget(0);
+      setSettings(DEFAULT_SETTINGS);
+      setRestaurantProfile(createDefaultRestaurantProfile());
+      setRestaurantProfileStatus(FIRESTORE_CONFIGURED ? 'ready' : 'missing-config');
+      setActiveTab('dashboard');
+      setFirebaseSync(prev => ({
+        ...prev,
+        status: FIRESTORE_CONFIGURED ? 'synced' : 'local',
+        message: FIRESTORE_CONFIGURED
+          ? 'Restaurant data reset. Complete setup again.'
+          : 'Local restaurant data reset. Configure Firebase before setup can finish.',
+        lastSavedAt: new Date().toISOString(),
+        menuItemCount: 0,
+      }));
+
+      return { ok: true, message: 'Restaurant data reset. Setup will start again.' };
+    } catch (error) {
+      return { ok: false, message: error?.message || 'Could not reset restaurant data.' };
+    }
+  };
+
   const handleRestoreDatabase = (databaseData) => {
     const permission = requirePermission(accessProfile, 'canRestoreDatabase', 'restore a database backup');
     if (!permission.ok) {
@@ -2540,12 +2853,49 @@ function App() {
 
   const appIsLocked = !authSession || !authPinsAreConfigured(authSettings);
 
+  if (restaurantProfileStatus === 'loading') {
+    return (
+      <main className="auth-screen">
+        <section className="auth-panel">
+          <div className="brand auth-brand">
+            <span className="brand-mark">WS</span>
+            <div>
+              <h1 className="brand-name">WasteShift</h1>
+              <p className="brand-subtitle">Loading restaurant profile</p>
+            </div>
+          </div>
+          <div className="muted-box" style={{ marginBottom: 0 }}>Checking setup status.</div>
+        </section>
+      </main>
+    );
+  }
+
+  if (!restaurantProfile.setupCompleted) {
+    return (
+      <Suspense fallback={(
+        <main className="auth-screen">
+          <section className="auth-panel">
+            <div className="muted-box" style={{ marginBottom: 0 }}>Loading setup...</div>
+          </section>
+        </main>
+      )}>
+        <SetupWizard
+          firestoreConfigured={FIRESTORE_CONFIGURED}
+          firebaseSync={firebaseSync}
+          onFinishSetup={handleFinishSetup}
+        />
+      </Suspense>
+    );
+  }
+
   if (appIsLocked) {
     return (
       <AuthGate
         isPreparingAuth={isPreparingAuth}
+        authIsConfigured={authPinsAreConfigured(authSettings)}
         staffList={staffList}
         onLogin={handleLogin}
+        onInitialManagerSetup={handleInitialManagerSetup}
       />
     );
   }
@@ -2562,111 +2912,118 @@ function App() {
       />
 
       <main className={`app-page${activeTab === 'dashboard' || activeTab === 'storeRoom' || activeTab === 'invoices' || activeTab === 'wasteLog' || activeTab === 'settings' ? ' app-page--wide' : ''}`}>
-        {activeTab === 'dashboard' && (
-          <Dashboard
-            items={wasteItems}
-            budget={budget}
-            settings={settings}
-            staffList={staffList}
-            accessProfile={accessProfile}
-            invoiceStats={invoiceDashboardStats}
-          />
-        )}
+        <ErrorBoundary key={activeTab}>
+          <Suspense fallback={<PageFallback label="Loading screen" />}>
+            {activeTab === 'dashboard' && (
+              <Dashboard
+                items={wasteItems}
+                budget={budget}
+                settings={settings}
+                staffList={staffList}
+                accessProfile={accessProfile}
+                invoiceStats={invoiceDashboardStats}
+              />
+            )}
 
-        {activeTab === 'logWaste' && (
-          <WasteForm
-            onAddEntry={handleAddEntry}
-            wasteItems={wasteItems}
-            recipes={effectiveRecipes}
-            menuItems={menuItems}
-            staffList={staffList}
-            portionProfiles={portionProfiles}
-            itemPriceCatalog={itemPriceCatalog}
-            accessProfile={accessProfile}
-            onSavePortionProfile={handleSavePortionProfile}
-            activeStaffId={activeStaffId}
-            onActiveStaffChange={setActiveStaffId}
-          />
-        )}
+          {activeTab === 'logWaste' && (
+            <WasteForm
+              onAddEntry={handleAddEntry}
+              wasteItems={wasteItems}
+              recipes={effectiveRecipes}
+              menuItems={menuItems}
+              staffList={staffList}
+              portionProfiles={portionProfiles}
+              itemPriceCatalog={itemPriceCatalog}
+              accessProfile={accessProfile}
+              onSavePortionProfile={handleSavePortionProfile}
+              activeStaffId={activeStaffId}
+              onActiveStaffChange={setActiveStaffId}
+              onRetryEntrySync={handleRetryWasteEntrySync}
+            />
+          )}
 
-        {activeTab === 'wasteLog' && (
-          <WasteList
-            items={wasteItems}
-            onDeleteEntry={handleDeleteEntry}
-            onRestoreEntry={handleRestoreEntry}
-            accessProfile={accessProfile}
-            activeStaffMember={activeStaffMember}
-          />
-        )}
+          {activeTab === 'wasteLog' && (
+            <WasteList
+              items={wasteItems}
+              onDeleteEntry={handleDeleteEntry}
+              onRestoreEntry={handleRestoreEntry}
+              accessProfile={accessProfile}
+              activeStaffMember={activeStaffMember}
+            />
+          )}
 
-        {activeTab === 'storeRoom' && (
-          <StoreRoom
-            storeRoomItems={storeRoomItems}
-            storeRoomMovements={storeRoomMovements}
-            itemPriceCatalog={itemPriceCatalog}
-            accessProfile={accessProfile}
-            onSaveStoreRoomItem={handleSaveStoreRoomItem}
-            onRecordStoreRoomMovement={handleRecordStoreRoomMovement}
-            onDeleteStoreRoomItem={handleDeleteStoreRoomItem}
-          />
-        )}
+          {activeTab === 'storeRoom' && (
+            <StoreRoom
+              storeRoomItems={storeRoomItems}
+              storeRoomMovements={storeRoomMovements}
+              itemPriceCatalog={itemPriceCatalog}
+              accessProfile={accessProfile}
+              onSaveStoreRoomItem={handleSaveStoreRoomItem}
+              onRecordStoreRoomMovement={handleRecordStoreRoomMovement}
+              onDeleteStoreRoomItem={handleDeleteStoreRoomItem}
+            />
+          )}
 
-        {activeTab === 'invoices' && (
-          <InvoiceScanner
-            accessProfile={accessProfile}
-            recipes={effectiveRecipes}
-            menuItems={menuItems}
-            itemPriceCatalog={itemPriceCatalog}
-            inventoryMovements={inventoryMovements}
-            onInvoiceSaved={refreshInvoiceDashboardStats}
-            onInvoicePricesUpdated={handleInvoicePricesUpdated}
-            onIngredientDeleted={handleInvoiceIngredientDeleted}
-          />
-        )}
+          {activeTab === 'invoices' && (
+            <InvoiceScanner
+              accessProfile={accessProfile}
+              recipes={effectiveRecipes}
+              menuItems={menuItems}
+              itemPriceCatalog={itemPriceCatalog}
+              inventoryMovements={inventoryMovements}
+              onInvoiceSaved={refreshInvoiceDashboardStats}
+              onInvoicePricesUpdated={handleInvoicePricesUpdated}
+              onIngredientDeleted={handleInvoiceIngredientDeleted}
+            />
+          )}
 
-        {activeTab === 'settings' && (
-          <Settings
-            budget={budget}
-            settings={settings}
-            wasteItems={wasteItems}
-            recipes={effectiveRecipes}
-            staffList={staffList}
-            customStaffList={customStaffList}
-            menuItems={menuItems}
-            customMenuItems={customMenuItems}
-            itemPriceCatalog={itemPriceCatalog}
-            storeRoomItems={storeRoomItems}
-            storeRoomMovements={storeRoomMovements}
-            portionProfiles={portionProfiles}
-            activeStaffId={activeStaffId}
-            activeStaffMember={activeStaffMember}
-            accessProfile={accessProfile}
-            inventoryMovements={inventoryMovements}
-            auditLog={auditLog}
-            syncAccessKey={syncAccessKey}
-            authSettings={authSettings}
-            authSession={authSession}
-            firebaseSync={firebaseSync}
-            serverSync={serverSync}
-            lastSavedAt={lastSavedAt}
-            onSaveSettings={handleSaveSettings}
-            onClearAllWaste={handleClearAll}
-            onAddStaff={handleAddStaff}
-            onDeleteStaff={handleDeleteStaff}
-            onResetStaffCode={handleResetStaffCode}
-            onAddRecipe={handleAddNewRecipe}
-            onClearRecipes={handleClearRecipes}
-            onSaveMenuItem={handleUpsertMenuItem}
-            onRemoveCustomMenuItem={handleDeleteCustomMenuItem}
-            onSaveItemPrice={handleSaveItemPrice}
-            onDeleteItemPrice={handleDeleteItemPrice}
-            onSaveToServer={() => saveDatabaseToServer('manual')}
-            onSaveSyncAccessKey={setSyncAccessKey}
-            onSavePinSettings={handleSavePinSettings}
-            onLogout={handleLogout}
-            onRestoreDatabase={handleRestoreDatabase}
-          />
-        )}
+            {activeTab === 'settings' && (
+              <Settings
+                budget={budget}
+                settings={settings}
+                wasteItems={wasteItems}
+                recipes={effectiveRecipes}
+                staffList={staffList}
+                customStaffList={customStaffList}
+                menuItems={menuItems}
+                customMenuItems={customMenuItems}
+                itemPriceCatalog={itemPriceCatalog}
+                storeRoomItems={storeRoomItems}
+                storeRoomMovements={storeRoomMovements}
+                portionProfiles={portionProfiles}
+                activeStaffId={activeStaffId}
+                activeStaffMember={activeStaffMember}
+                accessProfile={accessProfile}
+                inventoryMovements={inventoryMovements}
+                auditLog={auditLog}
+                syncAccessKey={syncAccessKey}
+                authSettings={authSettings}
+                authSession={authSession}
+                firebaseSync={firebaseSync}
+                serverSync={serverSync}
+                lastSavedAt={lastSavedAt}
+                onSaveSettings={handleSaveSettings}
+                onClearAllWaste={handleClearAll}
+                onAddStaff={handleAddStaff}
+                onDeleteStaff={handleDeleteStaff}
+                onResetStaffCode={handleResetStaffCode}
+                onAddRecipe={handleAddNewRecipe}
+                onClearRecipes={handleClearRecipes}
+                onSaveMenuItem={handleUpsertMenuItem}
+                onRemoveCustomMenuItem={handleDeleteCustomMenuItem}
+                onImportMenuItems={saveApprovedMenuItems}
+                onSaveItemPrice={handleSaveItemPrice}
+                onDeleteItemPrice={handleDeleteItemPrice}
+                onSaveToServer={() => saveDatabaseToServer('manual')}
+                onSaveSyncAccessKey={setSyncAccessKey}
+                onSavePinSettings={handleSavePinSettings}
+                onLogout={handleLogout}
+                onRestoreDatabase={handleRestoreDatabase}
+                onResetRestaurantData={handleResetRestaurantData}
+              />
+            )}
+          </Suspense>
+        </ErrorBoundary>
       </main>
     </div>
   );

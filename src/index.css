@@ -133,6 +133,15 @@ button:disabled {
   backdrop-filter: blur(26px) saturate(1.18);
 }
 
+.setup-screen {
+  align-items: start;
+  padding-block: 28px;
+}
+
+.setup-panel {
+  width: min(100%, 920px);
+}
+
 .auth-panel,
 .panel,
 .metric-card,
@@ -516,6 +525,28 @@ button:disabled {
   border-color: rgba(255, 209, 102, 0.24);
 }
 
+.error-boundary-panel {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.load-more-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px 0 4px;
+}
+
+.load-more-row .ghost-button {
+  min-height: 48px;
+}
+
+.invoice-load-more-row {
+  grid-column: 1 / -1;
+}
+
 .notice-list,
 .suggestion-row,
 .import-summary-grid {
@@ -634,6 +665,22 @@ button:disabled {
   border: 1px solid var(--border-soft);
   border-radius: 8px;
   box-shadow: var(--inner-highlight);
+}
+
+.ingredient-card.is-muted {
+  opacity: 0.58;
+}
+
+.shift-summary-panel {
+  margin-bottom: 18px;
+  padding: 16px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.suggestion-row--compact {
+  margin-top: 8px;
 }
 
 .action-card {

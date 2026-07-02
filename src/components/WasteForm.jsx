@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   calculateItemPriceCost,
   findItemPriceRecord,
@@ -17,6 +17,13 @@ import {
   getWasteClassificationMeta,
   roundCurrency,
 } from '../utils/wasteCalculations';
+import { createRecordId } from '../utils/ids';
+import {
+  deleteWasteFormDraft,
+  loadWasteFormDraft,
+  saveWasteFormDraft,
+  wasteDraftHasContent,
+} from '../utils/wasteDrafts';
 
 const WASTE_UNITS = [
   { value: 'each', label: 'items / each' },
@@ -201,6 +208,7 @@ function WasteForm({
   onSavePortionProfile,
   activeStaffId,
   onActiveStaffChange,
+  onRetryEntrySync,
 }) {
   const [formType, setFormType] = useState('single');
   const [menuSearch, setMenuSearch] = useState('');
@@ -220,6 +228,11 @@ function WasteForm({
   const [photoPreview, setPhotoPreview] = useState('');
   const [photoName, setPhotoName] = useState('');
   const [isProcessingPhoto, setIsProcessingPhoto] = useState(false);
+  const [isSavingEntry, setIsSavingEntry] = useState(false);
+  const [draftLoaded, setDraftLoaded] = useState(false);
+  const [draftSavedAt, setDraftSavedAt] = useState('');
+  const [lastSavedEntryId, setLastSavedEntryId] = useState('');
+  const submitInFlightRef = useRef(false);
 
   const getTodayYMD = () => new Date().toISOString().split('T')[0];
   const [wasteDate, setWasteDate] = useState(getTodayYMD());
@@ -374,6 +387,76 @@ function WasteForm({
       ? `${selectedRecipeComponentCount} of ${allRecipeComponents.length} components`
       : 'Full item'
     : '';
+  const quickReasonOptions = useMemo(() => (
+    Array.from(new Set([
+      suggestedReason,
+      'Expired',
+      'Spoiled',
+      'Overproduction',
+      'Dropped',
+      'Quality issue',
+    ].filter(Boolean))).slice(0, 5)
+  ), [suggestedReason]);
+  const draftFields = useMemo(() => ({
+    formType,
+    menuSearch,
+    name,
+    quantity,
+    unit,
+    portionAmount,
+    portionUnit,
+    category,
+    wasteClassification,
+    reason,
+    customReason,
+    selectedStaffId,
+    cost,
+    notes,
+    wasteDate,
+    selectedRecipeKey,
+    selectedComponentKeys,
+  }), [category, cost, customReason, formType, menuSearch, name, notes, portionAmount, portionUnit, quantity, reason, selectedComponentKeys, selectedRecipeKey, selectedStaffId, unit, wasteClassification, wasteDate]);
+
+  const clearFormAfterSave = () => {
+    setName('');
+    setQuantity('1');
+    setUnit(formType === 'recipe' ? 'portion' : 'each');
+    if (formType === 'single') {
+      setPortionAmount('');
+      setPortionUnit('g');
+      setCost('');
+    } else {
+      setSelectedComponentKeys(allRecipeComponentKeys);
+    }
+    setReason('Expired');
+    setCustomReason('');
+    setNotes('');
+    setWasteDate(getTodayYMD());
+    setPhotoPreview('');
+    setPhotoName('');
+    deleteWasteFormDraft().catch(() => {});
+    setDraftSavedAt('');
+  };
+
+  const applyDraftFields = useCallback((fields) => {
+    setFormType(fields.formType || 'single');
+    setMenuSearch(fields.menuSearch || '');
+    setName(fields.name || '');
+    setQuantity(fields.quantity || '1');
+    setUnit(fields.unit || 'each');
+    setPortionAmount(fields.portionAmount || '');
+    setPortionUnit(fields.portionUnit || 'g');
+    setCategory(fields.category || 'Produce');
+    setWasteClassification(fields.wasteClassification || DEFAULT_WASTE_CLASSIFICATION);
+    setReason(fields.reason || 'Expired');
+    setCustomReason(fields.customReason || '');
+    setSelectedStaffId(fields.selectedStaffId || activeStaffId || '');
+    setCost(fields.cost || '');
+    setNotes(fields.notes || '');
+    setWasteDate(fields.wasteDate || getTodayYMD());
+    setSelectedRecipeKey(fields.selectedRecipeKey || safeMenuItems[0]?.key || '');
+    setSelectedComponentKeys(Array.isArray(fields.selectedComponentKeys) ? fields.selectedComponentKeys : []);
+  }, [activeStaffId, safeMenuItems]);
 
   const applyProfile = (profile) => {
     if (!profile) return;
@@ -456,6 +539,67 @@ function WasteForm({
   }, [activeStaffId, selectedStaffId]);
 
   useEffect(() => {
+    let isCancelled = false;
+
+    loadWasteFormDraft()
+      .then((draft) => {
+        if (isCancelled) {
+          return;
+        }
+
+        if (draft?.fields && wasteDraftHasContent(draft)) {
+          applyDraftFields(draft.fields);
+          setDraftSavedAt(draft.savedAt || '');
+          setFormMessage('Draft restored. Finish it or discard it.');
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!isCancelled) {
+          setDraftLoaded(true);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [applyDraftFields]);
+
+  useEffect(() => {
+    if (!draftLoaded || isSavingEntry) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      if (!wasteDraftHasContent(draftFields)) {
+        deleteWasteFormDraft().catch(() => {});
+        setDraftSavedAt('');
+        return;
+      }
+
+      saveWasteFormDraft(draftFields)
+        .then(() => setDraftSavedAt(new Date().toISOString()))
+        .catch(() => {});
+    }, 500);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [draftFields, draftLoaded, isSavingEntry]);
+
+  useEffect(() => {
+    const handleBeforeUnload = (event) => {
+      if (!wasteDraftHasContent(draftFields)) {
+        return;
+      }
+
+      event.preventDefault();
+      event.returnValue = '';
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [draftFields]);
+
+  useEffect(() => {
     if (formType !== 'single' || unit !== 'portion') {
       return;
     }
@@ -526,8 +670,34 @@ function WasteForm({
     onActiveStaffChange?.(staffId);
   };
 
-  const handleRepeatLastEntry = () => {
+  const handleDiscardDraft = async () => {
+    clearFormAfterSave();
+    await deleteWasteFormDraft().catch(() => {});
+    setFormMessage('Draft discarded.');
+  };
+
+  const handleRetryLastSync = async () => {
+    if (!lastSavedEntryId || !onRetryEntrySync) {
+      return;
+    }
+
+    setIsSavingEntry(true);
+    setFormMessage('Retrying sync...');
+
+    try {
+      const result = await onRetryEntrySync(lastSavedEntryId);
+      setFormMessage(result?.ok ? 'Entry synced.' : result?.message || 'Entry still needs sync.');
+    } finally {
+      setIsSavingEntry(false);
+    }
+  };
+
+  const handleRepeatLastEntry = async () => {
     if (!lastEntry) {
+      return;
+    }
+
+    if (submitInFlightRef.current) {
       return;
     }
 
@@ -545,11 +715,12 @@ function WasteForm({
     const repeatedEntry = {
       ...lastEntry,
       ...repeatedStaff,
-      id: `${Date.now()}`,
+      id: createRecordId('waste'),
       date: formattedDate,
       time,
       createdAt: now.toISOString(),
       status: 'logged',
+      syncStatus: 'pending',
       repeatedFromId: lastEntry.id,
       notes: '',
       photoUrl: '',
@@ -557,8 +728,24 @@ function WasteForm({
       photoCapturedAt: '',
     };
 
-    onAddEntry(repeatedEntry);
-    setFormMessage(`Repeated ${lastEntry.name} for R${getEntryFoodCostLost(repeatedEntry).toFixed(2)}.`);
+    submitInFlightRef.current = true;
+    setIsSavingEntry(true);
+    setFormMessage('Saving repeated entry...');
+
+    try {
+      const result = await onAddEntry(repeatedEntry);
+      setLastSavedEntryId(repeatedEntry.id);
+      setFormMessage(
+        result?.syncStatus === 'failed'
+          ? `Repeated ${lastEntry.name}. Saved locally, sync needs retry.`
+          : result?.syncStatus === 'pending'
+            ? `Repeated ${lastEntry.name}. It will sync when online.`
+            : `Repeated ${lastEntry.name} for R${getEntryFoodCostLost(repeatedEntry).toFixed(2)}.`
+      );
+    } finally {
+      submitInFlightRef.current = false;
+      setIsSavingEntry(false);
+    }
   };
 
   const handlePhotoChange = async (event) => {
@@ -584,8 +771,12 @@ function WasteForm({
     }
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+
+    if (submitInFlightRef.current || isSavingEntry) {
+      return;
+    }
 
     if (isProcessingPhoto) {
       setFormMessage('Wait a moment while WasteShift prepares the photo, then save again.');
@@ -662,7 +853,7 @@ function WasteForm({
     const entryTime = now.toTimeString().slice(0, 5);
 
     let finalEntry = {
-      id: Date.now().toString(),
+      id: createRecordId('waste'),
       reason: actualReason,
       notes: notes.trim(),
       wasteClassification,
@@ -677,6 +868,7 @@ function WasteForm({
       createdBy: selectedStaffMember.name,
       lastEditedBy: selectedStaffMember.name,
       status: 'logged',
+      syncStatus: 'pending',
       photoUrl: photoPreview,
       photoName,
       photoCapturedAt: photoPreview ? now.toISOString() : '',
@@ -757,11 +949,28 @@ function WasteForm({
       };
     }
 
-    onAddEntry(finalEntry);
+    submitInFlightRef.current = true;
+    setIsSavingEntry(true);
+    setFormMessage('Saving waste entry...');
+
+    let saveResult = null;
+
+    try {
+      saveResult = await onAddEntry(finalEntry);
+    } finally {
+      submitInFlightRef.current = false;
+      setIsSavingEntry(false);
+    }
+
+    setLastSavedEntryId(finalEntry.id);
     setFormMessage(
-      finalEntry.costStatus === 'needs_item_price'
-        ? `Logged ${finalEntry.name}. Management needs to add an item price.`
-        : `Logged ${finalEntry.name} for R${(Number(finalEntry.cost) || 0).toFixed(2)}.`
+      saveResult?.syncStatus === 'failed'
+        ? `Logged ${finalEntry.name} locally. Sync failed, use retry.`
+        : saveResult?.syncStatus === 'pending'
+          ? `Logged ${finalEntry.name}. It will sync when online.`
+          : finalEntry.costStatus === 'needs_item_price'
+            ? `Logged ${finalEntry.name}. Management needs to add an item price.`
+            : `Logged ${finalEntry.name} for R${(Number(finalEntry.cost) || 0).toFixed(2)}.`
     );
     if (formType === 'single' && unit === 'portion') {
       onSavePortionProfile?.({
@@ -771,22 +980,7 @@ function WasteForm({
         unit: portionSizeUnit,
       });
     }
-    setName('');
-    setQuantity('1');
-    setUnit(formType === 'recipe' ? 'portion' : 'each');
-    if (formType === 'single') {
-      setPortionAmount('');
-      setPortionUnit('g');
-    } else {
-      setSelectedComponentKeys(allRecipeComponentKeys);
-    }
-    setReason('Expired');
-    setCustomReason('');
-    setNotes('');
-    setWasteDate(getTodayYMD());
-    setPhotoPreview('');
-    setPhotoName('');
-    if (formType === 'single') setCost('');
+    clearFormAfterSave();
   };
 
   return (
@@ -797,6 +991,12 @@ function WasteForm({
             <p className="eyebrow">Waste entry</p>
             <h2 className="title">Log Waste</h2>
             <p className="subtitle">Capture raw stock waste or finished menu items.</p>
+          </div>
+          <div className="manager-row">
+            {draftSavedAt && <span className="badge">Draft saved</span>}
+            <button type="button" className="ghost-button compact-action" onClick={handleDiscardDraft}>
+              Clear form
+            </button>
           </div>
         </div>
 
@@ -1058,6 +1258,18 @@ function WasteForm({
               onChange={(e) => setQuantity(e.target.value)}
               className="input"
             />
+            <div className="suggestion-row suggestion-row--compact">
+              {['1', '2', '3'].map((quickQuantity) => (
+                <button
+                  key={quickQuantity}
+                  type="button"
+                  onClick={() => setQuantity(quickQuantity)}
+                  className={`pill-button${quantity === quickQuantity ? ' is-active' : ''}`}
+                >
+                  {quickQuantity}
+                </button>
+              ))}
+            </div>
           </div>
 
           {formType === 'single' && (
@@ -1154,6 +1366,21 @@ function WasteForm({
 
         <div className="field">
           <label htmlFor="waste-reason">Reason for waste</label>
+          <div className="filter-row" style={{ marginBottom: 10 }}>
+            {quickReasonOptions.map((quickReason) => (
+              <button
+                key={quickReason}
+                type="button"
+                onClick={() => {
+                  setReason(quickReason);
+                  setCustomReason('');
+                }}
+                className={`pill-button${reason === quickReason ? ' is-active' : ''}`}
+              >
+                {quickReason}
+              </button>
+            ))}
+          </div>
           <select id="waste-reason" value={reason} onChange={(e) => setReason(e.target.value)} className="select">
             {WASTE_REASONS.map((reasonOption) => (
               <option key={reasonOption} value={reasonOption}>
@@ -1265,15 +1492,20 @@ function WasteForm({
 
         <button
           type="submit"
-          disabled={isProcessingPhoto || (formType === 'recipe' && safeMenuItems.length === 0)}
+          disabled={isSavingEntry || isProcessingPhoto || (formType === 'recipe' && safeMenuItems.length === 0)}
           className="primary-button"
         >
-          {isProcessingPhoto ? 'Preparing photo...' : 'Log waste'}
+          {isSavingEntry ? 'Saving...' : isProcessingPhoto ? 'Preparing photo...' : 'Log waste'}
         </button>
 
         {formMessage && (
           <div className="inline-message" role="status">
             {formMessage}
+            {lastSavedEntryId && /sync/i.test(formMessage) && (
+              <button type="button" className="ghost-button compact-action" onClick={handleRetryLastSync} disabled={isSavingEntry}>
+                Retry sync
+              </button>
+            )}
           </div>
         )}
       </div>

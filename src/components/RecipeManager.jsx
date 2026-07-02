@@ -9,6 +9,7 @@ import {
   findItemPriceRecord,
   sanitizeItemPriceCatalog,
 } from '../utils/itemPriceCatalog';
+import MenuImportPanel from './MenuImportPanel';
 
 const createBlankIngredient = () => ({
   name: '',
@@ -49,6 +50,8 @@ function RecipeManager({
   onClearRecipes,
   onSaveMenuItem,
   onRemoveCustomMenuItem,
+  onImportMenuItems,
+  activeStaffMember,
 }) {
   const [recipeName, setRecipeName] = useState('');
   const [recipePrice, setRecipePrice] = useState('');
@@ -258,6 +261,12 @@ function RecipeManager({
 
   return (
     <section className="inventory-section">
+      <MenuImportPanel
+        existingMenuItems={safeMenuItems}
+        activeStaffMember={activeStaffMember}
+        onSaveApprovedItems={onImportMenuItems}
+      />
+
       <form onSubmit={handleSubmitRecipe} className="panel">
         <div className="panel-body">
           <div className="section-header">

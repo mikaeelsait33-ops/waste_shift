@@ -2,12 +2,15 @@ import { useState } from 'react';
 
 function AuthGate({
   isPreparingAuth,
+  authIsConfigured = false,
   staffList = [],
   onLogin,
+  onInitialManagerSetup,
 }) {
   const [mode, setMode] = useState('staff');
   const [name, setName] = useState('');
   const [pin, setPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
   const [message, setMessage] = useState('');
   const [isBusy, setIsBusy] = useState(false);
   const staffLoginOptions = (Array.isArray(staffList) ? staffList : [])
@@ -22,6 +25,39 @@ function AuthGate({
 
   const handleLoginSubmit = async (event) => {
     event.preventDefault();
+
+    if (!authIsConfigured) {
+      if (!name.trim()) {
+        setMessage('Enter the first manager name.');
+        return;
+      }
+
+      if (pin !== confirmPin) {
+        setMessage('Management PINs do not match.');
+        return;
+      }
+
+      setIsBusy(true);
+      setMessage('');
+
+      try {
+        const result = await onInitialManagerSetup?.({
+          name: name.trim(),
+          managementPin: pin,
+        });
+
+        if (!result?.ok) {
+          setMessage(result?.message || 'Could not create manager access.');
+          return;
+        }
+
+        setPin('');
+        setConfirmPin('');
+      } finally {
+        setIsBusy(false);
+      }
+      return;
+    }
 
     if (!name.trim()) {
       setMessage(mode === 'management' ? 'Enter your management name.' : 'Choose your staff profile.');
@@ -72,22 +108,26 @@ function AuthGate({
         ) : (
           <form onSubmit={handleLoginSubmit} className="auth-form">
             <div>
-              <p className="eyebrow">{mode === 'management' ? 'Management login' : 'Staff login'}</p>
-              <h2 className="title">{mode === 'management' ? 'Unlock Management' : 'Start Waste Logging'}</h2>
+              <p className="eyebrow">{!authIsConfigured ? 'First-time setup' : mode === 'management' ? 'Management login' : 'Staff login'}</p>
+              <h2 className="title">{!authIsConfigured ? 'Create Manager Access' : mode === 'management' ? 'Unlock Management' : 'Start Waste Logging'}</h2>
               <p className="subtitle">
-                {mode === 'management'
+                {!authIsConfigured
+                  ? 'Create the first manager profile and secure management PIN for this restaurant.'
+                  : mode === 'management'
                   ? 'Enter your name and the management PIN to create or open a manager account.'
                   : 'Choose a manager-added staff profile and enter the personal code issued in Settings.'}
               </p>
             </div>
 
-            <div className="segmented-control" aria-label="Login type">
+            {authIsConfigured && (
+              <div className="segmented-control" aria-label="Login type">
               <button
                 type="button"
                 onClick={() => {
                   setMode('staff');
                   setName('');
                   setPin('');
+                  setConfirmPin('');
                   setMessage('');
                 }}
                 className={`segment-button${mode === 'staff' ? ' is-active' : ''}`}
@@ -100,6 +140,7 @@ function AuthGate({
                   setMode('management');
                   setName('');
                   setPin('');
+                  setConfirmPin('');
                   setMessage('');
                 }}
                 className={`segment-button${mode === 'management' ? ' is-active' : ''}`}
@@ -107,10 +148,11 @@ function AuthGate({
                 Management Login
               </button>
             </div>
+            )}
 
-            {mode === 'management' ? (
+            {!authIsConfigured || mode === 'management' ? (
               <div className="field">
-                <label htmlFor="login-name">Management name</label>
+                <label htmlFor="login-name">{authIsConfigured ? 'Management name' : 'First manager name'}</label>
                 <input
                   id="login-name"
                   type="text"
@@ -149,7 +191,7 @@ function AuthGate({
             )}
 
             <div className="field">
-              <label htmlFor="login-pin">{mode === 'management' ? 'Management PIN' : 'Personal staff code'}</label>
+              <label htmlFor="login-pin">{!authIsConfigured || mode === 'management' ? 'Management PIN' : 'Personal staff code'}</label>
               <input
                 id="login-pin"
                 type="password"
@@ -157,13 +199,29 @@ function AuthGate({
                 autoComplete="current-password"
                 value={pin}
                 onChange={(event) => setPin(event.target.value)}
-                placeholder={mode === 'management' ? 'Enter PIN' : 'Enter staff code'}
+                placeholder={!authIsConfigured || mode === 'management' ? 'Enter PIN' : 'Enter staff code'}
                 className="input"
               />
             </div>
 
+            {!authIsConfigured && (
+              <div className="field">
+                <label htmlFor="confirm-login-pin">Confirm management PIN</label>
+                <input
+                  id="confirm-login-pin"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="new-password"
+                  value={confirmPin}
+                  onChange={(event) => setConfirmPin(event.target.value)}
+                  placeholder="Re-enter PIN"
+                  className="input"
+                />
+              </div>
+            )}
+
             <button type="submit" className="primary-button" disabled={isBusy}>
-              {isBusy ? 'Checking...' : mode === 'management' ? 'Unlock management' : 'Continue'}
+              {isBusy ? 'Checking...' : !authIsConfigured ? 'Create manager access' : mode === 'management' ? 'Unlock management' : 'Continue'}
             </button>
           </form>
         )}

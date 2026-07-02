@@ -1,4 +1,10 @@
 import { createInvoiceKey, roundMoney } from '../utils/invoiceParsing';
+import { createRecordId } from '../utils/ids';
+import {
+  findDuplicateIngredient,
+  getLatestPriceChange,
+  normalizeIngredientRecord,
+} from '../utils/ingredientIntelligence';
 
 const FIREBASE_CONFIG = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -130,30 +136,23 @@ const readCollection = async (collectionName) => {
 };
 
 const normalizeIngredient = (docData) => {
-  if (docData?.isDeleted || docData?.deletedAt) {
-    return null;
-  }
+  const normalizedRecord = normalizeIngredientRecord(docData);
 
-  const name = sanitizeString(docData?.name || docData?.ingredientName);
-  const id = sanitizeString(docData?.id) || createInvoiceKey(name);
-
-  if (!name || !id) {
+  if (!normalizedRecord || !normalizedRecord.active) {
     return null;
   }
 
   return {
     ...docData,
-    id,
-    name,
-    category: sanitizeString(docData?.category) || 'Other',
-    unit: sanitizeString(docData?.unit) || 'each',
+    ...normalizedRecord,
+    unit: normalizedRecord.defaultUnit,
     parLevel: sanitizeNumber(docData?.parLevel),
     reorderPoint: sanitizeNumber(docData?.reorderPoint),
-    preferredSupplier: sanitizeString(docData?.preferredSupplier),
+    preferredSupplier: sanitizeString(docData?.preferredSupplier || normalizedRecord.supplier),
     supplierId: sanitizeString(docData?.supplierId),
-    currentPrice: sanitizeNumber(docData?.currentPrice ?? docData?.lastPriceExVAT ?? docData?.priceExVAT),
+    currentPrice: sanitizeNumber(docData?.currentPrice ?? normalizedRecord.latestCost),
     currentPriceIncVAT: sanitizeNumber(docData?.currentPriceIncVAT ?? docData?.lastPriceIncVAT ?? docData?.priceIncVAT),
-    lastPriceExVAT: sanitizeNumber(docData?.lastPriceExVAT ?? docData?.priceExVAT),
+    lastPriceExVAT: sanitizeNumber(docData?.lastPriceExVAT ?? docData?.priceExVAT ?? normalizedRecord.latestCost),
     lastPriceIncVAT: sanitizeNumber(docData?.lastPriceIncVAT ?? docData?.priceIncVAT),
     lastLineTotalExVAT: sanitizeNumber(docData?.lastLineTotalExVAT),
     lastLineTotalIncVAT: sanitizeNumber(docData?.lastLineTotalIncVAT),
@@ -351,6 +350,8 @@ const refreshIngredientLatestPrice = async (db, ingredientId, excludedInvoiceId 
 
   if (!latestHistory) {
     await setDoc(ingredientRef, {
+      latestCost: 0,
+      costUnit: 'each',
       currentPrice: 0,
       currentPriceIncVAT: 0,
       lastPriceExVAT: 0,
@@ -367,6 +368,11 @@ const refreshIngredientLatestPrice = async (db, ingredientId, excludedInvoiceId 
   await setDoc(ingredientRef, {
     supplierId: latestHistory.supplierId,
     preferredSupplier: latestHistory.supplier,
+    supplier: latestHistory.supplier,
+    source: latestHistory.supplier,
+    active: true,
+    latestCost: roundMoney(latestHistory.priceExVAT),
+    costUnit: sanitizeString(latestHistory.unit) || 'each',
     currentPrice: roundMoney(latestHistory.priceExVAT),
     currentPriceIncVAT: roundMoney(latestHistory.priceIncVAT),
     lastPriceExVAT: roundMoney(latestHistory.priceExVAT),
@@ -453,23 +459,44 @@ export const saveIngredient = async (ingredientDraft) => {
   }
 
   await ensureFirebaseAuth();
+  const existingIngredients = (await readCollection('ingredients')).map(normalizeIngredient).filter(Boolean);
+  const duplicateIngredient = findDuplicateIngredient(existingIngredients, { ...ingredientDraft, id, name });
+
+  if (duplicateIngredient) {
+    return {
+      ok: false,
+      duplicate: true,
+      message: `${name} already exists as ${duplicateIngredient.name}.`,
+      ingredient: duplicateIngredient,
+    };
+  }
+
   const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
   const supplierName = sanitizeString(ingredientDraft?.preferredSupplier);
   const supplierId = sanitizeString(ingredientDraft?.supplierId) || createSupplierId(supplierName);
+  const latestCost = sanitizeNumber(ingredientDraft?.latestCost ?? ingredientDraft?.currentPrice ?? ingredientDraft?.lastPriceExVAT);
+  const costUnit = sanitizeString(ingredientDraft?.costUnit || ingredientDraft?.unit) || 'each';
   const payload = {
     id,
     name,
     category: sanitizeString(ingredientDraft?.category) || 'Other',
-    unit: sanitizeString(ingredientDraft?.unit) || 'each',
+    unit: sanitizeString(ingredientDraft?.unit) || costUnit,
+    defaultUnit: sanitizeString(ingredientDraft?.defaultUnit || ingredientDraft?.unit) || costUnit,
     parLevel: sanitizeNumber(ingredientDraft?.parLevel),
     reorderPoint: sanitizeNumber(ingredientDraft?.reorderPoint),
     preferredSupplier: supplierName,
+    supplier: supplierName,
+    source: supplierName,
     supplierId,
+    active: ingredientDraft?.active !== false,
+    notes: sanitizeString(ingredientDraft?.notes),
     linkedMenuItemIds: uniqueStrings(ingredientDraft?.linkedMenuItemIds),
     linkedRecipeNames: uniqueStrings(ingredientDraft?.linkedRecipeNames),
-    currentPrice: sanitizeNumber(ingredientDraft?.currentPrice ?? ingredientDraft?.lastPriceExVAT),
+    latestCost,
+    costUnit,
+    currentPrice: latestCost,
     currentPriceIncVAT: sanitizeNumber(ingredientDraft?.currentPriceIncVAT ?? ingredientDraft?.lastPriceIncVAT),
-    lastPriceExVAT: sanitizeNumber(ingredientDraft?.lastPriceExVAT),
+    lastPriceExVAT: sanitizeNumber(ingredientDraft?.lastPriceExVAT ?? latestCost),
     lastPriceIncVAT: sanitizeNumber(ingredientDraft?.lastPriceIncVAT),
     updatedAt: serverTimestamp(),
     createdAt: ingredientDraft?.createdAt || serverTimestamp(),
@@ -545,7 +572,7 @@ export const saveConfirmedInvoice = async ({
   }
 
   const safeSupplierName = sanitizeString(supplierName) || 'Unknown supplier';
-  const safeInvoiceId = sanitizeString(invoiceId) || `invoice_${Date.now()}`;
+  const safeInvoiceId = sanitizeString(invoiceId) || createRecordId('invoice');
   const safeLineItems = Array.isArray(lineItems) ? lineItems : [];
   const safeTotals = totals || {};
   const safeExtractedTotals = extractedTotals || {};
@@ -609,6 +636,12 @@ export const saveConfirmedInvoice = async ({
         supplierId,
         supplier: safeSupplierName,
         date: safeInvoiceDate,
+        previousCost: roundMoney(row.previousPriceExVAT),
+        newCost: roundMoney(row.unitPriceExVAT ?? row.priceExVAT),
+        changedAt: safeInvoiceDate,
+        changedBy: 'Invoice review',
+        significantChange: Math.abs(Number(row.priceChangePercent || 0)) >= 10,
+        priceChangePercent: roundMoney(row.priceChangePercent),
         price: roundMoney(row.unitPriceExVAT ?? row.priceExVAT),
         priceExVAT: roundMoney(row.unitPriceExVAT ?? row.priceExVAT),
         priceIncVAT: roundMoney(row.unitPriceIncVAT ?? row.priceIncVAT),
@@ -628,10 +661,17 @@ export const saveConfirmedInvoice = async ({
         name: sanitizeString(row.ingredientName),
         category: sanitizeString(row.category) || 'Other',
         unit: sanitizeString(row.priceUnit || row.invoiceUnit || row.unit) || 'each',
+        defaultUnit: sanitizeString(row.priceUnit || row.invoiceUnit || row.unit) || 'each',
         preferredSupplier: safeSupplierName,
+        supplier: safeSupplierName,
+        source: safeSupplierName,
         supplierId,
+        active: true,
+        notes: sanitizeString(row.notes),
         parLevel: sanitizeNumber(row.parLevel),
         reorderPoint: sanitizeNumber(row.reorderPoint),
+        latestCost: roundMoney(row.unitPriceExVAT ?? row.priceExVAT),
+        costUnit: sanitizeString(row.invoiceUnit || row.priceUnit || row.unit) || 'each',
         currentPrice: roundMoney(row.unitPriceExVAT ?? row.priceExVAT),
         currentPriceIncVAT: roundMoney(row.unitPriceIncVAT ?? row.priceIncVAT),
         lastPriceExVAT: roundMoney(row.unitPriceExVAT ?? row.priceExVAT),
@@ -805,19 +845,57 @@ export const loadInvoiceDashboardStats = async () => {
       totalSpendThisMonth: 0,
       topIngredients: [],
       priceIncreasesThisMonth: [],
+      significantPriceIncreaseCount: 0,
+      missingCostCount: 0,
+      missingCostIngredients: [],
       lowStockCount: 0,
       lastInvoice: null,
     };
   }
 
-  const workspace = await loadInvoiceWorkspaceData();
+  const [ingredientDocs, invoiceDocs, stockDocs, priceHistoryDocs] = await Promise.all([
+    readCollection('ingredients'),
+    readCollection('invoices'),
+    readCollection('stockLevels'),
+    readCollection('priceHistory'),
+  ]);
+  const ingredients = mergeTopLevelPriceHistory(
+    ingredientDocs.map(normalizeIngredient).filter(Boolean),
+    priceHistoryDocs
+  );
+  const invoices = invoiceDocs.sort((a, b) => (
+    new Date(b.invoiceDate || b.scannedAt || 0).getTime() - new Date(a.invoiceDate || a.scannedAt || 0).getTime()
+  ));
+  const stockLevels = stockDocs.map(normalizeStockLevel).filter(Boolean);
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const activeInvoices = workspace.invoices.filter((invoice) => String(invoice.status || '').toLowerCase() !== 'deleted');
+  const activeInvoices = invoices.filter((invoice) => String(invoice.status || '').toLowerCase() !== 'deleted');
   const invoicesThisMonth = activeInvoices.filter((invoice) => (
     new Date(invoice.invoiceDate || invoice.scannedAt || 0) >= monthStart
   ));
-  const topIngredients = [...workspace.ingredients]
+  const normalizedIngredients = ingredients
+    .map(normalizeIngredientRecord)
+    .filter(Boolean);
+  const missingCostIngredients = normalizedIngredients
+    .filter((ingredient) => ingredient.active && Number(ingredient.latestCost || 0) <= 0)
+    .map((ingredient) => ({
+      id: ingredient.id,
+      name: ingredient.name,
+      supplier: ingredient.supplier || ingredient.preferredSupplier || '',
+    }));
+  const significantPriceIncreases = ingredients
+    .map((ingredient) => ({
+      id: ingredient.id,
+      name: ingredient.name,
+      latestDate: new Date(ingredient.lastInvoiceDate || 0),
+      change: getLatestPriceChange(ingredient),
+    }))
+    .filter((item) => (
+      item.change.significant
+      && item.change.direction === 'up'
+      && item.latestDate >= monthStart
+    ));
+  const topIngredients = [...ingredients]
     .sort((a, b) => Number(b.lastPriceExVAT || 0) - Number(a.lastPriceExVAT || 0))
     .slice(0, 5)
     .map((ingredient) => ({
@@ -825,7 +903,7 @@ export const loadInvoiceDashboardStats = async () => {
       name: ingredient.name,
       priceExVAT: roundMoney(ingredient.lastPriceExVAT),
     }));
-  const priceIncreasesThisMonth = workspace.ingredients
+  const priceIncreasesThisMonth = ingredients
     .map((ingredient) => {
       const history = Array.isArray(ingredient.priceHistory) ? ingredient.priceHistory : [];
       const latest = history[history.length - 1];
@@ -848,7 +926,10 @@ export const loadInvoiceDashboardStats = async () => {
     totalSpendThisMonth: roundMoney(invoicesThisMonth.reduce((sum, invoice) => sum + Number(invoice.totalExVAT || 0), 0)),
     topIngredients,
     priceIncreasesThisMonth,
-    lowStockCount: workspace.stockLevels.filter((stock) => stock.status === 'low').length,
+    significantPriceIncreaseCount: significantPriceIncreases.length,
+    missingCostCount: missingCostIngredients.length,
+    missingCostIngredients: missingCostIngredients.slice(0, 5),
+    lowStockCount: stockLevels.filter((stock) => stock.status === 'low').length,
     lastInvoice: activeInvoices[0] || null,
   };
 };

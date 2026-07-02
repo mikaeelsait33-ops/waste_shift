@@ -1,3 +1,5 @@
+import { createRecordId } from './ids.js';
+
 const DEFAULT_VAT_RATE = 0.15;
 const UNIT_PATTERN = '(kg|kgs|kilogram|kilograms|g|gram|grams|l|lt|ltr|liter|litre|liters|litres|ml|each|ea|unit|units|case|cases|doz|dozen|pkt|packet|pack|box|boxes|bag|bags|btl|bottle|bottles|tray|trays|tin|tins|punnet|punnets|bunch|bunches|head|heads|pillow|pillows|pp)';
 const UNIT_REGEX = new RegExp(`\\b${UNIT_PATTERN}\\b`, 'i');
@@ -579,7 +581,7 @@ const createLineItemFromLine = ({ line, index, vatMode, vatRate }) => {
     + (name.length > 3 ? 0.1 : 0)));
 
   return {
-    id: `line-${index}-${createInvoiceKey(name) || Math.random().toString(36).slice(2)}`,
+    id: `${createRecordId('invoice_line')}_${index}_${createInvoiceKey(name) || 'line'}`,
     itemName: name,
     quantity,
     unit,

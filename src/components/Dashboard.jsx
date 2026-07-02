@@ -9,8 +9,14 @@ import {
   getEntryPotentialRevenueLost,
   getWasteClassificationMeta,
 } from '../utils/wasteCalculations';
+import {
+  createTodayShiftSummary,
+  getWasteEntrySyncStatus,
+  wasteEntryNeedsCostReview,
+} from '../utils/wasteSync';
+import { limitDashboardRows } from '../utils/listPerformance';
 
-const timeframes = ['all', 'day', 'week', 'month', 'year'];
+const timeframes = ['day', 'week', 'month', 'year', 'all'];
 
 const getMetricRows = (metricsObj, totalValue) => (
   Object.entries(metricsObj)
@@ -23,7 +29,7 @@ const getMetricRows = (metricsObj, totalValue) => (
 );
 
 function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceStats }) {
-  const [timeframe, setTimeframe] = useState('all');
+  const [timeframe, setTimeframe] = useState('week');
   const [sectionDate, setSectionDate] = useState(() => {
     const date = new Date();
     date.setHours(0, 0, 0, 0);
@@ -135,6 +141,7 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
     itemDate.setHours(0, 0, 0, 0);
     return itemDate.getTime() === today.getTime();
   });
+  const todayShiftSummary = createTodayShiftSummary(safeItems, today);
   const todayLoss = todayItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
   const weekStart = new Date(today);
   weekStart.setDate(weekStart.getDate() - 7);
@@ -245,10 +252,10 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
   const topCategory = getTopMetric(categoryMetrics);
   const topIngredient = getTopMetric(ingredientMetrics);
   const topDepartment = getTopMetric(departmentMetrics);
-  const reasonRows = getMetricRows(reasonMetrics, totalFinancialLoss);
-  const staffRows = getMetricRows(staffMetrics, totalFinancialLoss);
-  const categoryRows = getMetricRows(categoryMetrics, totalFinancialLoss);
-  const departmentRows = getMetricRows(departmentMetrics, totalFinancialLoss);
+  const reasonRows = limitDashboardRows(getMetricRows(reasonMetrics, totalFinancialLoss));
+  const staffRows = limitDashboardRows(getMetricRows(staffMetrics, totalFinancialLoss));
+  const categoryRows = limitDashboardRows(getMetricRows(categoryMetrics, totalFinancialLoss));
+  const departmentRows = limitDashboardRows(getMetricRows(departmentMetrics, totalFinancialLoss));
   const classificationRows = getMetricRows(classificationMetrics, totalFinancialLoss);
   const actualFoodLoss = classificationMetrics[getWasteClassificationMeta(DEFAULT_WASTE_CLASSIFICATION).label] || 0;
   const operationalLoss = classificationMetrics[getWasteClassificationMeta('operational').label] || 0;
@@ -335,6 +342,59 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
           </div>
         )}
 
+        <div className="shift-summary-panel">
+          <div className="section-header">
+            <div>
+              <p className="eyebrow">Live shift</p>
+              <h2 className="title">Today At A Glance</h2>
+            </div>
+            <div className="manager-row">
+              <span className="badge">{todayShiftSummary.entryCount} entries</span>
+              <span className={todayShiftSummary.pendingSyncCount > 0 ? 'badge is-red' : 'badge is-green'}>
+                {todayShiftSummary.pendingSyncCount} pending sync
+              </span>
+              <span className={todayShiftSummary.costReviewCount > 0 ? 'badge is-red' : 'badge is-green'}>
+                {todayShiftSummary.costReviewCount} cost review
+              </span>
+            </div>
+          </div>
+          <div className="breakdown-grid">
+            <div>
+              <h3 className="breakdown-title">Latest entries</h3>
+              {todayShiftSummary.latestEntries.length === 0 ? (
+                <div className="empty-state">No waste logged today.</div>
+              ) : todayShiftSummary.latestEntries.map((item) => (
+                <div key={item.id} className="breakdown-item">
+                  <div className="breakdown-label">
+                    <span>{item.name}</span>
+                    <span>{formatMoney(getEntryFoodCostLost(item))}</span>
+                  </div>
+                  <div className="import-summary-grid">
+                    <span className="badge">{item.reason || 'No reason'}</span>
+                    <span className={getWasteEntrySyncStatus(item) === 'synced' ? 'badge is-green' : 'badge'}>
+                      {getWasteEntrySyncStatus(item)}
+                    </span>
+                    {wasteEntryNeedsCostReview(item) && <span className="badge is-red">cost review</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div>
+              <h3 className="breakdown-title">Top reasons today</h3>
+              {todayShiftSummary.topReasons.length === 0 ? (
+                <div className="empty-state">Reasons appear after entries are logged.</div>
+              ) : todayShiftSummary.topReasons.map((item) => (
+                <div key={item.reason} className="breakdown-item">
+                  <div className="breakdown-label">
+                    <span>{item.reason}</span>
+                    <span>{item.count}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
         <div className="metrics-grid">
           <div className="metric-card">
             <span className={metricValueClass(dailyValueLimit > 0 && todayLoss > dailyValueLimit)}>{formatMoney(todayLoss)}</span>
@@ -404,6 +464,12 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
                   {invoiceDashboard.priceIncreasesThisMonth?.length || 0}
                 </span>
                 <span className="metric-label">Price increases this month</span>
+              </div>
+              <div className="metric-card">
+                <span className={`metric-value${Number(invoiceDashboard.missingCostCount || 0) > 0 ? ' is-danger' : ''}`}>
+                  {invoiceDashboard.missingCostCount || 0}
+                </span>
+                <span className="metric-label">Ingredients missing cost</span>
               </div>
               <div className="metric-card">
                 <span className="metric-value">{invoiceDashboard.lastInvoice?.supplier || 'None'}</span>
