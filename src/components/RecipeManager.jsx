@@ -7,6 +7,7 @@ import {
 import {
   calculateRecipeIngredientCost,
   findItemPriceRecord,
+  normalizeRecipeIngredient,
   sanitizeItemPriceCatalog,
 } from '../utils/itemPriceCatalog';
 import MenuImportPanel from './MenuImportPanel';
@@ -231,12 +232,10 @@ function RecipeManager({
     }
 
     const menuPrice = parsePriceValue(recipePrice);
-    const formattedIngredients = touchedIngredients.map((ingredient) => ({
-      name: ingredient.name.trim(),
-      quantity: ingredient.quantity.trim(),
+    const formattedIngredients = touchedIngredients.map((ingredient) => normalizeRecipeIngredient({
+      ...ingredient,
       cost: parsePriceValue(ingredient.cost) || 0,
-      category: ingredient.category || 'Produce',
-    }));
+    }, ingredient.category || 'Produce'));
 
     if (formattedIngredients.length > 0 || safeRecipes[recipeKey]) {
       onAddRecipe(recipeKey, {
@@ -399,7 +398,7 @@ function RecipeManager({
                     {(catalogPrice || resolvedCost.cost > 0) && (
                       <div className="small-text ingredient-cost-note">
                         {resolvedCost.source === 'catalog'
-                          ? `Auto cost R${resolvedCost.cost.toFixed(2)} from R${Number(catalogPrice.price).toFixed(2)} / ${catalogPrice.unit}.`
+                          ? `Auto cost R${resolvedCost.cost.toFixed(2)} from R${Number(catalogPrice.costPerBaseUnit || catalogPrice.price).toFixed(4)} / ${catalogPrice.baseUnit || catalogPrice.unit}.`
                           : `Using fallback ingredient cost R${resolvedCost.cost.toFixed(2)}.`}
                       </div>
                     )}
@@ -522,7 +521,11 @@ function RecipeManager({
                             {ingredient.name}
                             {ingredient.quantity && <span className="badge">{ingredient.quantity}</span>}
                             <span className="badge">{ingredient.category}</span>
-                            {ingredient.costSource === 'catalog' && <span className="badge is-green">Auto price</span>}
+                            {ingredient.costSource === 'catalog' && (
+                              <span className="badge is-green">
+                                R{Number(ingredient.costPerBaseUnit || ingredient.pricePerUnit || 0).toFixed(4)} / {ingredient.baseUnit || ingredient.priceUnit}
+                              </span>
+                            )}
                           </span>
                           <span className="price">R{(Number(ingredient.cost) || 0).toFixed(2)}</span>
                         </div>

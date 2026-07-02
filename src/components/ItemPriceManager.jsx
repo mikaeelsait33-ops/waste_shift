@@ -199,6 +199,11 @@ function ItemPriceManager({
                   <strong>{record.name}</strong>
                   <span className="badge">{record.category}</span>
                   <span className="badge">R{Number(record.price || 0).toFixed(2)} / {record.unit}</span>
+                  {record.baseUnit && record.baseUnit !== record.unit && (
+                    <span className="badge is-green">
+                      R{Number(record.costPerBaseUnit || 0).toFixed(4)} / {record.baseUnit}
+                    </span>
+                  )}
                 </div>
                 <div className="manager-row">
                   <button type="button" onClick={() => handleEdit(record)} className="ghost-button compact-action" disabled={!canManagePrices}>

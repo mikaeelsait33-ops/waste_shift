@@ -1,5 +1,6 @@
 import { createInvoiceKey, roundMoney } from '../utils/invoiceParsing';
 import { createRecordId } from '../utils/ids';
+import { roundUnitPrice } from '../utils/itemPriceCatalog';
 import {
   findDuplicateIngredient,
   getLatestPriceChange,
@@ -383,7 +384,7 @@ const refreshIngredientLatestPrice = async (db, ingredientId, excludedInvoiceId 
     lastUnit: sanitizeString(latestHistory.unit) || 'each',
     baseQuantity: sanitizeNumber(latestHistory.baseQuantity),
     baseUnit: sanitizeString(latestHistory.baseUnit),
-    costPerBaseUnitExVAT: roundMoney(latestHistory.costPerBaseUnitExVAT),
+    costPerBaseUnitExVAT: roundUnitPrice(latestHistory.costPerBaseUnitExVAT),
     lastInvoiceDate: latestHistory.date,
     updatedAt: serverTimestamp(),
   }, { merge: true });
@@ -651,7 +652,7 @@ export const saveConfirmedInvoice = async ({
         unit: sanitizeString(row.invoiceUnit || row.priceUnit || row.unit) || 'each',
         baseQuantity: sanitizeNumber(row.baseQuantity),
         baseUnit: sanitizeString(row.baseUnit),
-        costPerBaseUnitExVAT: roundMoney(row.costPerBaseUnitExVAT),
+        costPerBaseUnitExVAT: roundUnitPrice(row.costPerBaseUnitExVAT),
         invoiceId: safeInvoiceId,
         createdAt: serverTimestamp(),
       };
@@ -682,7 +683,7 @@ export const saveConfirmedInvoice = async ({
         lastUnit: sanitizeString(row.invoiceUnit || row.priceUnit || row.unit) || 'each',
         baseQuantity: sanitizeNumber(row.baseQuantity),
         baseUnit: sanitizeString(row.baseUnit),
-        costPerBaseUnitExVAT: roundMoney(row.costPerBaseUnitExVAT),
+        costPerBaseUnitExVAT: roundUnitPrice(row.costPerBaseUnitExVAT),
         linkedMenuItemIds: uniqueStrings(row.linkedMenuItemIds),
         linkedRecipeNames: uniqueStrings(row.linkedRecipeNames),
         lastInvoiceDate: safeInvoiceDate,

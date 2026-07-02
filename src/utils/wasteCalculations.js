@@ -170,6 +170,8 @@ export const buildRecipeIngredientBreakdown = (recipe, quantity, itemPriceCatalo
       priceCatalogKey: resolvedCost.priceCatalogKey,
       pricePerUnit: resolvedCost.pricePerUnit,
       priceUnit: resolvedCost.priceUnit,
+      costPerBaseUnit: resolvedCost.costPerBaseUnit,
+      baseUnit: resolvedCost.baseUnit,
     };
   });
 };

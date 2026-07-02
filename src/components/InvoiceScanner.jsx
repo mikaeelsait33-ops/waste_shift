@@ -12,7 +12,7 @@ import {
   roundMoney,
   summarizeInvoiceItems,
 } from '../utils/invoiceParsing';
-import { createItemPriceKey } from '../utils/itemPriceCatalog';
+import { createItemPriceKey, roundUnitPrice } from '../utils/itemPriceCatalog';
 import {
   deleteIngredient,
   invoiceFirestoreIsConfigured,
@@ -42,6 +42,7 @@ const INVOICE_REVIEW_PAGE_SIZE = 20;
 const INGREDIENT_LIBRARY_PAGE_SIZE = 30;
 
 const formatMoney = (value) => `R${Number(value || 0).toFixed(2)}`;
+const formatUnitMoney = (value) => `R${Number(value || 0).toFixed(4)}`;
 const formatPercent = (value) => `${Number(value || 0).toFixed(1)}%`;
 const escapeCsvValue = (value) => {
   const text = String(value ?? '');
@@ -691,7 +692,7 @@ function InvoiceScanner({
       ...vat,
       baseQuantity: base.quantity,
       baseUnit: base.unit,
-      costPerBaseUnitExVAT: base.quantity > 0 ? roundMoney(vat.priceExVAT / base.quantity) : 0,
+      costPerBaseUnitExVAT: base.quantity > 0 ? roundUnitPrice(vat.priceExVAT / base.quantity) : 0,
     };
   };
 
@@ -2023,7 +2024,7 @@ function InvoiceScanner({
                       </span>
                       {Number(ingredient.costPerBaseUnitExVAT || 0) > 0 && (
                         <span className="badge">
-                          {formatMoney(ingredient.costPerBaseUnitExVAT)} / {ingredient.baseUnit}
+                          {formatUnitMoney(ingredient.costPerBaseUnitExVAT)} / {ingredient.baseUnit}
                         </span>
                       )}
                       {catalogRecord && (

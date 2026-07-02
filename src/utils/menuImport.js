@@ -1,4 +1,5 @@
 import { createRecordId } from './ids.js';
+import { normalizeRecipeIngredient } from './itemPriceCatalog.js';
 
 export const MENU_IMPORT_HIGH_CONFIDENCE = 0.8;
 const GENERATED_WARNING_PATTERNS = [
@@ -122,10 +123,7 @@ export const normalizeImportedMenuItem = (item, index = 0) => {
   const key = createMenuItemKey(name);
   const sellingPrice = parseMenuPrice(item?.sellingPrice ?? item?.menuPrice ?? item?.price);
   const components = (Array.isArray(item?.components) ? item.components : Array.isArray(item?.ingredients) ? item.ingredients : [])
-    .map((component) => ({
-      name: String(component?.name || component || '').trim(),
-      cost: parseMenuPrice(component?.cost) || 0,
-    }))
+    .map((component) => normalizeRecipeIngredient(component, item?.category || 'Other'))
     .filter((component) => component.name);
   const confidence = Math.max(0, Math.min(1, Number(item?.confidence) || 0));
   const warnings = Array.isArray(item?.warnings)

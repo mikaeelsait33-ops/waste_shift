@@ -10,9 +10,11 @@ import {
   calculateRecipeIngredientCost,
   createItemPriceCatalogFromInvoice,
   findItemPriceRecord,
+  normalizeRecipeIngredient,
   parseIngredientQuantity,
   sanitizeItemPriceCatalog,
 } from '../src/utils/itemPriceCatalog.js';
+import { normalizeImportedMenuItem } from '../src/utils/menuImport.js';
 import { getAccessProfile, requirePermission } from '../src/utils/accessControl.js';
 import { createPinRecord, createRandomPin, validatePin, verifyPin } from '../src/utils/pinAuth.js';
 
@@ -111,7 +113,7 @@ assert.deepEqual(
     quantity: 2,
     unit: 'each',
   }),
-  { canCalculate: true, cost: 7, quantityInPriceUnit: 2 }
+  { canCalculate: true, cost: 7, quantityInPriceUnit: 2, quantityInBaseUnit: 2 }
 );
 assert.equal(
   calculateItemPriceCost({
@@ -204,6 +206,8 @@ const invoicePriceCatalog = createItemPriceCatalogFromInvoice({
 
 assert.equal(invoicePriceCatalog.tomatoes.price, 29.9);
 assert.equal(invoicePriceCatalog.tomatoes.unit, 'kg');
+assert.equal(invoicePriceCatalog.tomatoes.baseUnit, 'g');
+assert.equal(invoicePriceCatalog.tomatoes.costPerBaseUnit, 0.0299);
 assert.equal(invoicePriceCatalog.tomatoes.source, 'invoice');
 assert.equal(invoicePriceCatalog.strawberries.unit, 'punnet');
 assert.deepEqual(
@@ -218,6 +222,8 @@ assert.deepEqual(
     priceCatalogKey: 'tomatoes',
     pricePerUnit: 29.9,
     priceUnit: 'kg',
+    costPerBaseUnit: 0.0299,
+    baseUnit: 'g',
   }
 );
 assert.equal(
@@ -233,6 +239,83 @@ assert.equal(
     itemPriceCatalog: invoicePriceCatalog,
   }).foodCostLost,
   49
+);
+
+const recipeUnitCatalog = createItemPriceCatalogFromInvoice({
+  invoiceId: 'invoice-units',
+  supplierName: 'Unit Test Supplier',
+  invoiceDate: '2026-07-02',
+  lineItems: [
+    { id: 'rocket', itemName: 'Rocket', quantity: 1, unit: 'kg', unitPriceExVAT: 117.9, priceExVAT: 117.9, baseQuantity: 1000, baseUnit: 'g', costPerBaseUnitExVAT: 0.1179 },
+    { id: 'spinach', itemName: 'Spinach', quantity: 1, unit: 'kg', unitPriceExVAT: 100, priceExVAT: 100, baseQuantity: 1000, baseUnit: 'g', costPerBaseUnitExVAT: 0.1 },
+    { id: 'chicken', itemName: 'Chicken', quantity: 1, unit: 'kg', unitPriceExVAT: 90, priceExVAT: 90, baseQuantity: 1000, baseUnit: 'g', costPerBaseUnitExVAT: 0.09 },
+    { id: 'sauce', itemName: 'Sauce', quantity: 1, unit: 'l', unitPriceExVAT: 45, priceExVAT: 45, baseQuantity: 1000, baseUnit: 'ml', costPerBaseUnitExVAT: 0.045 },
+    { id: 'eggs', itemName: 'Eggs', quantity: 30, unit: 'each', unitPriceExVAT: 2.5, priceExVAT: 75, baseQuantity: 30, baseUnit: 'each', costPerBaseUnitExVAT: 2.5 },
+    { id: 'bread-buns', itemName: 'Bread buns', quantity: 12, unit: 'each', unitPriceExVAT: 4, priceExVAT: 48, baseQuantity: 12, baseUnit: 'each', costPerBaseUnitExVAT: 4 },
+  ],
+  ingredientRows: [
+    { lineItemId: 'rocket', ingredientName: 'Rocket', category: 'Produce', unitPriceExVAT: 117.9, priceUnit: 'kg', invoiceQuantity: 1, invoiceUnit: 'kg', baseUnit: 'g', costPerBaseUnitExVAT: 0.1179 },
+    { lineItemId: 'spinach', ingredientName: 'Spinach', category: 'Produce', unitPriceExVAT: 100, priceUnit: 'kg', invoiceQuantity: 1, invoiceUnit: 'kg', baseUnit: 'g', costPerBaseUnitExVAT: 0.1 },
+    { lineItemId: 'chicken', ingredientName: 'Chicken', category: 'Meat/Poultry', unitPriceExVAT: 90, priceUnit: 'kg', invoiceQuantity: 1, invoiceUnit: 'kg', baseUnit: 'g', costPerBaseUnitExVAT: 0.09 },
+    { lineItemId: 'sauce', ingredientName: 'Sauce', category: 'Pantry', unitPriceExVAT: 45, priceUnit: 'l', invoiceQuantity: 1, invoiceUnit: 'l', baseUnit: 'ml', costPerBaseUnitExVAT: 0.045 },
+    { lineItemId: 'eggs', ingredientName: 'Eggs', category: 'Dairy', unitPriceExVAT: 2.5, priceUnit: 'each', invoiceQuantity: 30, invoiceUnit: 'each', baseUnit: 'each', costPerBaseUnitExVAT: 2.5 },
+    { lineItemId: 'bread-buns', ingredientName: 'Bread buns', category: 'Bakery', unitPriceExVAT: 4, priceUnit: 'each', invoiceQuantity: 12, invoiceUnit: 'each', baseUnit: 'each', costPerBaseUnitExVAT: 4 },
+  ],
+});
+
+assert.equal(calculateRecipeIngredientCost({
+  ingredient: { name: 'Rocket', quantity: '10g', cost: 0 },
+  itemPriceCatalog: recipeUnitCatalog,
+}).cost, 1.18);
+assert.equal(calculateRecipeIngredientCost({
+  ingredient: { name: 'Spinach', quantity: '10g', cost: 0 },
+  itemPriceCatalog: recipeUnitCatalog,
+}).cost, 1);
+assert.equal(calculateRecipeIngredientCost({
+  ingredient: { name: 'Chicken', quantity: '120g', cost: 0 },
+  itemPriceCatalog: recipeUnitCatalog,
+}).cost, 10.8);
+assert.equal(calculateRecipeIngredientCost({
+  ingredient: { name: 'Sauce', quantity: '20ml', cost: 0 },
+  itemPriceCatalog: recipeUnitCatalog,
+}).cost, 0.9);
+assert.equal(calculateRecipeIngredientCost({
+  ingredient: { name: 'Eggs', quantity: '2 eggs', cost: 0 },
+  itemPriceCatalog: recipeUnitCatalog,
+}).cost, 5);
+assert.equal(calculateRecipeIngredientCost({
+  ingredient: { name: 'Bread buns', quantity: '1 bun', cost: 0 },
+  itemPriceCatalog: recipeUnitCatalog,
+}).cost, 4);
+
+const importedSteak = normalizeRecipeIngredient({ name: 'Steak (100g)' }, 'Meat/Poultry');
+assert.deepEqual(
+  {
+    name: importedSteak.name,
+    quantityValue: importedSteak.quantityValue,
+    unit: importedSteak.unit,
+    quantity: importedSteak.quantity,
+  },
+  { name: 'Steak', quantityValue: 100, unit: 'g', quantity: '100g' }
+);
+
+const importedMenuItem = normalizeImportedMenuItem({
+  name: 'Jimmy Special',
+  sellingPrice: 95,
+  components: ['Jimmy Sauce (50ml)', 'Rocket (10g)'],
+});
+
+assert.deepEqual(
+  importedMenuItem.components.map((component) => ({
+    name: component.name,
+    quantityValue: component.quantityValue,
+    unit: component.unit,
+    quantity: component.quantity,
+  })),
+  [
+    { name: 'Jimmy Sauce', quantityValue: 50, unit: 'ml', quantity: '50ml' },
+    { name: 'Rocket', quantityValue: 10, unit: 'g', quantity: '10g' },
+  ]
 );
 
 const ownerAccess = getAccessProfile({ id: 'staff_owner', name: 'Rizwana', role: 'Owner' });

@@ -1,4 +1,4 @@
-import { createItemPriceKey } from '../utils/itemPriceCatalog';
+import { createItemPriceKey, normalizeRecipeIngredient } from '../utils/itemPriceCatalog';
 import { roundCurrency } from '../utils/wasteCalculations';
 
 const FIREBASE_CONFIG = {
@@ -102,7 +102,8 @@ export const ensureFirebaseAuth = async () => {
 };
 
 const sanitizeComponent = (component, index) => {
-  const name = String(component?.name || '').trim();
+  const normalizedIngredient = normalizeRecipeIngredient(component, component?.category || 'Other');
+  const name = String(normalizedIngredient.name || '').trim();
   const cost = Number.parseFloat(component?.cost);
 
   if (!name) {
@@ -112,7 +113,13 @@ const sanitizeComponent = (component, index) => {
   return {
     key: component?.key || createItemPriceKey(`${name}-${index}`),
     name,
+    quantity: normalizedIngredient.quantity || '',
+    quantityValue: normalizedIngredient.quantityValue ?? null,
+    unit: normalizedIngredient.unit || '',
     cost: Number.isFinite(cost) && cost >= 0 ? roundCurrency(cost) : 0,
+    category: normalizedIngredient.category || 'Other',
+    costPerBaseUnit: Number.isFinite(Number(component?.costPerBaseUnit)) ? Number(component.costPerBaseUnit) : null,
+    baseUnit: toSafeString(component?.baseUnit),
   };
 };
 

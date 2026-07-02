@@ -11,6 +11,7 @@ import {
   calculateRecipeIngredientCost,
   createItemPriceCatalogFromInvoice,
   createItemPriceKey,
+  normalizeRecipeIngredient,
   sanitizeItemPriceCatalog,
   sanitizeItemPriceRecord,
 } from './utils/itemPriceCatalog';
@@ -177,6 +178,8 @@ const recalculateRecipesFromPriceCatalog = (recipeMap, itemPriceCatalog, updated
         priceCatalogKey: calculatedCost.priceCatalogKey,
         pricePerUnit: calculatedCost.pricePerUnit,
         priceUnit: calculatedCost.priceUnit,
+        costPerBaseUnit: calculatedCost.costPerBaseUnit,
+        baseUnit: calculatedCost.baseUnit,
       };
 
       if (
@@ -185,6 +188,8 @@ const recalculateRecipesFromPriceCatalog = (recipeMap, itemPriceCatalog, updated
         || ingredient.priceCatalogKey !== nextIngredient.priceCatalogKey
         || ingredient.pricePerUnit !== nextIngredient.pricePerUnit
         || ingredient.priceUnit !== nextIngredient.priceUnit
+        || ingredient.costPerBaseUnit !== nextIngredient.costPerBaseUnit
+        || ingredient.baseUnit !== nextIngredient.baseUnit
       ) {
         recipeChanged = true;
       }
@@ -392,13 +397,23 @@ const createRecipeMapFromFirestoreMenuItems = (firestoreMenuItems) => (
       ...(item.menuPrice !== null && item.menuPrice !== undefined ? { menuPrice: item.menuPrice } : {}),
       totalCost: item.totalCost || 0,
       firestoreId: item.firestoreId || key,
-      ingredients: (Array.isArray(item.components) ? item.components : []).map((component, index) => ({
-        componentKey: component.key || createMenuItemKey(`${component.name}-${index}`),
-        name: component.name,
-        quantity: '1 each',
-        cost: roundCurrency(component.cost),
-        category: 'Other',
-      })),
+      ingredients: (Array.isArray(item.components) ? item.components : []).map((component, index) => {
+        const normalizedIngredient = normalizeRecipeIngredient({
+          ...component,
+          quantity: component.quantity || component.quantityLabel || '',
+          unit: component.unit || component.quantityUnit || '',
+          cost: roundCurrency(component.cost),
+        }, component.category || 'Other');
+
+        return {
+          componentKey: component.key || createMenuItemKey(`${normalizedIngredient.name}-${index}`),
+          ...normalizedIngredient,
+          quantity: normalizedIngredient.quantity || '1 each',
+          cost: roundCurrency(component.cost),
+          costPerBaseUnit: component.costPerBaseUnit ?? null,
+          baseUnit: component.baseUnit || '',
+        };
+      }),
     };
 
     return acc;
@@ -2064,7 +2079,12 @@ function App() {
         const components = (Array.isArray(recipe.ingredients) ? recipe.ingredients : []).map((ingredient, index) => ({
           key: ingredient.componentKey || createMenuItemKey(`${ingredient.name || 'ingredient'}-${index + 1}`),
           name: ingredient.name,
+          quantity: ingredient.quantity || '',
+          quantityValue: ingredient.quantityValue ?? null,
+          unit: ingredient.unit || '',
           cost: Number(ingredient.cost) || 0,
+          costPerBaseUnit: ingredient.costPerBaseUnit ?? null,
+          baseUnit: ingredient.baseUnit || '',
         }));
         const totalCost = roundCurrency(components.reduce((sum, component) => sum + component.cost, 0));
         const nextMenuItem = {
@@ -2343,12 +2363,7 @@ function App() {
         const key = item?.key || createMenuItemKey(name);
         const menuPrice = parsePriceValue(item?.sellingPrice ?? item?.menuPrice ?? item?.price);
         const ingredients = (Array.isArray(item?.components) ? item.components : [])
-          .map((component) => ({
-            name: String(component?.name || '').trim(),
-            quantity: '',
-            cost: parsePriceValue(component?.cost) || 0,
-            category: item?.category || 'Other',
-          }))
+          .map((component) => normalizeRecipeIngredient(component, item?.category || 'Other'))
           .filter((component) => component.name);
 
         if (!name || !key || menuPrice === null) {
@@ -2407,7 +2422,12 @@ function App() {
       const components = item.ingredients.map((ingredient, index) => ({
         key: createMenuItemKey(`${ingredient.name}-${index}`),
         name: ingredient.name,
+        quantity: ingredient.quantity || '',
+        quantityValue: ingredient.quantityValue ?? null,
+        unit: ingredient.unit || '',
         cost: Number(ingredient.cost) || 0,
+        costPerBaseUnit: ingredient.costPerBaseUnit ?? null,
+        baseUnit: ingredient.baseUnit || '',
       }));
       const totalCost = roundCurrency(components.reduce((sum, component) => sum + component.cost, 0));
 
@@ -2600,7 +2620,12 @@ function App() {
       .map((ingredient) => ({
         key: ingredient.componentKey,
         name: ingredient.name,
+        quantity: ingredient.quantity || '',
+        quantityValue: ingredient.quantityValue ?? null,
+        unit: ingredient.unit || '',
         cost: Number(ingredient.cost) || 0,
+        costPerBaseUnit: ingredient.costPerBaseUnit ?? null,
+        baseUnit: ingredient.baseUnit || '',
       }));
     const totalCost = components.reduce((sum, component) => sum + component.cost, 0);
 

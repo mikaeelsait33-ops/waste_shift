@@ -1,4 +1,5 @@
 import { createRecordId } from './ids.js';
+import { roundUnitPrice } from './itemPriceCatalog.js';
 
 const DEFAULT_VAT_RATE = 0.15;
 const UNIT_PATTERN = '(kg|kgs|kilogram|kilograms|g|gram|grams|l|lt|ltr|liter|litre|liters|litres|ml|each|ea|unit|units|case|cases|doz|dozen|pkt|packet|pack|box|boxes|bag|bags|btl|bottle|bottles|tray|trays|tin|tins|punnet|punnets|bunch|bunches|head|heads|pillow|pillows|pp)';
@@ -573,7 +574,7 @@ const createLineItemFromLine = ({ line, index, vatMode, vatRate }) => {
 
   const vat = calculateVatValues({ lineTotal, unitPrice, vatMode, vatRate });
   const base = getBaseUnitInfo(quantity, unit);
-  const costPerBaseUnitExVAT = base.quantity > 0 ? roundMoney(vat.priceExVAT / base.quantity) : 0;
+  const costPerBaseUnitExVAT = base.quantity > 0 ? roundUnitPrice(vat.priceExVAT / base.quantity) : 0;
   const confidence = roundMoney(Math.min(0.96, 0.48
     + (priceTokens.length >= 2 ? 0.22 : 0.1)
     + (explicitQuantity ? 0.12 : 0)

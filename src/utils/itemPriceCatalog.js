@@ -18,7 +18,7 @@ export const PRICE_UNIT_OPTIONS = [
   { value: 'pillow', label: 'pillow' },
 ];
 
-const UNIT_CONVERSIONS = {
+export const UNIT_CONVERSIONS = {
   each: { family: 'each', factor: 1 },
   g: { family: 'mass', factor: 1 },
   kg: { family: 'mass', factor: 1000 },
@@ -41,6 +41,11 @@ const UNIT_CONVERSIONS = {
 const roundCurrency = (value) => {
   const numericValue = Number(value);
   return Number.isFinite(numericValue) ? Math.round(numericValue * 100) / 100 : 0;
+};
+
+export const roundUnitPrice = (value) => {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? Math.round(numericValue * 10000) / 10000 : 0;
 };
 
 export const createItemPriceKey = (itemName) => String(itemName || '')
@@ -81,7 +86,7 @@ export const normalizeItemPriceUnit = (unit) => {
   const value = String(unit || '').trim().toLowerCase();
 
   if (!value) return 'each';
-  if (['each', 'ea', 'item', 'items', 'unit', 'units'].includes(value)) return 'each';
+  if (['each', 'ea', 'item', 'items', 'unit', 'units', 'egg', 'eggs', 'bun', 'buns', 'roll', 'rolls', 'slice', 'slices', 'piece', 'pieces'].includes(value)) return 'each';
   if (['g', 'gram', 'grams'].includes(value)) return 'g';
   if (['kg', 'kgs', 'kilogram', 'kilograms'].includes(value)) return 'kg';
   if (['ml', 'millilitre', 'millilitres', 'milliliter', 'milliliters'].includes(value)) return 'ml';
@@ -99,6 +104,35 @@ export const normalizeItemPriceUnit = (unit) => {
   if (['head', 'heads'].includes(value)) return 'head';
   if (['pillow', 'pillows'].includes(value)) return 'pillow';
   return value;
+};
+
+export const getBaseUnitForPriceUnit = (unit) => {
+  const normalizedUnit = normalizeItemPriceUnit(unit);
+
+  if (['kg', 'g'].includes(normalizedUnit)) return 'g';
+  if (['l', 'ml'].includes(normalizedUnit)) return 'ml';
+  if (['doz', 'each'].includes(normalizedUnit)) return 'each';
+  return UNIT_CONVERSIONS[normalizedUnit] ? normalizedUnit : 'each';
+};
+
+export const getCostPerBaseUnit = ({ price, unit, baseUnit, costPerBaseUnit }) => {
+  const explicitCost = parsePrice(costPerBaseUnit);
+
+  if (explicitCost !== null) {
+    return roundUnitPrice(explicitCost);
+  }
+
+  const cleanPrice = parsePrice(price);
+  const priceUnit = normalizeItemPriceUnit(unit);
+  const normalizedBaseUnit = normalizeItemPriceUnit(baseUnit || getBaseUnitForPriceUnit(priceUnit));
+  const priceMeta = UNIT_CONVERSIONS[priceUnit];
+  const baseMeta = UNIT_CONVERSIONS[normalizedBaseUnit];
+
+  if (cleanPrice === null || !priceMeta || !baseMeta || priceMeta.family !== baseMeta.family) {
+    return 0;
+  }
+
+  return roundUnitPrice(cleanPrice / (priceMeta.factor / baseMeta.factor));
 };
 
 export const parseIngredientQuantity = (quantityLabel) => {
@@ -120,6 +154,64 @@ export const parseIngredientQuantity = (quantityLabel) => {
   return { quantity, unit };
 };
 
+export const formatIngredientQuantity = (quantity, unit) => {
+  const numericQuantity = Number(quantity);
+  const cleanUnit = normalizeItemPriceUnit(unit || 'each');
+
+  if (!Number.isFinite(numericQuantity) || numericQuantity <= 0) {
+    return '';
+  }
+
+  const formattedQuantity = Number.isInteger(numericQuantity)
+    ? String(numericQuantity)
+    : String(Number(numericQuantity.toFixed(4))).replace(/0+$/, '').replace(/\.$/, '');
+
+  return cleanUnit === 'each' ? formattedQuantity : `${formattedQuantity}${cleanUnit}`;
+};
+
+export const parseRecipeIngredientText = (ingredient) => {
+  const rawName = String(
+    typeof ingredient === 'string'
+      ? ingredient
+      : ingredient?.name || ingredient?.ingredientName || ingredient?.componentName || ''
+  ).trim();
+  const quantityFromFields = Number(ingredient?.quantityValue);
+  const unitFromFields = normalizeItemPriceUnit(ingredient?.unit || ingredient?.quantityUnit || ingredient?.measuredUnit || '');
+  const explicitQuantity = Number.isFinite(quantityFromFields) && quantityFromFields > 0 && unitFromFields
+    ? { quantity: quantityFromFields, unit: unitFromFields }
+    : parseIngredientQuantity(ingredient?.quantity);
+  const parentheticalQuantity = rawName.match(/\(([^()]*\d[^()]*)\)\s*$/);
+  const trailingQuantity = rawName.match(/\s[-\u2013\u2014]\s*(\d+(?:\.\d+)?\s*[a-zA-Z]+)\s*$/);
+  const parsedFromName = parseIngredientQuantity(parentheticalQuantity?.[1] || trailingQuantity?.[1] || '');
+  const parsedQuantity = explicitQuantity || parsedFromName;
+  const cleanName = parsedFromName
+    ? rawName
+      .replace(/\s*\([^()]*\d[^()]*\)\s*$/, '')
+      .replace(/\s[-\u2013\u2014]\s*\d+(?:\.\d+)?\s*[a-zA-Z]+\s*$/, '')
+      .trim()
+    : rawName;
+
+  return {
+    name: cleanName || rawName,
+    quantity: parsedQuantity ? formatIngredientQuantity(parsedQuantity.quantity, parsedQuantity.unit) : String(ingredient?.quantity || '').trim(),
+    quantityValue: parsedQuantity?.quantity ?? null,
+    unit: parsedQuantity?.unit || '',
+  };
+};
+
+export const normalizeRecipeIngredient = (ingredient, fallbackCategory = 'Other') => {
+  const parsed = parseRecipeIngredientText(ingredient);
+
+  return {
+    name: parsed.name,
+    quantity: parsed.quantity,
+    ...(parsed.quantityValue !== null ? { quantityValue: parsed.quantityValue } : {}),
+    ...(parsed.unit ? { unit: parsed.unit } : {}),
+    cost: parsePrice(ingredient?.cost) || 0,
+    category: String(ingredient?.category || fallbackCategory || 'Other').trim() || 'Other',
+  };
+};
+
 export const sanitizeItemPriceRecord = (record, fallbackKey = '') => {
   if (!record || typeof record !== 'object' || Array.isArray(record)) {
     return null;
@@ -128,11 +220,19 @@ export const sanitizeItemPriceRecord = (record, fallbackKey = '') => {
   const name = String(record.name || '').trim();
   const key = String(record.key || fallbackKey || createItemPriceKey(name)).trim();
   const unit = normalizeItemPriceUnit(record.unit || record.priceUnit || 'each');
-  const price = parsePrice(record.price ?? record.pricePerUnit ?? record.cost);
+  const price = parsePrice(record.price ?? record.pricePerUnit ?? record.cost ?? record.latestCost ?? record.lastPriceExVAT ?? record.costPerBaseUnitExVAT);
+  const baseUnit = normalizeItemPriceUnit(record.baseUnit || getBaseUnitForPriceUnit(unit));
 
   if (!key || !name || price === null || !UNIT_CONVERSIONS[unit]) {
     return null;
   }
+
+  const costPerBaseUnit = getCostPerBaseUnit({
+    price,
+    unit,
+    baseUnit,
+    costPerBaseUnit: record.costPerBaseUnit ?? record.costPerBaseUnitExVAT ?? record.pricePerBaseUnit,
+  });
 
   return {
     key,
@@ -140,11 +240,16 @@ export const sanitizeItemPriceRecord = (record, fallbackKey = '') => {
     category: String(record.category || 'Other').trim() || 'Other',
     price: roundCurrency(price),
     unit,
+    baseUnit,
+    costPerBaseUnit,
     updatedAt: String(record.updatedAt || ''),
     source: String(record.source || 'manual').trim() || 'manual',
     sourceInvoiceId: String(record.sourceInvoiceId || '').trim(),
     supplier: String(record.supplier || '').trim(),
     lastInvoiceDate: String(record.lastInvoiceDate || '').trim(),
+    invoiceQuantity: Number(record.invoiceQuantity) || null,
+    invoiceUnit: String(record.invoiceUnit || '').trim(),
+    invoiceLinePriceExVAT: parsePrice(record.invoiceLinePriceExVAT ?? record.linePriceExVAT ?? record.priceExVAT),
   };
 };
 
@@ -194,17 +299,20 @@ export const calculateItemPriceCost = ({
     : normalizeItemPriceUnit(unit);
   const sourceMeta = UNIT_CONVERSIONS[sourceUnit];
   const priceMeta = UNIT_CONVERSIONS[cleanRecord.unit];
+  const baseMeta = UNIT_CONVERSIONS[cleanRecord.baseUnit];
 
-  if (!Number.isFinite(sourceQuantity) || sourceQuantity <= 0 || !sourceMeta || !priceMeta || sourceMeta.family !== priceMeta.family) {
+  if (!Number.isFinite(sourceQuantity) || sourceQuantity <= 0 || !sourceMeta || !priceMeta || !baseMeta || sourceMeta.family !== priceMeta.family || sourceMeta.family !== baseMeta.family) {
     return { canCalculate: false, cost: 0, quantityInPriceUnit: 0 };
   }
 
   const quantityInPriceUnit = (sourceQuantity * sourceMeta.factor) / priceMeta.factor;
+  const quantityInBaseUnit = (sourceQuantity * sourceMeta.factor) / baseMeta.factor;
 
   return {
     canCalculate: true,
-    cost: roundCurrency(quantityInPriceUnit * cleanRecord.price),
+    cost: roundCurrency(quantityInBaseUnit * cleanRecord.costPerBaseUnit),
     quantityInPriceUnit,
+    quantityInBaseUnit,
   };
 };
 
@@ -222,7 +330,16 @@ export const createItemPriceCatalogFromInvoice = ({
     const lineItem = items.find((item) => item.id === row?.lineItemId);
     const name = String(row?.ingredientName || lineItem?.itemName || '').trim();
     const unit = normalizeItemPriceUnit(row?.priceUnit || lineItem?.unit || row?.unit || 'each');
-    const unitPrice = Number(row?.unitPriceExVAT ?? lineItem?.unitPriceExVAT ?? lineItem?.unitPrice ?? 0);
+    const invoiceQuantity = Number(row?.invoiceQuantity ?? lineItem?.quantity ?? 1);
+    const linePriceExVAT = Number(row?.priceExVAT ?? lineItem?.priceExVAT ?? lineItem?.lineTotal ?? 0);
+    const unitPrice = Number(row?.unitPriceExVAT ?? lineItem?.unitPriceExVAT ?? lineItem?.unitPrice ?? (invoiceQuantity > 0 ? linePriceExVAT / invoiceQuantity : 0));
+    const baseUnit = normalizeItemPriceUnit(row?.baseUnit || lineItem?.baseUnit || getBaseUnitForPriceUnit(unit));
+    const costPerBaseUnit = getCostPerBaseUnit({
+      price: unitPrice,
+      unit,
+      baseUnit,
+      costPerBaseUnit: row?.costPerBaseUnitExVAT ?? lineItem?.costPerBaseUnitExVAT,
+    });
     const key = createItemPriceKey(name);
 
     if (!name || !key || !UNIT_CONVERSIONS[unit] || !Number.isFinite(unitPrice) || unitPrice <= 0) {
@@ -235,10 +352,15 @@ export const createItemPriceCatalogFromInvoice = ({
       category: row?.category || 'Other',
       price: unitPrice,
       unit,
+      baseUnit,
+      costPerBaseUnit,
       source: 'invoice',
       sourceInvoiceId: invoiceId,
       supplier: supplierName,
       lastInvoiceDate: invoiceDate,
+      invoiceQuantity,
+      invoiceUnit: row?.invoiceUnit || lineItem?.unit || unit,
+      invoiceLinePriceExVAT: linePriceExVAT,
       updatedAt: new Date().toISOString(),
     });
 
@@ -252,8 +374,11 @@ export const createItemPriceCatalogFromInvoice = ({
 
 export const calculateRecipeIngredientCost = ({ ingredient, itemPriceCatalog, multiplier = 1 }) => {
   const safeMultiplier = Number(multiplier);
-  const record = findItemPriceRecord(itemPriceCatalog, ingredient?.name);
-  const parsedQuantity = parseIngredientQuantity(ingredient?.quantity);
+  const parsedIngredient = parseRecipeIngredientText(ingredient);
+  const record = findItemPriceRecord(itemPriceCatalog, parsedIngredient.name) || findItemPriceRecord(itemPriceCatalog, ingredient?.name);
+  const parsedQuantity = parsedIngredient.quantityValue !== null && parsedIngredient.unit
+    ? { quantity: parsedIngredient.quantityValue, unit: parsedIngredient.unit }
+    : parseIngredientQuantity(ingredient?.quantity);
 
   if (record && parsedQuantity && Number.isFinite(safeMultiplier) && safeMultiplier > 0) {
     const calculated = calculateItemPriceCost({
@@ -270,6 +395,8 @@ export const calculateRecipeIngredientCost = ({ ingredient, itemPriceCatalog, mu
         priceCatalogKey: record.key,
         pricePerUnit: record.price,
         priceUnit: record.unit,
+        costPerBaseUnit: record.costPerBaseUnit,
+        baseUnit: record.baseUnit,
       };
     }
   }
@@ -284,5 +411,7 @@ export const calculateRecipeIngredientCost = ({ ingredient, itemPriceCatalog, mu
     priceCatalogKey: '',
     pricePerUnit: null,
     priceUnit: '',
+    costPerBaseUnit: null,
+    baseUnit: '',
   };
 };
