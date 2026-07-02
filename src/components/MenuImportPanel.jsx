@@ -7,6 +7,7 @@ import {
   parseMenuPlainText,
   parseMenuPrice,
 } from '../utils/menuImport';
+import { getManagerApiHeaders } from '../utils/apiHeaders';
 
 const readFileAsText = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -88,7 +89,7 @@ function MenuImportPanel({
     try {
       const response = await fetch('/api/gemini-menu', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: getManagerApiHeaders({ 'content-type': 'application/json' }),
         body: JSON.stringify({
           text: file ? '' : sourceText,
           file: file ? await createFilePayload(file) : null,
@@ -338,4 +339,3 @@ function MenuImportPanel({
 }
 
 export default MenuImportPanel;
-

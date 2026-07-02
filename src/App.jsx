@@ -48,6 +48,7 @@ import {
   saveMenuImportHistory,
   saveRestaurantProfile,
 } from './services/restaurantFirestore';
+import { saveCurrentUserStaffProfile } from './services/firebaseAccess';
 import {
   createEmptyRestaurantData,
   getRestaurantResetStorageKeys,
@@ -1502,6 +1503,14 @@ function App() {
       mode: 'management',
       name: trimmedName,
     });
+    await saveCurrentUserStaffProfile({
+      displayName: managerMember.name,
+      role: managerMember.role,
+      roleKey: 'manager',
+      staffId: managerMember.id,
+    }).catch((error) => {
+      console.warn('Could not save manager Firebase access profile.', error);
+    });
     const nextSession = {
       mode: 'management',
       staffId: managerMember.id,
@@ -1572,6 +1581,14 @@ function App() {
       staffSection,
     });
     const roleKey = inferRoleKey(staffMember.role);
+    await saveCurrentUserStaffProfile({
+      displayName: staffMember.name,
+      role: staffMember.role,
+      roleKey,
+      staffId: staffMember.id,
+    }).catch((error) => {
+      console.warn('Could not save Firebase access profile.', error);
+    });
     const nextSession = {
       mode,
       staffId: staffMember.id,
@@ -2519,6 +2536,14 @@ function App() {
       removedAt: '',
       isCsvSeed: false,
     };
+    await saveCurrentUserStaffProfile({
+      displayName: managerMember.name,
+      role: managerMember.role,
+      roleKey: 'manager',
+      staffId: managerMember.id,
+    }).catch((error) => {
+      console.warn('Could not save setup manager Firebase access profile.', error);
+    });
     const setupStaffMembers = await Promise.all(
       (Array.isArray(setupProgress?.staffMembers) ? setupProgress.staffMembers : [])
         .filter((member) => String(member?.name || '').trim())

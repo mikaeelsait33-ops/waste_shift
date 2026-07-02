@@ -6,9 +6,88 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function staffPath(uid) {
+      return /databases/$(database)/documents/staff/$(uid);
+    }
+
+    function hasStaffProfile() {
+      return signedIn() && exists(staffPath(request.auth.uid));
+    }
+
+    function staffProfile() {
+      return get(staffPath(request.auth.uid)).data;
+    }
+
+    function activeStaff() {
+      return hasStaffProfile() && staffProfile().active == true;
+    }
+
+    function roleKey() {
+      return activeStaff() ? staffProfile().roleKey : '';
+    }
+
+    function hasAnyRole(roles) {
+      return activeStaff() && roleKey() in roles;
+    }
+
+    function canLogWaste() {
+      return hasAnyRole(['owner', 'manager', 'chef', 'barista', 'waiter']);
+    }
+
+    function canViewOperations() {
+      return hasAnyRole(['owner', 'manager', 'chef', 'barista']);
+    }
+
+    function canManageMenu() {
+      return hasAnyRole(['owner', 'manager', 'chef', 'barista']);
+    }
+
+    function canManageBusiness() {
+      return hasAnyRole(['owner', 'manager']);
+    }
+
+    function isOwner() {
+      return hasAnyRole(['owner']);
+    }
+
+    function setupIsOpen() {
+      return !exists(/databases/$(database)/documents/restaurants/main)
+        || get(/databases/$(database)/documents/restaurants/main).data.setupCompleted != true;
+    }
+
+    function validStaffProfile() {
+      return request.resource.data.displayName is string
+        && request.resource.data.roleKey in ['owner', 'manager', 'chef', 'barista', 'waiter']
+        && request.resource.data.active is bool
+        && request.resource.data.createdAt is string
+        && request.resource.data.lastLoginAt is string;
+    }
+
+    match /staff/{staffId} {
+      allow read: if signedIn() && (request.auth.uid == staffId || canManageBusiness());
+      allow create: if signedIn()
+        && validStaffProfile()
+        && (
+          (request.auth.uid == staffId && request.resource.data.roleKey in ['chef', 'barista', 'waiter'])
+          || (request.auth.uid == staffId && setupIsOpen() && request.resource.data.roleKey in ['owner', 'manager'])
+          || canManageBusiness()
+        );
+      allow update: if signedIn()
+        && validStaffProfile()
+        && (
+          canManageBusiness()
+          || (
+            request.auth.uid == staffId
+            && request.resource.data.roleKey == resource.data.roleKey
+            && request.resource.data.active == resource.data.active
+          )
+        );
+      allow delete: if false;
+    }
+
     match /menuItems/{menuItemId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn()
+      allow read: if canLogWaste();
+      allow create, update: if canManageMenu()
         && request.resource.data.name is string
         && request.resource.data.totalCost is number
         && request.resource.data.components is list;
@@ -16,20 +95,30 @@ service cloud.firestore {
     }
 
     match /wasteEntries/{entryId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn()
+      allow read: if canViewOperations()
+        || (signedIn() && resource.data.createdByUid == request.auth.uid);
+      allow create: if canLogWaste()
+        && request.resource.data.createdByUid == request.auth.uid
         && request.resource.data.localEntryId is string
         && request.resource.data.name is string
         && request.resource.data.reason is string
         && request.resource.data.foodCostLost is number
         && request.resource.data.quantity is number
         && request.resource.data.timestamp is string;
+      allow update: if canManageBusiness()
+        || (
+          canLogWaste()
+          && resource.data.createdByUid == request.auth.uid
+          && request.resource.data.createdByUid == resource.data.createdByUid
+          && request.resource.data.localEntryId == resource.data.localEntryId
+        );
       allow delete: if false;
     }
 
     match /appData/{snapshotId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn()
+      allow read: if canManageBusiness()
+        && snapshotId == "main";
+      allow create, update: if canManageBusiness()
         && snapshotId == "main"
         && request.resource.data.data is map
         && request.resource.data.exportedAt is string;
@@ -38,7 +127,7 @@ service cloud.firestore {
 
     match /restaurants/{restaurantId} {
       allow read: if signedIn();
-      allow create, update: if signedIn()
+      allow create, update: if (setupIsOpen() || canManageBusiness())
         && restaurantId == "main"
         && request.resource.data.restaurantName is string
         && request.resource.data.currency is string
@@ -48,57 +137,68 @@ service cloud.firestore {
     }
 
     match /menuImports/{importId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn()
+      allow read: if canManageMenu();
+      allow create, update: if canManageMenu()
         && request.resource.data.id is string
         && request.resource.data.createdAt is string;
       allow delete: if false;
     }
 
     match /ingredients/{ingredientId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn()
+      allow read: if canViewOperations();
+      allow create, update: if canManageBusiness()
         && request.resource.data.name is string
         && request.resource.data.category is string
         && request.resource.data.unit is string;
-      allow delete: if signedIn();
+      allow delete: if canManageBusiness();
 
       match /priceHistory/{historyId} {
-        allow read: if signedIn();
-        allow create, update: if signedIn()
+        allow read: if canViewOperations();
+        allow create, update: if canManageBusiness()
           && request.resource.data.date is string
           && request.resource.data.supplier is string
           && request.resource.data.priceExVAT is number
           && request.resource.data.priceIncVAT is number
           && request.resource.data.invoiceId is string;
-        allow delete: if signedIn();
+        allow delete: if canManageBusiness();
       }
     }
 
     match /priceHistory/{historyId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn()
+      allow read: if canViewOperations();
+      allow create, update: if canManageBusiness()
         && request.resource.data.ingredientId is string
         && request.resource.data.supplierId is string
         && request.resource.data.date is string
         && request.resource.data.priceExVAT is number
         && request.resource.data.priceIncVAT is number
         && request.resource.data.invoiceId is string;
-      allow delete: if signedIn();
+      allow delete: if canManageBusiness();
     }
 
     match /stockLevels/{stockId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn()
+      allow read: if canViewOperations();
+      allow create, update: if canManageBusiness()
         && request.resource.data.ingredientId is string
         && request.resource.data.currentQty is number
         && request.resource.data.unit is string;
-      allow delete: if signedIn();
+      allow delete: if canManageBusiness();
+    }
+
+    match /stockMovements/{movementId} {
+      allow read: if canViewOperations();
+      allow create, update: if canManageBusiness()
+        && request.resource.data.movementId is string
+        && request.resource.data.type is string
+        && request.resource.data.quantityBase is number
+        && request.resource.data.baseUnit is string
+        && request.resource.data.sourceType is string;
+      allow delete: if false;
     }
 
     match /invoices/{invoiceId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn()
+      allow read: if canManageBusiness();
+      allow create, update: if canManageBusiness()
         && request.resource.data.invoiceDate is string
         && request.resource.data.supplier is string
         && request.resource.data.totalExVAT is number
@@ -110,15 +210,15 @@ service cloud.firestore {
     }
 
     match /suppliers/{supplierId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn()
+      allow read: if canViewOperations();
+      allow create, update: if canManageBusiness()
         && request.resource.data.name is string;
       allow delete: if false;
     }
 
     match /settings/{settingsId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn()
+      allow read: if canManageBusiness();
+      allow create, update: if canManageBusiness()
         && settingsId == "invoiceConfig"
         && request.resource.data.vatRate is number;
       allow delete: if false;

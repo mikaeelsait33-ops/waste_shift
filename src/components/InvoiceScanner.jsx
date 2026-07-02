@@ -31,6 +31,7 @@ import {
   normalizeIngredientRecord,
 } from '../utils/ingredientIntelligence';
 import { DEFAULT_PAGE_SIZE, getVisiblePage } from '../utils/listPerformance';
+import { getManagerApiHeaders } from '../utils/apiHeaders';
 
 const DEFAULT_VAT_RATE = 0.15;
 const UNIT_OPTIONS = ['kg', 'g', 'L', 'ml', 'each', '5L', 'case of 12', 'case', 'doz', 'pkt', 'bag', 'box', 'bottle', 'tray', 'tin', 'punnet', 'bunch', 'head', 'pillow'];
@@ -293,6 +294,8 @@ function InvoiceScanner({
   const [newIngredientDrafts, setNewIngredientDrafts] = useState({});
   const [confirmedInvoice, setConfirmedInvoice] = useState(null);
   const [stockUpdates, setStockUpdates] = useState([]);
+  const [isConfirmingInvoice, setIsConfirmingInvoice] = useState(false);
+  const [isUpdatingStock, setIsUpdatingStock] = useState(false);
   const [historySearch, setHistorySearch] = useState('');
   const [historyStartDate, setHistoryStartDate] = useState('');
   const [historyEndDate, setHistoryEndDate] = useState('');
@@ -306,7 +309,7 @@ function InvoiceScanner({
   const [deletingIngredientId, setDeletingIngredientId] = useState('');
   const [deletingInvoiceId, setDeletingInvoiceId] = useState('');
 
-  const canManageInvoices = Boolean(accessProfile?.canManageStoreRoom || accessProfile?.canManageMenu);
+  const canManageInvoices = Boolean(accessProfile?.canUseAiImports);
   const canExportInvoiceReports = Boolean(accessProfile?.canExportData);
   const firebaseReady = invoiceFirestoreIsConfigured();
   const localMenuItems = useMemo(() => createLocalMenuItems(recipes, menuItems), [recipes, menuItems]);
@@ -783,7 +786,7 @@ function InvoiceScanner({
     const scanPayload = await createScanPayload(file);
     const response = await fetch('/api/gemini-invoice', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: getManagerApiHeaders({ 'content-type': 'application/json' }),
         body: JSON.stringify({
           file: scanPayload,
           vatMode,
@@ -1065,7 +1068,7 @@ function InvoiceScanner({
 
   const handleDeleteIngredient = async (ingredient) => {
     if (!canManageInvoices) {
-      setMessage('Only an owner, manager, chef, or barista can delete raw ingredients.');
+      setMessage('Only an owner or manager can delete raw ingredients.');
       return;
     }
 
@@ -1093,7 +1096,7 @@ function InvoiceScanner({
 
   const handleDeleteInvoice = async (invoice) => {
     if (!canManageInvoices) {
-      setMessage('Only an owner, manager, chef, or barista can delete invoices.');
+      setMessage('Only an owner or manager can delete invoices.');
       return;
     }
 
@@ -1201,9 +1204,9 @@ function InvoiceScanner({
     }
   };
 
-  const confirmInvoice = async () => {
+  const confirmInvoice = async (stockMode = 'prices_only') => {
     if (!canManageInvoices) {
-      setMessage('Only an owner, manager, chef, or barista can confirm invoices.');
+      setMessage('Only an owner or manager can confirm invoices.');
       return;
     }
 
@@ -1222,23 +1225,35 @@ function InvoiceScanner({
       return;
     }
 
+    if (isConfirmingInvoice) {
+      return;
+    }
+
     const invoiceId = createRecordId('invoice');
+    const shouldPostStock = stockMode === 'post_now' || stockMode === 'historical';
+    const stockPostingStatus = stockMode === 'prices_only'
+      ? 'prices_only'
+      : 'not_posted';
     const manualSourceText = lineItems
       .map((item) => `${item.itemName} | ${item.quantity} ${item.unit} | ${formatMoney(item.unitPrice)} | ${formatMoney(item.lineTotal)}`)
       .join('\n');
 
     try {
+      setIsConfirmingInvoice(true);
       const result = await saveConfirmedInvoice({
         invoiceId,
         invoiceNumber,
         supplierName,
         invoiceDate,
+        receivedDate: invoiceDate,
         lineItems,
         ingredientRows,
         totals,
         extractedTotals,
         vatRate,
         vatMode,
+        confirmedBy: accessProfile?.operatorName || 'WasteShift user',
+        stockPostingStatus,
         rawText: [
           `Supplier: ${supplierName || 'Unknown supplier'}`,
           `Invoice number: ${invoiceNumber || invoiceId}`,
@@ -1256,6 +1271,7 @@ function InvoiceScanner({
         invoiceNumber,
         lineItems,
         ingredientRows,
+        stockPostingStatus,
       });
       setBatchDrafts((currentDrafts) => currentDrafts.map((draft) => (
         draft.id === activeBatchDraftId
@@ -1269,10 +1285,37 @@ function InvoiceScanner({
         lineItems,
         ingredientRows,
       });
-      setMessage('Invoice confirmed and saved. You can update stock now.');
+      if (shouldPostStock) {
+        const stockResult = await updateStockFromInvoice({
+          invoiceId: result.invoiceId,
+          lineItems,
+          ingredientRows,
+          postingMode: stockMode === 'historical' ? 'historical_posted' : 'posted',
+          postedBy: accessProfile?.operatorName || 'WasteShift user',
+        });
+
+        setStockUpdates(stockResult.updates || []);
+        setConfirmedInvoice((currentInvoice) => ({
+          ...(currentInvoice || {}),
+          invoiceId: result.invoiceId,
+          invoiceNumber,
+          lineItems,
+          ingredientRows,
+          stockPostingStatus: stockMode === 'historical' ? 'historical_posted' : 'posted',
+          stockMovementIds: stockResult.stockMovementIds || [],
+        }));
+        setMessage(stockResult.alreadyPosted
+          ? 'Invoice confirmed. Stock was already updated earlier.'
+          : `Invoice confirmed and stock ${stockMode === 'historical' ? 'historically ' : ''}updated for ${stockResult.updates?.length || 0} ingredient${stockResult.updates?.length === 1 ? '' : 's'}.`);
+      } else {
+        setStockUpdates([]);
+        setMessage('Invoice confirmed without changing stock. Prices and ingredient history were updated.');
+      }
       await refreshWorkspace();
     } catch (error) {
       setMessage(error?.message || 'Could not confirm this invoice.');
+    } finally {
+      setIsConfirmingInvoice(false);
     }
   };
 
@@ -1282,18 +1325,36 @@ function InvoiceScanner({
       return;
     }
 
+    if (isUpdatingStock) {
+      return;
+    }
+
     try {
+      setIsUpdatingStock(true);
       const result = await updateStockFromInvoice({
         invoiceId: confirmedInvoice.invoiceId,
         lineItems: confirmedInvoice.lineItems,
         ingredientRows: confirmedInvoice.ingredientRows,
+        postingMode: 'posted',
+        postedBy: accessProfile?.operatorName || 'WasteShift user',
       });
 
       setStockUpdates(result.updates || []);
-      setMessage(`Stock updated for ${result.updates?.length || 0} ingredient${result.updates?.length === 1 ? '' : 's'}.`);
+      setConfirmedInvoice((currentInvoice) => currentInvoice
+        ? {
+            ...currentInvoice,
+            stockPostingStatus: result.alreadyPosted ? currentInvoice.stockPostingStatus || 'posted' : 'posted',
+            stockMovementIds: result.stockMovementIds || currentInvoice.stockMovementIds || [],
+          }
+        : currentInvoice);
+      setMessage(result.alreadyPosted
+        ? 'Stock already updated for this invoice.'
+        : `Stock updated for ${result.updates?.length || 0} ingredient${result.updates?.length === 1 ? '' : 's'}.`);
       await refreshWorkspace();
     } catch (error) {
       setMessage(error?.message || 'Could not update stock from this invoice.');
+    } finally {
+      setIsUpdatingStock(false);
     }
   };
 
@@ -1864,16 +1925,32 @@ function InvoiceScanner({
                 <span className="badge">{lineItems.length} lines</span>
               </div>
               <div className="manager-row">
-                <button type="button" className="primary-button" onClick={confirmInvoice} disabled={!canManageInvoices || lineItems.length === 0}>
-                  {canManageInvoices ? 'Confirm invoice' : 'Manager only'}
+                <button type="button" className="primary-button" onClick={() => confirmInvoice('post_now')} disabled={!canManageInvoices || lineItems.length === 0 || isConfirmingInvoice}>
+                  {isConfirmingInvoice ? 'Confirming...' : canManageInvoices ? 'Confirm & Update Stock' : 'Manager only'}
                 </button>
-                <button type="button" className="ghost-button is-warning" onClick={handleUpdateStock} disabled={!confirmedInvoice}>
-                  Update Stock
+                <button type="button" className="ghost-button is-warning" onClick={() => confirmInvoice('prices_only')} disabled={!canManageInvoices || lineItems.length === 0 || isConfirmingInvoice}>
+                  Confirm Without Updating Stock
+                </button>
+                <button type="button" className="ghost-button" onClick={() => confirmInvoice('historical')} disabled={!canManageInvoices || lineItems.length === 0 || isConfirmingInvoice}>
+                  Confirm as Historical Stock
+                </button>
+                <button
+                  type="button"
+                  className="ghost-button is-warning"
+                  onClick={handleUpdateStock}
+                  disabled={!confirmedInvoice || isUpdatingStock || ['posted', 'historical_posted'].includes(confirmedInvoice?.stockPostingStatus)}
+                >
+                  {['posted', 'historical_posted'].includes(confirmedInvoice?.stockPostingStatus)
+                    ? 'Stock already updated'
+                    : isUpdatingStock ? 'Updating...' : 'Update Stock'}
                 </button>
                 <span className={`badge${lowStockAlerts.length > 0 ? ' is-red' : ' is-green'}`}>
                   {lowStockAlerts.length} low-stock alert{lowStockAlerts.length === 1 ? '' : 's'}
                 </span>
               </div>
+              <p className="small-text" style={{ marginTop: '10px' }}>
+                Use prices-only for older invoices that should update ingredient costs without increasing current stock.
+              </p>
 
               {lowStockAlerts.length > 0 && (
                 <div className="low-stock-alert-list">

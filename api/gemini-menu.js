@@ -1,3 +1,5 @@
+import { authorizeManagerApiRequest } from './_auth.js';
+
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const ALLOWED_MIME_TYPES = new Set([
@@ -203,6 +205,13 @@ export default async function handler(request, response) {
     return;
   }
 
+  const authorization = authorizeManagerApiRequest(request);
+
+  if (!authorization.ok) {
+    sendJson(response, authorization.status, authorization.body);
+    return;
+  }
+
   const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_GEMINI_API_KEY;
 
   if (!apiKey) {
@@ -239,4 +248,3 @@ export default async function handler(request, response) {
     });
   }
 }
-

@@ -188,7 +188,7 @@ const createFirestoreAppDataPayload = (databaseData) => {
   });
 };
 
-const createFirestoreWasteEntryPayload = (entry) => {
+const createFirestoreWasteEntryPayload = (entry, authUser = null) => {
   const createdAt = toSafeString(entry?.createdAt) || new Date().toISOString();
   const wastedComponents = (Array.isArray(entry?.wastedComponents) ? entry.wastedComponents : [])
     .map(sanitizeWasteComponent)
@@ -221,6 +221,7 @@ const createFirestoreWasteEntryPayload = (entry) => {
     time: toSafeString(entry?.time),
     timestamp: createdAt,
     createdAt,
+    createdByUid: toSafeString(authUser?.uid || entry?.createdByUid),
     createdBy: toSafeString(entry?.createdBy),
     lastEditedBy: toSafeString(entry?.lastEditedBy),
     status: toSafeString(entry?.status) || 'logged',
@@ -414,13 +415,13 @@ export const saveFirestoreWasteEntry = async (entry) => {
     return { ok: false, skipped: true };
   }
 
-  const payload = createFirestoreWasteEntryPayload(entry);
+  const authUser = await ensureFirebaseAuth();
+  const payload = createFirestoreWasteEntryPayload(entry, authUser);
 
   if (!payload.name || !payload.reason) {
     return { ok: false, skipped: true };
   }
 
-  await ensureFirebaseAuth();
   const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
   await setDoc(doc(db, 'wasteEntries', safeEntryId), {
     ...payload,

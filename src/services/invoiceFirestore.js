@@ -558,6 +558,7 @@ export const saveConfirmedInvoice = async ({
   invoiceNumber,
   supplierName,
   invoiceDate,
+  receivedDate,
   lineItems,
   ingredientRows,
   totals,
@@ -565,6 +566,8 @@ export const saveConfirmedInvoice = async ({
   vatRate,
   vatMode,
   rawText,
+  confirmedBy = '',
+  stockPostingStatus = 'not_posted',
 }) => {
   const db = await getFirestoreDb();
 
@@ -578,8 +581,13 @@ export const saveConfirmedInvoice = async ({
   const safeTotals = totals || {};
   const safeExtractedTotals = extractedTotals || {};
   const safeInvoiceDate = sanitizeString(invoiceDate) || new Date().toISOString().slice(0, 10);
+  const safeReceivedDate = sanitizeString(receivedDate) || safeInvoiceDate;
   const safeInvoiceNumber = sanitizeString(invoiceNumber) || safeInvoiceId;
   const supplierId = createSupplierId(safeSupplierName);
+  const confirmedAt = new Date().toISOString();
+  const safeStockPostingStatus = ['not_posted', 'posted', 'prices_only', 'historical_posted'].includes(stockPostingStatus)
+    ? stockPostingStatus
+    : 'not_posted';
 
   await ensureFirebaseAuth();
   const { doc, getDoc, increment, serverTimestamp, setDoc } = await getFirestoreApi();
@@ -589,6 +597,7 @@ export const saveConfirmedInvoice = async ({
   await setDoc(doc(db, 'invoices', safeInvoiceId), {
     id: safeInvoiceId,
     invoiceDate: safeInvoiceDate,
+    receivedDate: safeReceivedDate,
     date: safeInvoiceDate,
     invoiceNumber: safeInvoiceNumber,
     supplier: safeSupplierName,
@@ -608,7 +617,13 @@ export const saveConfirmedInvoice = async ({
     lineItems: safeLineItems,
     ingredientRows: Array.isArray(ingredientRows) ? ingredientRows : [],
     scannedAt: new Date().toISOString(),
-    status: 'confirmed',
+    status: safeStockPostingStatus === 'prices_only' ? 'prices_only' : 'confirmed',
+    confirmedAt,
+    confirmedBy: sanitizeString(confirmedBy) || 'WasteShift user',
+    stockPostingStatus: safeStockPostingStatus,
+    stockPostedAt: '',
+    stockPostedBy: '',
+    stockMovementIds: [],
     vatRate: sanitizeNumber(vatRate, 0.15),
     vatMode: sanitizeString(vatMode) || 'inclusive',
     rawText: sanitizeString(rawText).slice(0, 12000),
@@ -775,7 +790,13 @@ export const softDeleteInvoice = async (invoiceId, { deletedBy = '' } = {}) => {
   };
 };
 
-export const updateStockFromInvoice = async ({ invoiceId, lineItems, ingredientRows }) => {
+export const updateStockFromInvoice = async ({
+  invoiceId,
+  lineItems,
+  ingredientRows,
+  postingMode = 'posted',
+  postedBy = '',
+}) => {
   const db = await getFirestoreDb();
 
   if (!db) {
@@ -784,7 +805,24 @@ export const updateStockFromInvoice = async ({ invoiceId, lineItems, ingredientR
 
   await ensureFirebaseAuth();
   const { doc, getDoc, serverTimestamp, setDoc, updateDoc } = await getFirestoreApi();
+  const invoiceRef = doc(db, 'invoices', invoiceId);
+  const invoiceSnapshot = await getDoc(invoiceRef);
+  const invoiceData = invoiceSnapshot.data() || {};
+  const currentPostingStatus = sanitizeString(invoiceData.stockPostingStatus);
+
+  if (['posted', 'historical_posted'].includes(currentPostingStatus)) {
+    return {
+      ok: true,
+      alreadyPosted: true,
+      updates: [],
+      stockMovementIds: Array.isArray(invoiceData.stockMovementIds) ? invoiceData.stockMovementIds : [],
+      message: 'Stock was already updated for this invoice.',
+    };
+  }
+
   const updates = [];
+  const stockMovementIds = [];
+  const nextPostingStatus = postingMode === 'historical_posted' ? 'historical_posted' : 'posted';
 
   for (const row of Array.isArray(ingredientRows) ? ingredientRows : []) {
     const ingredientId = sanitizeString(row?.ingredientId);
@@ -806,6 +844,9 @@ export const updateStockFromInvoice = async ({ invoiceId, lineItems, ingredientR
       : reorderPoint > 0 && nextQty <= reorderPoint
         ? 'low'
         : 'ok';
+    const movementId = `${invoiceId}_${lineItem.id || row.lineItemId || ingredientId}_${ingredientId}`.replace(/[^a-z0-9_-]/gi, '_');
+
+    stockMovementIds.push(movementId);
 
     await setDoc(stockRef, {
       ingredientId,
@@ -830,14 +871,18 @@ export const updateStockFromInvoice = async ({ invoiceId, lineItems, ingredientR
   }
 
   if (invoiceId) {
-    await updateDoc(doc(db, 'invoices', invoiceId), {
+    await updateDoc(invoiceRef, {
       stockUpdatedAt: serverTimestamp(),
       stockUpdateCount: updates.length,
-      status: 'stock-updated',
+      stockPostingStatus: nextPostingStatus,
+      stockPostedAt: serverTimestamp(),
+      stockPostedBy: sanitizeString(postedBy) || 'WasteShift user',
+      stockMovementIds,
+      status: nextPostingStatus === 'historical_posted' ? 'historical_stock' : 'posted_to_stock',
     });
   }
 
-  return { ok: true, updates };
+  return { ok: true, updates, stockMovementIds };
 };
 
 export const loadInvoiceDashboardStats = async () => {

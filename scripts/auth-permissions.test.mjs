@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { getAccessProfile, inferRoleKey, requirePermission } from '../src/utils/accessControl.js';
+import { getAccessProfile, inferRoleKey, normalizeAccessRoleKey, requirePermission } from '../src/utils/accessControl.js';
 import { createRecordId } from '../src/utils/ids.js';
 import {
   DEFAULT_AUTH_SETTINGS,
@@ -31,16 +31,23 @@ assert.equal(sanitizeAuthSettings({ managementPin: { hash: 'plain' } }).manageme
 assert.equal(inferRoleKey('Owner'), 'owner');
 assert.equal(inferRoleKey('Shift Manager'), 'manager');
 assert.equal(inferRoleKey('Kitchen chef'), 'chef');
-assert.equal(inferRoleKey('Waiter'), 'staff');
+assert.equal(inferRoleKey('Barista'), 'barista');
+assert.equal(inferRoleKey('Waiter'), 'waiter');
+assert.equal(normalizeAccessRoleKey('staff'), 'waiter');
 
 const managerProfile = getAccessProfile({ id: 'staff_1', name: 'Nadia', role: 'Manager' });
 const staffProfile = getAccessProfile({ id: 'staff_2', name: 'Team', role: 'Waiter' });
+const chefProfile = getAccessProfile({ id: 'staff_3', name: 'Chef', role: 'Chef' });
 
 assert.equal(managerProfile.canManageStaff, true);
 assert.equal(managerProfile.canClearData, true);
 assert.equal(staffProfile.canLogWaste, true);
 assert.equal(staffProfile.canManageStaff, false);
 assert.equal(staffProfile.canViewFinancials, false);
+assert.equal(staffProfile.canCreateWasteOnly, true);
+assert.equal(chefProfile.canManageMenu, true);
+assert.equal(chefProfile.canManageStoreRoom, true);
+assert.equal(chefProfile.canManageStaff, false);
 assert.deepEqual(requirePermission(managerProfile, 'canManageStaff'), { ok: true, message: '' });
 assert.equal(requirePermission(staffProfile, 'canManageStaff', 'manage staff').ok, false);
 assert.match(requirePermission(staffProfile, 'canManageStaff', 'manage staff').message, /does not have permission/);

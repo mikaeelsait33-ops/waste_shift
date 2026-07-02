@@ -28,7 +28,7 @@ npm.cmd run build
 
 `npm.cmd test` runs unit and integration-style Node tests for waste calculations, invoice parsing, stock alerts, setup/menu import, shift sync/drafts, ingredient intelligence, performance helpers, auth/permissions, API route validation, and generated large datasets. These tests use mocks or local-only inputs and do not require production Firebase credentials or Gemini calls.
 
-`npm.cmd run test:e2e` currently runs CI-safe smoke checks over the critical app surfaces: setup, login, waste logging, partial waste, dashboard, waste list filters, invoices, cost review, settings, and reset. Full Playwright browser automation is not installed yet; add it later when the team is ready for downloaded browser binaries and slower CI runs.
+`npm.cmd run test:e2e` starts a local Vite server in E2E mode, runs Playwright browser checks for the setup wizard on desktop and mobile, then runs CI-safe source smoke checks over setup, login, waste logging, partial waste, dashboard, waste list filters, invoices, cost review, settings, and reset. E2E mode disables live Firebase calls so these checks do not need production credentials.
 
 `npm.cmd run test:stress` is safe by default. It only generates local fixtures for 1,000/5,000 waste entries, 500 menu items, 500 ingredients, 100 staff, 500 inventory movements, and 100 invoices. To run HTTP stress checks, point it only at local/staging/preview:
 
@@ -46,7 +46,7 @@ Test environment notes:
 - Firebase app env vars are only required for live app testing, not basic unit tests.
 - `GEMINI_API_KEY` is not required for tests; API tests verify missing-key and validation behavior without external calls.
 - `WASTESHIFT_SYNC_SECRET` is tested with temporary mock values.
-- CI runs `npm ci`, lint, tests, E2E smoke, and build without production secrets.
+- CI runs `npm ci`, installs the Playwright Chromium browser, then runs lint, tests, E2E smoke, and build without production secrets.
 
 Troubleshooting tests:
 

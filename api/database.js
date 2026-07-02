@@ -1,5 +1,6 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { get, list, put } from '@vercel/blob';
+import { authorizeManagerApiRequest } from './_auth.js';
 
 const LEGACY_DATABASE_PATH = 'wasteshift/database.json';
 const DATABASE_FOLDER = 'wasteshift/databases/';
@@ -182,6 +183,13 @@ const writeDatabase = async (data) => {
 };
 
 export default async function handler(request, response) {
+  const managerAuthorization = authorizeManagerApiRequest(request);
+
+  if (!managerAuthorization.ok) {
+    sendJson(response, managerAuthorization.status, managerAuthorization.body);
+    return;
+  }
+
   if (!authorizeRequest(request, response)) {
     return;
   }

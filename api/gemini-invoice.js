@@ -1,3 +1,5 @@
+import { authorizeManagerApiRequest } from './_auth.js';
+
 const DEFAULT_VAT_RATE = 0.15;
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 const MAX_SCAN_BYTES = 9 * 1024 * 1024;
@@ -400,6 +402,13 @@ const callGemini = async ({ apiKey, model, file, fallbackVatMode, fallbackVatRat
 export default async function handler(request, response) {
   if (request.method !== 'POST') {
     sendJson(response, 405, { ok: false, message: 'Method not allowed.' });
+    return;
+  }
+
+  const authorization = authorizeManagerApiRequest(request);
+
+  if (!authorization.ok) {
+    sendJson(response, authorization.status, authorization.body);
     return;
   }
 

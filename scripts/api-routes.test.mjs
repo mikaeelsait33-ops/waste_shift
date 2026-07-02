@@ -93,6 +93,33 @@ response = await callHandler(databaseProtectedHandler, {
 assert.equal(response.statusCode, 400);
 
 delete process.env.WASTESHIFT_SYNC_SECRET;
+process.env.WASTESHIFT_MANAGER_API_SECRET = 'manager-api-secret';
+
+const databaseManagerProtectedHandler = await importDatabaseHandler();
+
+response = await callHandler(databaseManagerProtectedHandler, {
+  method: 'POST',
+  body: JSON.stringify({ data: { wasteItems: 'bad' } }),
+});
+assert.equal(response.statusCode, 401);
+assert.equal(response.body.code, 'manager_api_secret_required');
+
+response = await callHandler(databaseManagerProtectedHandler, {
+  method: 'POST',
+  headers: { 'x-wasteshift-manager-secret': 'wrong' },
+  body: JSON.stringify({ data: { wasteItems: 'bad' } }),
+});
+assert.equal(response.statusCode, 403);
+assert.equal(response.body.code, 'manager_api_secret_invalid');
+
+response = await callHandler(databaseManagerProtectedHandler, {
+  method: 'POST',
+  headers: { 'x-wasteshift-manager-secret': 'manager-api-secret' },
+  body: JSON.stringify({ data: { wasteItems: 'bad' } }),
+});
+assert.equal(response.statusCode, 400);
+
+delete process.env.WASTESHIFT_MANAGER_API_SECRET;
 delete process.env.GEMINI_API_KEY;
 delete process.env.GOOGLE_GEMINI_API_KEY;
 delete process.env.GOOGLE_API_KEY;
@@ -121,6 +148,32 @@ response = await callHandler(invoiceHandler, {
 assert.equal(response.statusCode, 503);
 assert.match(response.body.message, /Gemini API key/);
 
+process.env.WASTESHIFT_MANAGER_API_SECRET = 'manager-api-secret';
+
+response = await callHandler(menuHandler, {
+  method: 'POST',
+  body: JSON.stringify({ text: 'Coffee R35' }),
+});
+assert.equal(response.statusCode, 401);
+assert.equal(response.body.code, 'manager_api_secret_required');
+
+response = await callHandler(invoiceHandler, {
+  method: 'POST',
+  headers: { 'x-wasteshift-manager-secret': 'wrong' },
+  body: JSON.stringify({ file: { name: 'invoice.jpg', mimeType: 'image/jpeg', data: 'abc' } }),
+});
+assert.equal(response.statusCode, 403);
+assert.equal(response.body.code, 'manager_api_secret_invalid');
+
+response = await callHandler(menuHandler, {
+  method: 'POST',
+  headers: { 'x-wasteshift-manager-secret': 'manager-api-secret' },
+  body: JSON.stringify({ text: 'Coffee R35' }),
+});
+assert.equal(response.statusCode, 503);
+assert.match(response.body.message, /Gemini API key/);
+
+delete process.env.WASTESHIFT_MANAGER_API_SECRET;
 process.env.GEMINI_API_KEY = 'test-key';
 let fetchWasCalled = false;
 const originalFetch = globalThis.fetch;
