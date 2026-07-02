@@ -14,6 +14,56 @@ npm.cmd run build
 
 Local data is saved in browser storage while Firebase is used for shared menu items and waste entries when env vars are configured. Database backups can still be exported from the Database page.
 
+## Testing And Beta Readiness
+
+Core verification commands:
+
+```bash
+npm.cmd run lint
+npm.cmd test
+npm.cmd run test:e2e
+npm.cmd run test:stress
+npm.cmd run build
+```
+
+`npm.cmd test` runs unit and integration-style Node tests for waste calculations, invoice parsing, stock alerts, setup/menu import, shift sync/drafts, ingredient intelligence, performance helpers, auth/permissions, API route validation, and generated large datasets. These tests use mocks or local-only inputs and do not require production Firebase credentials or Gemini calls.
+
+`npm.cmd run test:e2e` currently runs CI-safe smoke checks over the critical app surfaces: setup, login, waste logging, partial waste, dashboard, waste list filters, invoices, cost review, settings, and reset. Full Playwright browser automation is not installed yet; add it later when the team is ready for downloaded browser binaries and slower CI runs.
+
+`npm.cmd run test:stress` is safe by default. It only generates local fixtures for 1,000/5,000 waste entries, 500 menu items, 500 ingredients, 100 staff, 500 inventory movements, and 100 invoices. To run HTTP stress checks, point it only at local/staging/preview:
+
+```bash
+set WASTESHIFT_STRESS_TARGET=http://127.0.0.1:5173
+set WASTESHIFT_STRESS_CONCURRENCY=10
+set WASTESHIFT_STRESS_REQUESTS=20
+npm.cmd run test:stress
+```
+
+Do not run stress tests against production. The script refuses targets that are not localhost, staging, or preview-like URLs.
+
+Test environment notes:
+
+- Firebase app env vars are only required for live app testing, not basic unit tests.
+- `GEMINI_API_KEY` is not required for tests; API tests verify missing-key and validation behavior without external calls.
+- `WASTESHIFT_SYNC_SECRET` is tested with temporary mock values.
+- CI runs `npm ci`, lint, tests, E2E smoke, and build without production secrets.
+
+Troubleshooting tests:
+
+- If Firebase rules deploy fails, run `firebase login` locally and then `npm.cmd run firebase:deploy:firestore`.
+- If `npm.cmd test` hangs, use the file-by-file runner output to identify the last printed script.
+- If stress tests fail thresholds locally, reduce concurrency or check the dev server first.
+- If build warns about large chunks, verify the build still exits successfully; Firebase/recharts chunks are the current known source.
+
+Beta testing checklist:
+
+- Publish Firestore rules before first setup.
+- Complete setup with a manager PIN and at least one staff code.
+- Log ingredient waste, menu waste, and partial menu waste.
+- Confirm pending/failed sync messaging appears when offline.
+- Import or manually enter a small invoice and confirm ingredient prices update.
+- Reset only in a test restaurant after exporting data.
+
 ## Performance And Device Notes
 
 WasteShift is optimized for current Chrome, Edge, and Safari on mobile phones, iPads/tablets, and small kitchen laptops. The dashboard opens to the current week by default, long waste logs render in batches, and the invoice review, invoice history, and raw ingredient library include load-more controls instead of rendering every record at once.

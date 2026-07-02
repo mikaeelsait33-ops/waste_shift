@@ -57,7 +57,8 @@ const DEFAULT_RECIPES = {};
 const DEFAULT_RECIPE_SEED_VERSION = 'fresh-restaurant-empty-v1';
 const SERVER_DATABASE_ENDPOINT = '/api/database';
 const FIRESTORE_RUNTIME_INFO = getFirestoreRuntimeInfo();
-const FIRESTORE_CONFIGURED = firestoreIsConfigured();
+const E2E_TEST_MODE = import.meta.env.VITE_WASTESHIFT_E2E === 'true';
+const FIRESTORE_CONFIGURED = !E2E_TEST_MODE && firestoreIsConfigured();
 const OLD_DEFAULT_COST_BASIS = 'Menu price from menuItems.csv split evenly across listed ingredients.';
 const STAFF_FRESH_START_VERSION = 'empty-staff-roster-v1';
 const DEFAULT_SETTINGS = {
@@ -904,6 +905,11 @@ function App() {
     mergeMenuItems(baseMenuItems, customMenuItems, effectiveRecipes)
   ), [baseMenuItems, customMenuItems, effectiveRecipes]);
   const refreshInvoiceDashboardStats = useCallback(async () => {
+    if (!FIRESTORE_CONFIGURED) {
+      setInvoiceDashboardStats(null);
+      return;
+    }
+
     try {
       setInvoiceDashboardStats(await loadInvoiceDashboardStats());
     } catch (error) {

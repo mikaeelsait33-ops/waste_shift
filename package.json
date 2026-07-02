@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
-    "test": "node scripts/waste-calculations.test.mjs && node scripts/invoice-parsing.test.mjs && node scripts/stock-alerts.test.mjs && node scripts/foundation.test.mjs && node scripts/setup-workflow.test.mjs && node scripts/shift-workflow.test.mjs && node scripts/ingredient-intelligence.test.mjs && node scripts/performance.test.mjs",
+    "test": "node scripts/run-tests.mjs",
+    "test:e2e": "node scripts/run-e2e.mjs",
+    "test:stress": "node scripts/stress-local.mjs",
     "firebase:smoke": "node scripts/firebase-smoke.mjs",
     "seed:database": "node scripts/no-seed-database.mjs",
     "preview": "vite preview",
@@ -23,6 +25,7 @@
     "recharts": "^3.9.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
