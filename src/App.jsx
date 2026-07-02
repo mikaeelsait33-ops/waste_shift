@@ -2474,17 +2474,7 @@ function App() {
       return { ok: false, message: 'Manager setup is required.' };
     }
 
-    const profileResult = await saveRestaurantProfile({
-      restaurantName,
-      branchName: setupProgress?.branchName,
-      currency: 'ZAR',
-      timezone: 'Africa/Johannesburg',
-    }, { completeSetup: true });
-
-    if (!profileResult?.ok) {
-      return { ok: false, message: 'Could not save restaurant profile to Firebase.' };
-    }
-
+    try {
     const pinResult = await handleSavePinSettings({
       managementPin: managerPin,
       pinPresetVersion: 'setup-wizard-v1',
@@ -2535,6 +2525,17 @@ function App() {
       });
     }
 
+    const profileResult = await saveRestaurantProfile({
+      restaurantName,
+      branchName: setupProgress?.branchName,
+      currency: 'ZAR',
+      timezone: 'Africa/Johannesburg',
+    }, { completeSetup: true });
+
+    if (!profileResult?.ok) {
+      return { ok: false, message: 'Could not save restaurant profile to Firebase.' };
+    }
+
     const nextSession = {
       mode: 'management',
       staffId: managerMember.id,
@@ -2563,6 +2564,18 @@ function App() {
     ].slice(0, 500));
 
     return { ok: true, message: 'Setup complete.' };
+    } catch (error) {
+      const message = String(error?.message || '');
+      const isPermissionError = error?.code === 'permission-denied'
+        || message.toLowerCase().includes('missing or insufficient permissions');
+
+      return {
+        ok: false,
+        message: isPermissionError
+          ? 'Firestore rules are blocking setup. Deploy the updated firestore.rules file, then try Finish setup again.'
+          : message || 'Could not finish setup.',
+      };
+    }
   }, [handleSavePinSettings, saveApprovedMenuItems]);
 
   const handleAddNewRecipe = (key, recipeObject) => {

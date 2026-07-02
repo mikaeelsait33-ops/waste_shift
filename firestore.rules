@@ -36,6 +36,25 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /restaurants/{restaurantId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && restaurantId == "main"
+        && request.resource.data.restaurantName is string
+        && request.resource.data.currency is string
+        && request.resource.data.timezone is string
+        && request.resource.data.setupCompleted is bool;
+      allow delete: if false;
+    }
+
+    match /menuImports/{importId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && request.resource.data.id is string
+        && request.resource.data.createdAt is string;
+      allow delete: if false;
+    }
+
     match /ingredients/{ingredientId} {
       allow read: if signedIn();
       allow create, update: if signedIn()
