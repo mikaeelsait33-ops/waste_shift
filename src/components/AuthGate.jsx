@@ -1,23 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 function AuthGate({
   isPreparingAuth,
   authIsConfigured = false,
   staffList = [],
-  serverSync,
-  syncAccessKey = '',
   onLogin,
   onInitialManagerSetup,
-  onSyncAccessKeySubmit,
 }) {
   const [mode, setMode] = useState('staff');
   const [name, setName] = useState('');
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
-  const [accessKey, setAccessKey] = useState(syncAccessKey);
   const [message, setMessage] = useState('');
   const [isBusy, setIsBusy] = useState(false);
-  const [isSavingAccessKey, setIsSavingAccessKey] = useState(false);
   const staffLoginOptions = (Array.isArray(staffList) ? staffList : [])
     .filter((member) => (
       member?.id
@@ -27,10 +22,6 @@ function AuthGate({
       && !/\b(owner|manager)\b/i.test(String(member.role || ''))
     ))
     .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
-
-  useEffect(() => {
-    setAccessKey(syncAccessKey);
-  }, [syncAccessKey]);
 
   const handleLoginSubmit = async (event) => {
     event.preventDefault();
@@ -94,26 +85,6 @@ function AuthGate({
     }
   };
 
-  const handleAccessKeySubmit = async (event) => {
-    event.preventDefault();
-
-    if (!accessKey.trim()) {
-      setMessage('Enter the manager access key first.');
-      return;
-    }
-
-    setIsSavingAccessKey(true);
-    setMessage('');
-
-    try {
-      const result = await onSyncAccessKeySubmit?.(accessKey);
-
-      setMessage(result?.message || 'Access key saved. Loading shared restaurant data...');
-    } finally {
-      setIsSavingAccessKey(false);
-    }
-  };
-
   return (
     <main className="auth-screen">
       <section className="auth-panel">
@@ -135,44 +106,13 @@ function AuthGate({
             <div className="muted-box" style={{ marginBottom: 0 }}>Almost ready.</div>
           </div>
         ) : (
-          <>
-            <form onSubmit={handleAccessKeySubmit} className="auth-form auth-form--compact">
-              <div>
-                <p className="eyebrow">Existing restaurant</p>
-                <h2 className="title">Load Shared Access</h2>
-                <p className="subtitle">
-                  On a new phone or tablet, enter the manager access key once so WasteShift can load the shared staff list and PIN settings.
-                </p>
-              </div>
-
-              <div className="field">
-                <label htmlFor="sync-access-key">Manager access key</label>
-                <input
-                  id="sync-access-key"
-                  type="password"
-                  autoComplete="current-password"
-                  value={accessKey}
-                  onChange={(event) => setAccessKey(event.target.value)}
-                  placeholder="Paste the Vercel manager key"
-                  className="input"
-                />
-              </div>
-
-              <button type="submit" className="ghost-button is-warning" disabled={isSavingAccessKey}>
-                {isSavingAccessKey ? 'Saving...' : 'Load existing restaurant'}
-              </button>
-              {serverSync?.message && (
-                <p className="small-text" style={{ margin: 0 }}>{serverSync.message}</p>
-              )}
-            </form>
-
-            <form onSubmit={handleLoginSubmit} className="auth-form">
+          <form onSubmit={handleLoginSubmit} className="auth-form">
               <div>
                 <p className="eyebrow">{!authIsConfigured ? 'First-time setup' : mode === 'management' ? 'Management login' : 'Staff login'}</p>
                 <h2 className="title">{!authIsConfigured ? 'Create Manager Access' : mode === 'management' ? 'Unlock Management' : 'Start Waste Logging'}</h2>
                 <p className="subtitle">
                   {!authIsConfigured
-                    ? 'Create the first manager profile only if this is a new restaurant. Existing restaurants should load shared access first.'
+                    ? 'Create the first manager profile and secure management PIN for this restaurant.'
                     : mode === 'management'
                     ? 'Enter your name and the management PIN to create or open a manager account.'
                     : 'Choose a manager-added staff profile and enter the personal code issued in Settings.'}
@@ -283,8 +223,7 @@ function AuthGate({
             <button type="submit" className="primary-button" disabled={isBusy}>
               {isBusy ? 'Checking...' : !authIsConfigured ? 'Create manager access' : mode === 'management' ? 'Unlock management' : 'Continue'}
             </button>
-            </form>
-          </>
+          </form>
         )}
 
         {message && (

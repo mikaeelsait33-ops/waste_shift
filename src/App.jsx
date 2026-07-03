@@ -48,7 +48,7 @@ import {
   saveMenuImportHistory,
   saveRestaurantProfile,
 } from './services/restaurantFirestore';
-import { saveCurrentUserStaffProfile, syncStaffAccessGrant } from './services/firebaseAccess';
+import { saveCurrentUserStaffProfile } from './services/firebaseAccess';
 import {
   createEmptyRestaurantData,
   getRestaurantResetStorageKeys,
@@ -267,7 +267,6 @@ const parsePriceValue = (value) => {
 };
 
 const createStaffMemberId = (name) => `staff_${createMenuItemKey(name)}`;
-const createStaffAccessGrantId = (staffId) => createRecordId(`grant_${staffId || 'staff'}`);
 
 const sanitizeMenuItems = (items) => {
   if (!Array.isArray(items)) {
@@ -441,7 +440,6 @@ const sanitizeStaffMembers = (members) => {
         role,
         staffSection: inferStaffSection(member?.staffSection || member?.section || role),
         staffCode: sanitizePinRecord(member?.staffCode),
-        accessGrantId: String(member?.accessGrantId || createStaffAccessGrantId(id)),
         removed: Boolean(member?.removed),
         removedAt: String(member?.removedAt || ''),
         isCsvSeed: false,
@@ -580,7 +578,6 @@ function App() {
     typeof navigator === 'undefined' ? true : navigator.onLine
   ));
   const [syncAccessKey, setSyncAccessKey] = useState(() => localStorage.getItem('wasteShiftSyncAccessKey') || '');
-  const [serverLoadRetryToken, setServerLoadRetryToken] = useState(0);
   const [authSession, setAuthSession] = useState(() => {
     try {
       if (staffFreshStartIsPending()) {
@@ -944,27 +941,6 @@ function App() {
     refreshInvoiceDashboardStats();
   }, [refreshInvoiceDashboardStats]);
 
-  useEffect(() => {
-    if (!FIRESTORE_CONFIGURED || !accessProfile?.canManageStaff || staffList.length === 0) {
-      return;
-    }
-
-    staffList
-      .filter((member) => member?.id && member?.accessGrantId)
-      .forEach((member) => {
-        syncStaffAccessGrant({
-          staffId: member.id,
-          displayName: member.name,
-          role: member.role,
-          roleKey: inferRoleKey(member.role),
-          accessGrantId: member.accessGrantId,
-          active: !member.removed,
-        }).catch((error) => {
-          console.warn('Could not sync staff access grant.', error);
-        });
-      });
-  }, [accessProfile?.canManageStaff, staffList]);
-
   const getSyncHeaders = useCallback((extraHeaders = {}) => {
     const trimmedAccessKey = syncAccessKey.trim();
 
@@ -1305,13 +1281,11 @@ function App() {
           }
 
           console.warn('Firebase primary database unavailable. Using local fallback.', error);
-          const canTryProtectedServerSnapshot = Boolean(syncAccessKey.trim());
-
+          setServerSyncEnabled(false);
+          setServerLoadComplete(false);
           setServerSync({
-            status: canTryProtectedServerSnapshot ? 'checking' : 'error',
-            message: canTryProtectedServerSnapshot
-              ? 'Firebase blocked this device before PIN login. Trying the protected Vercel snapshot...'
-              : `${error?.message || 'Firebase database is unavailable.'} Add the manager access key below to load this restaurant on a new device.`,
+            status: 'error',
+            message: `${error?.message || 'Firebase database is unavailable.'} Local browser data is still available.`,
             lastSavedAt: '',
           });
           setFirebaseSync(prev => ({
@@ -1319,12 +1293,7 @@ function App() {
             status: 'error',
             message: `${error?.message || 'Firebase database is unavailable.'} Local browser data is still available.`,
           }));
-
-          if (!canTryProtectedServerSnapshot) {
-            setServerSyncEnabled(false);
-            setServerLoadComplete(false);
-            return;
-          }
+          return;
         }
       }
 
@@ -1391,7 +1360,7 @@ function App() {
     return () => {
       isCancelled = true;
     };
-  }, [applyDatabaseData, getSyncHeaders, serverLoadRetryToken, syncAccessKey]);
+  }, [applyDatabaseData, getSyncHeaders]);
 
   useEffect(() => {
     if (!serverSyncEnabled || !serverLoadComplete) {
@@ -1459,7 +1428,6 @@ function App() {
         name: trimmedName,
         role: 'Manager',
         staffSection: 'management',
-        accessGrantId: existingMember?.accessGrantId || createStaffAccessGrantId(accountId),
         removed: false,
         removedAt: '',
         isCsvSeed: false,
@@ -1470,7 +1438,6 @@ function App() {
         role: STAFF_SECTION_ROLE_LABELS[staffSection] || 'Team',
         staffSection: staffSection || 'kitchen',
         staffCode: staffCode || existingMember?.staffCode || null,
-        accessGrantId: existingMember?.accessGrantId || createStaffAccessGrantId(accountId),
         removed: false,
         removedAt: '',
         isCsvSeed: false,
@@ -1523,19 +1490,8 @@ function App() {
       role: managerMember.role,
       roleKey: 'manager',
       staffId: managerMember.id,
-      accessGrantId: managerMember.accessGrantId,
     }).catch((error) => {
       console.warn('Could not save manager Firebase access profile.', error);
-    });
-    await syncStaffAccessGrant({
-      staffId: managerMember.id,
-      displayName: managerMember.name,
-      role: managerMember.role,
-      roleKey: 'manager',
-      accessGrantId: managerMember.accessGrantId,
-      active: true,
-    }).catch((error) => {
-      console.warn('Could not save manager access grant.', error);
     });
     const nextSession = {
       mode: 'management',
@@ -1560,30 +1516,6 @@ function App() {
 
     return { ok: true, message: 'Manager access created.' };
   }, [handleSavePinSettings, upsertLoginAccount]);
-
-  const handleAuthAccessKeySubmit = useCallback((accessKey) => {
-    const nextAccessKey = String(accessKey || '').trim();
-
-    if (!nextAccessKey) {
-      setServerSync(prev => ({
-        ...prev,
-        status: 'locked',
-        message: 'Enter the manager access key from Vercel before loading this restaurant on a new device.',
-      }));
-      return { ok: false, message: 'Enter the manager access key.' };
-    }
-
-    setSyncAccessKey(nextAccessKey);
-    localStorage.setItem('wasteShiftSyncAccessKey', nextAccessKey);
-    setServerLoadRetryToken((currentToken) => currentToken + 1);
-    setServerSync(prev => ({
-      ...prev,
-      status: 'checking',
-      message: 'Access key saved. Loading shared restaurant data...',
-    }));
-
-    return { ok: true, message: 'Access key saved. Loading shared restaurant data...' };
-  }, []);
 
   const handleLogin = useCallback(async ({ mode, name, staffSection, pin }) => {
     const trimmedName = String(name || '').trim();
@@ -1636,7 +1568,6 @@ function App() {
       role: staffMember.role,
       roleKey,
       staffId: staffMember.id,
-      accessGrantId: staffMember.accessGrantId,
     }).catch((error) => {
       console.warn('Could not save Firebase access profile.', error);
     });
@@ -1697,7 +1628,6 @@ function App() {
       id: createStaffMemberId(newStaffMember.name),
       staffSection: inferStaffSection(newStaffMember.staffSection || newStaffMember.role),
       staffCode: staffCodeRecord,
-      accessGrantId: createStaffAccessGrantId(createStaffMemberId(newStaffMember.name)),
       removed: false,
       removedAt: '',
       isCsvSeed: false,
@@ -1728,17 +1658,6 @@ function App() {
       }),
       ...prevLog,
     ].slice(0, 500));
-
-    await syncStaffAccessGrant({
-      staffId: nextStaffMember.id,
-      displayName: nextStaffMember.name,
-      role: nextStaffMember.role,
-      roleKey: inferRoleKey(nextStaffMember.role),
-      accessGrantId: nextStaffMember.accessGrantId,
-      active: true,
-    }).catch((error) => {
-      console.warn('Could not save staff access grant.', error);
-    });
 
     return {
       ok: true,
@@ -1802,17 +1721,6 @@ function App() {
       }),
       ...prevLog,
     ].slice(0, 500));
-
-    syncStaffAccessGrant({
-      staffId: staffMember.id,
-      displayName: staffMember.name,
-      role: staffMember.role,
-      roleKey: inferRoleKey(staffMember.role),
-      accessGrantId: staffMember.accessGrantId,
-      active: false,
-    }).catch((error) => {
-      console.warn('Could not deactivate staff access grant.', error);
-    });
   };
 
   const handleResetStaffCode = async (staffId) => {
@@ -1829,14 +1737,12 @@ function App() {
 
     const generatedStaffCode = createRandomPin(6);
     const staffCodeRecord = await createPinRecord(generatedStaffCode);
-    const nextAccessGrantId = staffMember.accessGrantId || createStaffAccessGrantId(staffId);
 
     setCustomStaffList(prevStaffList => {
       const existingIndex = prevStaffList.findIndex((member) => member.id === staffId);
       const nextMember = {
         ...staffMember,
         staffCode: staffCodeRecord,
-        accessGrantId: nextAccessGrantId,
         isCsvSeed: false,
       };
 
@@ -1858,17 +1764,6 @@ function App() {
       }),
       ...prevLog,
     ].slice(0, 500));
-
-    await syncStaffAccessGrant({
-      staffId: staffMember.id,
-      displayName: staffMember.name,
-      role: staffMember.role,
-      roleKey: inferRoleKey(staffMember.role),
-      accessGrantId: nextAccessGrantId,
-      active: true,
-    }).catch((error) => {
-      console.warn('Could not refresh staff access grant.', error);
-    });
 
     return {
       ok: true,
@@ -2619,7 +2514,6 @@ function App() {
       name: managerName,
       role: 'Manager',
       staffSection: 'management',
-      accessGrantId: createStaffAccessGrantId(createStaffMemberId(managerName)),
       removed: false,
       removedAt: '',
       isCsvSeed: false,
@@ -2629,49 +2523,23 @@ function App() {
       role: managerMember.role,
       roleKey: 'manager',
       staffId: managerMember.id,
-      accessGrantId: managerMember.accessGrantId,
     }).catch((error) => {
       console.warn('Could not save setup manager Firebase access profile.', error);
-    });
-    await syncStaffAccessGrant({
-      staffId: managerMember.id,
-      displayName: managerMember.name,
-      role: managerMember.role,
-      roleKey: 'manager',
-      accessGrantId: managerMember.accessGrantId,
-      active: true,
-    }).catch((error) => {
-      console.warn('Could not save setup manager access grant.', error);
     });
     const setupStaffMembers = await Promise.all(
       (Array.isArray(setupProgress?.staffMembers) ? setupProgress.staffMembers : [])
         .filter((member) => String(member?.name || '').trim())
-        .map(async (member) => {
-          const staffId = createStaffMemberId(member.name);
-          return {
-            id: staffId,
+        .map(async (member) => ({
+            id: createStaffMemberId(member.name),
             name: String(member.name || '').trim(),
             role: String(member.role || 'Team').trim(),
             staffSection: member.staffSection || inferStaffSection(member.role),
             staffCode: await createPinRecord(member.code),
-            accessGrantId: createStaffAccessGrantId(staffId),
             removed: member.active === false,
             removedAt: member.active === false ? new Date().toISOString() : '',
             isCsvSeed: false,
-          };
-        })
+        }))
     );
-
-    await Promise.all(setupStaffMembers.map((member) => syncStaffAccessGrant({
-      staffId: member.id,
-      displayName: member.name,
-      role: member.role,
-      roleKey: inferRoleKey(member.role),
-      accessGrantId: member.accessGrantId,
-      active: !member.removed,
-    }).catch((error) => {
-      console.warn('Could not save setup staff access grant.', error);
-    })));
 
     setCustomStaffList([managerMember, ...setupStaffMembers]);
     setBudget(parseFloat(setupProgress?.budget) || 0);
@@ -3077,11 +2945,8 @@ function App() {
         isPreparingAuth={isPreparingAuth}
         authIsConfigured={authPinsAreConfigured(authSettings)}
         staffList={staffList}
-        serverSync={serverSync}
-        syncAccessKey={syncAccessKey}
         onLogin={handleLogin}
         onInitialManagerSetup={handleInitialManagerSetup}
-        onSyncAccessKeySubmit={handleAuthAccessKeySubmit}
       />
     );
   }
