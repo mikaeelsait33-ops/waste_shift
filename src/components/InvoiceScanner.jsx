@@ -267,6 +267,7 @@ function InvoiceScanner({
     ingredients: [],
     menuItems: [],
     stockLevels: [],
+    stockMovements: [],
     invoices: [],
     suppliers: [],
     settings: { vatRate: DEFAULT_VAT_RATE },
@@ -300,12 +301,14 @@ function InvoiceScanner({
   const [historyStartDate, setHistoryStartDate] = useState('');
   const [historyEndDate, setHistoryEndDate] = useState('');
   const [ingredientSearch, setIngredientSearch] = useState('');
+  const [stockSearch, setStockSearch] = useState('');
   const [priceHistorySupplierFilter, setPriceHistorySupplierFilter] = useState('');
   const [reportStartDate, setReportStartDate] = useState('');
   const [reportEndDate, setReportEndDate] = useState('');
   const [visibleLineLimit, setVisibleLineLimit] = useState(INVOICE_REVIEW_PAGE_SIZE);
   const [visibleIngredientLimit, setVisibleIngredientLimit] = useState(INGREDIENT_LIBRARY_PAGE_SIZE);
   const [visibleInvoiceLimit, setVisibleInvoiceLimit] = useState(DEFAULT_PAGE_SIZE);
+  const [visibleStockMovementLimit, setVisibleStockMovementLimit] = useState(DEFAULT_PAGE_SIZE);
   const [deletingIngredientId, setDeletingIngredientId] = useState('');
   const [deletingInvoiceId, setDeletingInvoiceId] = useState('');
 
@@ -577,6 +580,38 @@ function InvoiceScanner({
     limit: visibleIngredientLimit,
     fallbackLimit: INGREDIENT_LIBRARY_PAGE_SIZE,
   }), [filteredIngredients, visibleIngredientLimit]);
+  const stockSearchValue = stockSearch.trim().toLowerCase();
+  const filteredStockMovements = useMemo(() => (
+    [...(Array.isArray(workspace.stockMovements) ? workspace.stockMovements : [])]
+      .filter((movement) => {
+        if (!stockSearchValue) return true;
+
+        return [
+          movement.ingredientName,
+          movement.supplier,
+          movement.invoiceNumber,
+          movement.baseUnit,
+          movement.status,
+          movement.type,
+        ].some((part) => String(part || '').toLowerCase().includes(stockSearchValue));
+      })
+      .sort((a, b) => new Date(b.sortDate || b.receivedDate || b.invoiceDate || 0).getTime() - new Date(a.sortDate || a.receivedDate || a.invoiceDate || 0).getTime())
+  ), [stockSearchValue, workspace.stockMovements]);
+  const visibleStockMovementPage = useMemo(() => getVisiblePage(filteredStockMovements, {
+    limit: visibleStockMovementLimit,
+    fallbackLimit: DEFAULT_PAGE_SIZE,
+  }), [filteredStockMovements, visibleStockMovementLimit]);
+  const stockMovementSummary = useMemo(() => {
+    const receivedMovements = filteredStockMovements.filter((movement) => String(movement.type || '').includes('receive'));
+    const ingredientCount = new Set(filteredStockMovements.map((movement) => movement.ingredientId).filter(Boolean)).size;
+
+    return {
+      movements: filteredStockMovements.length,
+      receivedMovements: receivedMovements.length,
+      ingredientCount,
+      receivedValue: roundMoney(filteredStockMovements.reduce((sum, movement) => sum + Number(movement.lineTotalExVAT || 0), 0)),
+    };
+  }, [filteredStockMovements]);
   const ingredientSummary = useMemo(() => ({
     total: workspace.ingredients.length,
     priced: workspace.ingredients.filter((ingredient) => Number(ingredient.lastPriceExVAT || ingredient.latestCost || 0) > 0).length,
@@ -634,6 +669,10 @@ function InvoiceScanner({
   useEffect(() => {
     setVisibleInvoiceLimit(DEFAULT_PAGE_SIZE);
   }, [historyEndDate, historySearch, historyStartDate]);
+
+  useEffect(() => {
+    setVisibleStockMovementLimit(DEFAULT_PAGE_SIZE);
+  }, [stockSearchValue]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -1404,6 +1443,9 @@ function InvoiceScanner({
           </button>
           <button type="button" className={`segment-button${activeView === 'history' ? ' is-active' : ''}`} onClick={() => setActiveView('history')}>
             History
+          </button>
+          <button type="button" className={`segment-button${activeView === 'stock' ? ' is-active' : ''}`} onClick={() => setActiveView('stock')}>
+            Stock
           </button>
           <button type="button" className={`segment-button${activeView === 'reports' ? ' is-active' : ''}`} onClick={() => setActiveView('reports')}>
             Reports
@@ -2252,6 +2294,93 @@ function InvoiceScanner({
                 </button>
                 <span className="small-text">
                   Showing {visibleInvoicePage.visibleCount} of {visibleInvoicePage.totalCount}
+                </span>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {activeView === 'stock' && (
+        <section className="panel">
+          <div className="panel-body">
+            <div className="section-header">
+              <div>
+                <p className="eyebrow">Stock</p>
+                <h2 className="title">Stock Movement Ledger</h2>
+                <p className="subtitle">Every invoice stock update creates a movement record for audit and stock checks.</p>
+              </div>
+              <span className="badge">{stockMovementSummary.movements} movements</span>
+            </div>
+
+            <div className="metrics-grid">
+              <div className="metric-card">
+                <span className="metric-value">{stockMovementSummary.receivedMovements}</span>
+                <span className="metric-label">Received</span>
+              </div>
+              <div className="metric-card">
+                <span className="metric-value">{stockMovementSummary.ingredientCount}</span>
+                <span className="metric-label">Ingredients touched</span>
+              </div>
+              <div className="metric-card">
+                <span className="metric-value">{formatMoney(stockMovementSummary.receivedValue)}</span>
+                <span className="metric-label">Received excl VAT</span>
+              </div>
+              <div className="metric-card">
+                <span className={`metric-value${lowStockAlerts.length > 0 ? ' is-danger' : ''}`}>{lowStockAlerts.length}</span>
+                <span className="metric-label">Low-stock alerts</span>
+              </div>
+            </div>
+
+            <div className="field-grid">
+              <input
+                type="search"
+                value={stockSearch}
+                onChange={(event) => setStockSearch(event.target.value)}
+                className="input"
+                placeholder="Search stock by ingredient, supplier, invoice, unit, or status"
+              />
+            </div>
+
+            {filteredStockMovements.length === 0 ? (
+              <div className="empty-state">No stock movements match this search yet.</div>
+            ) : (
+              <div className="invoice-report-panel">
+                {visibleStockMovementPage.records.map((movement) => (
+                  <div key={movement.movementId || movement.id} className="invoice-report-row">
+                    <div>
+                      <strong>{movement.ingredientName || movement.ingredientId}</strong>
+                      <span className="small-text">
+                        {movement.supplier || 'Unknown supplier'} - {movement.invoiceNumber || movement.invoiceId || 'No invoice'} - {movement.receivedDate || movement.invoiceDate || 'No date'}
+                      </span>
+                    </div>
+                    <span>
+                      +{Number(movement.quantityBase || 0).toFixed(2).replace(/0+$/, '').replace(/\.$/, '')} {movement.baseUnit || 'each'}
+                    </span>
+                    <span className="small-text">
+                      {Number(movement.previousQuantityBase || 0).toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}
+                      {' to '}
+                      {Number(movement.resultingQuantityBase || 0).toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}
+                    </span>
+                    <span className={`badge${movement.status === 'low' ? ' is-red' : movement.status === 'overstocked' ? ' is-orange' : ' is-green'}`}>
+                      {movement.status || 'ok'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {visibleStockMovementPage.hasMore && (
+              <div className="load-more-row">
+                <button
+                  type="button"
+                  className="ghost-button is-warning"
+                  onClick={() => setVisibleStockMovementLimit(visibleStockMovementPage.nextLimit)}
+                >
+                  Load more stock movements
+                </button>
+                <span className="small-text">
+                  Showing {visibleStockMovementPage.visibleCount} of {visibleStockMovementPage.totalCount}
                 </span>
               </div>
             )}

@@ -1,6 +1,7 @@
 import { createInvoiceKey, roundMoney } from '../utils/invoiceParsing';
 import { createRecordId } from '../utils/ids';
 import { roundUnitPrice } from '../utils/itemPriceCatalog';
+import { createStockMovementId, createStockMovementRecord } from '../utils/stockLedger';
 import {
   findDuplicateIngredient,
   getLatestPriceChange,
@@ -206,6 +207,39 @@ const normalizeStockLevel = (docData) => {
   };
 };
 
+const normalizeStockMovement = (docData) => {
+  const movementId = sanitizeString(docData?.movementId || docData?.id);
+  const ingredientId = sanitizeString(docData?.ingredientId);
+
+  if (!movementId || !ingredientId) {
+    return null;
+  }
+
+  return {
+    ...docData,
+    id: movementId,
+    movementId,
+    ingredientId,
+    ingredientName: sanitizeString(docData?.ingredientName),
+    type: sanitizeString(docData?.type) || 'receive',
+    quantityBase: sanitizeNumber(docData?.quantityBase),
+    baseUnit: sanitizeString(docData?.baseUnit) || 'each',
+    sourceType: sanitizeString(docData?.sourceType) || 'invoice',
+    sourceId: sanitizeString(docData?.sourceId || docData?.invoiceId),
+    invoiceId: sanitizeString(docData?.invoiceId || docData?.sourceId),
+    invoiceNumber: sanitizeString(docData?.invoiceNumber),
+    supplier: sanitizeString(docData?.supplier),
+    invoiceDate: sanitizeString(docData?.invoiceDate),
+    receivedDate: sanitizeString(docData?.receivedDate),
+    previousQuantityBase: sanitizeNumber(docData?.previousQuantityBase),
+    resultingQuantityBase: sanitizeNumber(docData?.resultingQuantityBase),
+    status: sanitizeString(docData?.status) || 'ok',
+    unitPriceExVAT: sanitizeNumber(docData?.unitPriceExVAT),
+    lineTotalExVAT: sanitizeNumber(docData?.lineTotalExVAT),
+    sortDate: sanitizeString(docData?.sortDate || docData?.receivedDate || docData?.invoiceDate),
+  };
+};
+
 const withPriceHistory = async (ingredient) => {
   const db = await getFirestoreDb();
 
@@ -396,16 +430,18 @@ export const loadInvoiceWorkspaceData = async () => {
       ingredients: [],
       menuItems: [],
       stockLevels: [],
+      stockMovements: [],
       invoices: [],
       suppliers: [],
       settings: { vatRate: 0.15 },
     };
   }
 
-  const [ingredientDocs, menuItemDocs, stockDocs, invoiceDocs, supplierDocs, priceHistoryDocs] = await Promise.all([
+  const [ingredientDocs, menuItemDocs, stockDocs, stockMovementDocs, invoiceDocs, supplierDocs, priceHistoryDocs] = await Promise.all([
     readCollection('ingredients'),
     readCollection('menuItems'),
     readCollection('stockLevels'),
+    readCollection('stockMovements'),
     readCollection('invoices'),
     readCollection('suppliers'),
     readCollection('priceHistory'),
@@ -425,6 +461,10 @@ export const loadInvoiceWorkspaceData = async () => {
     ingredients,
     menuItems: menuItemDocs.map(normalizeMenuItem).filter(Boolean),
     stockLevels: stockDocs.map(normalizeStockLevel).filter(Boolean),
+    stockMovements: stockMovementDocs
+      .map(normalizeStockMovement)
+      .filter(Boolean)
+      .sort((a, b) => new Date(b.sortDate || 0).getTime() - new Date(a.sortDate || 0).getTime()),
     invoices: invoiceDocs.sort((a, b) => new Date(b.invoiceDate || b.scannedAt || 0).getTime() - new Date(a.invoiceDate || a.scannedAt || 0).getTime()),
     suppliers: supplierDocs,
     settings: {
@@ -844,20 +884,46 @@ export const updateStockFromInvoice = async ({
       : reorderPoint > 0 && nextQty <= reorderPoint
         ? 'low'
         : 'ok';
-    const movementId = `${invoiceId}_${lineItem.id || row.lineItemId || ingredientId}_${ingredientId}`.replace(/[^a-z0-9_-]/gi, '_');
+    const movementId = createStockMovementId({
+      invoiceId,
+      lineItemId: lineItem.id || row.lineItemId,
+      ingredientId,
+    });
+    const movementRecord = createStockMovementRecord({
+      movementId,
+      invoiceId,
+      invoiceNumber: invoiceData.invoiceNumber,
+      supplier: invoiceData.supplier,
+      invoiceDate: invoiceData.invoiceDate,
+      receivedDate: invoiceData.receivedDate,
+      lineItem,
+      ingredientRow: row,
+      previousQty: currentQty,
+      incomingQty,
+      nextQty,
+      unit: lineItem.baseUnit || lineItem.unit || row.unit || 'each',
+      status,
+      postingMode: nextPostingStatus,
+      postedBy,
+      createdAt: serverTimestamp(),
+    });
 
     stockMovementIds.push(movementId);
 
-    await setDoc(stockRef, {
-      ingredientId,
-      currentQty: nextQty,
-      unit: lineItem.baseUnit || lineItem.unit || row.unit || 'each',
-      lastUpdated: serverTimestamp(),
-      lastInvoiceId: invoiceId,
-      status,
-      parLevel,
-      reorderPoint,
-    }, { merge: true });
+    await Promise.all([
+      setDoc(stockRef, {
+        ingredientId,
+        currentQty: nextQty,
+        unit: lineItem.baseUnit || lineItem.unit || row.unit || 'each',
+        lastUpdated: serverTimestamp(),
+        lastInvoiceId: invoiceId,
+        lastMovementId: movementId,
+        status,
+        parLevel,
+        reorderPoint,
+      }, { merge: true }),
+      setDoc(doc(db, 'stockMovements', movementId), movementRecord, { merge: true }),
+    ]);
 
     updates.push({
       ingredientId,

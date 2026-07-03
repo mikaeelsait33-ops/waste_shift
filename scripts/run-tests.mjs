@@ -4,6 +4,7 @@ const testFiles = [
   'scripts/waste-calculations.test.mjs',
   'scripts/invoice-parsing.test.mjs',
   'scripts/stock-alerts.test.mjs',
+  'scripts/stock-ledger.test.mjs',
   'scripts/foundation.test.mjs',
   'scripts/setup-workflow.test.mjs',
   'scripts/shift-workflow.test.mjs',
