@@ -296,7 +296,8 @@ function InvoiceScanner({
   const [confirmedInvoice, setConfirmedInvoice] = useState(null);
   const [stockUpdates, setStockUpdates] = useState([]);
   const [isConfirmingInvoice, setIsConfirmingInvoice] = useState(false);
-  const [isUpdatingStock, setIsUpdatingStock] = useState(false);
+  const [invoiceConfirmMode, setInvoiceConfirmMode] = useState('post_now');
+  const confirmInvoiceInFlightRef = useRef(false);
   const [historySearch, setHistorySearch] = useState('');
   const [historyStartDate, setHistoryStartDate] = useState('');
   const [historyEndDate, setHistoryEndDate] = useState('');
@@ -1243,7 +1244,11 @@ function InvoiceScanner({
     }
   };
 
-  const confirmInvoice = async (stockMode = 'prices_only') => {
+  const confirmInvoice = async (stockMode = invoiceConfirmMode) => {
+    if (confirmInvoiceInFlightRef.current || isConfirmingInvoice) {
+      return;
+    }
+
     if (!canManageInvoices) {
       setMessage('Only an owner or manager can confirm invoices.');
       return;
@@ -1264,20 +1269,19 @@ function InvoiceScanner({
       return;
     }
 
-    if (isConfirmingInvoice) {
-      return;
-    }
-
     const invoiceId = createRecordId('invoice');
-    const shouldPostStock = stockMode === 'post_now' || stockMode === 'historical';
+    const shouldPostStock = stockMode === 'post_now';
     const stockPostingStatus = stockMode === 'prices_only'
       ? 'prices_only'
+      : stockMode === 'historical'
+        ? 'historical'
       : 'not_posted';
     const manualSourceText = lineItems
       .map((item) => `${item.itemName} | ${item.quantity} ${item.unit} | ${formatMoney(item.unitPrice)} | ${formatMoney(item.lineTotal)}`)
       .join('\n');
 
     try {
+      confirmInvoiceInFlightRef.current = true;
       setIsConfirmingInvoice(true);
       const result = await saveConfirmedInvoice({
         invoiceId,
@@ -1348,52 +1352,16 @@ function InvoiceScanner({
           : `Invoice confirmed and stock ${stockMode === 'historical' ? 'historically ' : ''}updated for ${stockResult.updates?.length || 0} ingredient${stockResult.updates?.length === 1 ? '' : 's'}.`);
       } else {
         setStockUpdates([]);
-        setMessage('Invoice confirmed without changing stock. Prices and ingredient history were updated.');
+        setMessage(stockMode === 'historical'
+          ? 'Historical invoice confirmed. Prices and ingredient history were updated, and current stock was not changed.'
+          : 'Invoice confirmed without changing stock. Prices and ingredient history were updated.');
       }
       await refreshWorkspace();
     } catch (error) {
       setMessage(error?.message || 'Could not confirm this invoice.');
     } finally {
+      confirmInvoiceInFlightRef.current = false;
       setIsConfirmingInvoice(false);
-    }
-  };
-
-  const handleUpdateStock = async () => {
-    if (!confirmedInvoice?.invoiceId) {
-      setMessage('Confirm the invoice before updating stock.');
-      return;
-    }
-
-    if (isUpdatingStock) {
-      return;
-    }
-
-    try {
-      setIsUpdatingStock(true);
-      const result = await updateStockFromInvoice({
-        invoiceId: confirmedInvoice.invoiceId,
-        lineItems: confirmedInvoice.lineItems,
-        ingredientRows: confirmedInvoice.ingredientRows,
-        postingMode: 'posted',
-        postedBy: accessProfile?.operatorName || 'WasteShift user',
-      });
-
-      setStockUpdates(result.updates || []);
-      setConfirmedInvoice((currentInvoice) => currentInvoice
-        ? {
-            ...currentInvoice,
-            stockPostingStatus: result.alreadyPosted ? currentInvoice.stockPostingStatus || 'posted' : 'posted',
-            stockMovementIds: result.stockMovementIds || currentInvoice.stockMovementIds || [],
-          }
-        : currentInvoice);
-      setMessage(result.alreadyPosted
-        ? 'Stock already updated for this invoice.'
-        : `Stock updated for ${result.updates?.length || 0} ingredient${result.updates?.length === 1 ? '' : 's'}.`);
-      await refreshWorkspace();
-    } catch (error) {
-      setMessage(error?.message || 'Could not update stock from this invoice.');
-    } finally {
-      setIsUpdatingStock(false);
     }
   };
 
@@ -1966,32 +1934,53 @@ function InvoiceScanner({
                 </div>
                 <span className="badge">{lineItems.length} lines</span>
               </div>
+              <div className="field">
+                <span className="field-label">Invoice action</span>
+                <div className="segmented-control" aria-label="Invoice confirmation mode">
+                  <button
+                    type="button"
+                    className={`segment-button${invoiceConfirmMode === 'prices_only' ? ' is-active' : ''}`}
+                    onClick={() => setInvoiceConfirmMode('prices_only')}
+                  >
+                    Update prices only
+                  </button>
+                  <button
+                    type="button"
+                    className={`segment-button${invoiceConfirmMode === 'post_now' ? ' is-active' : ''}`}
+                    onClick={() => setInvoiceConfirmMode('post_now')}
+                  >
+                    Prices + stock
+                  </button>
+                  <button
+                    type="button"
+                    className={`segment-button${invoiceConfirmMode === 'historical' ? ' is-active' : ''}`}
+                    onClick={() => setInvoiceConfirmMode('historical')}
+                  >
+                    Historical only
+                  </button>
+                </div>
+              </div>
               <div className="manager-row">
-                <button type="button" className="primary-button" onClick={() => confirmInvoice('post_now')} disabled={!canManageInvoices || lineItems.length === 0 || isConfirmingInvoice}>
-                  {isConfirmingInvoice ? 'Confirming...' : canManageInvoices ? 'Confirm & Update Stock' : 'Manager only'}
-                </button>
-                <button type="button" className="ghost-button is-warning" onClick={() => confirmInvoice('prices_only')} disabled={!canManageInvoices || lineItems.length === 0 || isConfirmingInvoice}>
-                  Confirm Without Updating Stock
-                </button>
-                <button type="button" className="ghost-button" onClick={() => confirmInvoice('historical')} disabled={!canManageInvoices || lineItems.length === 0 || isConfirmingInvoice}>
-                  Confirm as Historical Stock
-                </button>
                 <button
                   type="button"
-                  className="ghost-button is-warning"
-                  onClick={handleUpdateStock}
-                  disabled={!confirmedInvoice || isUpdatingStock || ['posted', 'historical_posted'].includes(confirmedInvoice?.stockPostingStatus)}
+                  className="primary-button full-width-mobile"
+                  onClick={() => confirmInvoice(invoiceConfirmMode)}
+                  disabled={!canManageInvoices || lineItems.length === 0 || isConfirmingInvoice}
+                  style={{ minHeight: 48 }}
                 >
-                  {['posted', 'historical_posted'].includes(confirmedInvoice?.stockPostingStatus)
-                    ? 'Stock already updated'
-                    : isUpdatingStock ? 'Updating...' : 'Update Stock'}
+                  {isConfirmingInvoice ? 'Confirming...' : canManageInvoices ? 'Confirm invoice' : 'Manager only'}
                 </button>
                 <span className={`badge${lowStockAlerts.length > 0 ? ' is-red' : ' is-green'}`}>
                   {lowStockAlerts.length} low-stock alert{lowStockAlerts.length === 1 ? '' : 's'}
                 </span>
+                {confirmedInvoice?.stockPostingStatus && (
+                  <span className={`badge${['posted', 'historical_posted'].includes(confirmedInvoice.stockPostingStatus) ? ' is-green' : ''}`}>
+                    Stock status: {confirmedInvoice.stockPostingStatus}
+                  </span>
+                )}
               </div>
               <p className="small-text" style={{ marginTop: '10px' }}>
-                Use prices-only for older invoices that should update ingredient costs without increasing current stock.
+                Prices-only updates ingredient costs. Prices + stock also posts received quantities. Historical only saves old invoices without changing current stock.
               </p>
 
               {lowStockAlerts.length > 0 && (

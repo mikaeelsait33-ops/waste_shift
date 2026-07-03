@@ -54,6 +54,7 @@ import {
   getRestaurantResetStorageKeys,
   validateRestaurantResetConfirmation,
 } from './utils/restaurantReset';
+import { getActiveWasteEntries } from './utils/wasteSync';
 
 const DEFAULT_RECIPES = {};
 const DEFAULT_RECIPE_SEED_VERSION = 'fresh-restaurant-empty-v1';
@@ -936,6 +937,7 @@ function App() {
     staffList.find((member) => member.id === activeStaffId) || null
   ), [activeStaffId, staffList]);
   const accessProfile = useMemo(() => getAccessProfile(activeStaffMember), [activeStaffMember]);
+  const activeWasteItems = useMemo(() => getActiveWasteEntries(wasteItems), [wasteItems]);
 
   useEffect(() => {
     refreshInvoiceDashboardStats();
@@ -2730,67 +2732,109 @@ function App() {
     setCustomMenuItems(prevItems => prevItems.filter((item) => item.key !== menuItemKey));
   };
 
-  const handleDeleteEntry = (idToDelete) => {
+  const handleDeleteEntry = async (idToDelete, voidReason = 'Manager correction') => {
     const permission = requirePermission(accessProfile, 'canDeleteEntries', 'delete waste entries');
     if (!permission.ok) {
       alert(permission.message);
-      return;
+      return { ok: false, message: permission.message };
     }
 
     const entryToDelete = wasteItems.find((item) => item.id === idToDelete);
 
-    setWasteItems(prevItems => prevItems.filter(item => item.id !== idToDelete));
-    setInventoryMovements(prevMovements => prevMovements.filter((movement) => movement.wasteEntryId !== idToDelete));
+    if (!entryToDelete) {
+      return { ok: false, message: 'Waste entry not found.' };
+    }
+
+    const voidedAt = new Date().toISOString();
+    const voidedBy = staffList.find((member) => member.id === activeStaffId)?.name || entryToDelete.lastEditedBy || 'System';
+    const voidedEntry = {
+      ...entryToDelete,
+      status: 'voided',
+      voidedAt,
+      voidedBy,
+      voidReason: String(voidReason || 'Manager correction').trim() || 'Manager correction',
+      lastEditedBy: voidedBy,
+      syncStatus: 'pending',
+      syncError: '',
+    };
+    const nextWasteItems = wasteItems.map((item) => (
+      item.id === idToDelete ? voidedEntry : item
+    ));
+
+    setWasteItems(nextWasteItems);
+    setInventoryMovements(nextWasteItems.flatMap(createInventoryMovementsFromEntry));
 
     if (entryToDelete) {
       setAuditLog(prevLog => [
         createAuditLogEntry({
-          action: 'Waste entry deleted',
-          user: staffList.find((member) => member.id === activeStaffId)?.name || entryToDelete.lastEditedBy || 'System',
+          action: 'Waste entry voided',
+          user: voidedBy,
           relatedItem: entryToDelete.name,
           beforeValue: {
             id: entryToDelete.id,
             foodCostLost: getEntryFoodCostLost(entryToDelete),
             reason: entryToDelete.reason,
           },
+          afterValue: {
+            status: 'voided',
+            voidedAt,
+            voidReason: voidedEntry.voidReason,
+          },
         }),
         ...prevLog,
       ].slice(0, 500));
     }
+
+    return syncWasteEntryToFirestore(voidedEntry)
+      .then((result) => ({ ...result, entry: voidedEntry }))
+      .catch((error) => ({ ok: false, entry: voidedEntry, message: error?.message || 'Void saved locally but did not sync yet.' }));
   };
 
-  const handleRestoreEntry = (entryToRestore) => {
+  const handleRestoreEntry = async (entryToRestore) => {
     const permission = requirePermission(accessProfile, 'canDeleteEntries', 'restore deleted waste entries');
     if (!permission.ok) {
       alert(permission.message);
-      return;
+      return { ok: false, message: permission.message };
     }
 
     if (!entryToRestore?.id) {
-      return;
+      return { ok: false, message: 'Waste entry not found.' };
     }
 
-    setWasteItems(prevItems => (
-      prevItems.some((item) => item.id === entryToRestore.id)
-        ? prevItems
-        : [...prevItems, entryToRestore]
-    ));
-    setInventoryMovements(prevMovements => [
-      ...prevMovements.filter((movement) => movement.wasteEntryId !== entryToRestore.id),
-      ...createInventoryMovementsFromEntry(entryToRestore),
-    ]);
+    const restoredBy = staffList.find((member) => member.id === activeStaffId)?.name || entryToRestore.lastEditedBy || 'System';
+    const restoredEntry = {
+      ...entryToRestore,
+      status: 'logged',
+      voidedAt: '',
+      voidedBy: '',
+      voidReason: '',
+      lastEditedBy: restoredBy,
+      syncStatus: 'pending',
+      syncError: '',
+    };
+    const nextWasteItems = wasteItems.some((item) => item.id === restoredEntry.id)
+      ? wasteItems.map((item) => (item.id === restoredEntry.id ? restoredEntry : item))
+      : [...wasteItems, restoredEntry];
+
+    setWasteItems(nextWasteItems);
+    setInventoryMovements(nextWasteItems.flatMap(createInventoryMovementsFromEntry));
     setAuditLog(prevLog => [
       createAuditLogEntry({
         action: 'Waste entry restored',
-        user: staffList.find((member) => member.id === activeStaffId)?.name || entryToRestore.lastEditedBy || 'System',
-        relatedItem: entryToRestore.name,
+        user: restoredBy,
+        relatedItem: restoredEntry.name,
         afterValue: {
-          id: entryToRestore.id,
-          foodCostLost: getEntryFoodCostLost(entryToRestore),
+          id: restoredEntry.id,
+          foodCostLost: getEntryFoodCostLost(restoredEntry),
+          status: 'logged',
         },
       }),
       ...prevLog,
     ].slice(0, 500));
+
+    return syncWasteEntryToFirestore(restoredEntry)
+      .then((result) => ({ ...result, entry: restoredEntry }))
+      .catch((error) => ({ ok: false, entry: restoredEntry, message: error?.message || 'Restore saved locally but did not sync yet.' }));
   };
 
   const handleClearAll = () => {
@@ -2956,7 +3000,7 @@ function App() {
       <Navbar
         activePage={activeTab}
         onNavigate={setActiveTab}
-        wasteCount={wasteItems.length}
+        wasteCount={activeWasteItems.length}
         activeStaffMember={activeStaffMember}
         accessProfile={accessProfile}
         onLogout={handleLogout}
@@ -2967,7 +3011,7 @@ function App() {
           <Suspense fallback={<PageFallback label="Loading screen" />}>
             {activeTab === 'dashboard' && (
               <Dashboard
-                items={wasteItems}
+                items={activeWasteItems}
                 budget={budget}
                 settings={settings}
                 staffList={staffList}
@@ -2979,7 +3023,7 @@ function App() {
           {activeTab === 'logWaste' && (
             <WasteForm
               onAddEntry={handleAddEntry}
-              wasteItems={wasteItems}
+              wasteItems={activeWasteItems}
               recipes={effectiveRecipes}
               menuItems={menuItems}
               staffList={staffList}

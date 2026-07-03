@@ -1,13 +1,12 @@
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { get, list, put } from '@vercel/blob';
-import { authorizeManagerApiRequest } from './_auth.js';
+import { authorizeSyncApiRequest } from './_auth.js';
 
 const LEGACY_DATABASE_PATH = 'wasteshift/database.json';
 const DATABASE_FOLDER = 'wasteshift/databases/';
 const DATABASE_NAME = 'WasteShift Server Database';
 const DATABASE_VERSION = 1;
 const MAX_DATABASE_BYTES = 5 * 1024 * 1024;
-const SYNC_SECRET = String(process.env.WASTESHIFT_SYNC_SECRET || '').trim();
 
 const sendJson = (response, status, body) => {
   response.setHeader('cache-control', 'no-store');
@@ -22,45 +21,6 @@ const getHeaderValue = (request, headerName) => {
   const headerValue = request.headers?.[headerName] ?? request.headers?.[headerName.toLowerCase()];
 
   return Array.isArray(headerValue) ? headerValue[0] : headerValue;
-};
-
-const safeSecretEquals = (providedSecret, expectedSecret) => {
-  const provided = Buffer.from(String(providedSecret || ''));
-  const expected = Buffer.from(String(expectedSecret || ''));
-
-  if (provided.length !== expected.length) {
-    return false;
-  }
-
-  return timingSafeEqual(provided, expected);
-};
-
-const authorizeRequest = (request, response) => {
-  if (!SYNC_SECRET) {
-    return true;
-  }
-
-  const providedSecret = String(getHeaderValue(request, 'x-wasteshift-sync-secret') || '').trim();
-
-  if (!providedSecret) {
-    sendJson(response, 401, {
-      ok: false,
-      requiresSecret: true,
-      message: 'Server sync is protected. Add the server sync access key.',
-    });
-    return false;
-  }
-
-  if (!safeSecretEquals(providedSecret, SYNC_SECRET)) {
-    sendJson(response, 403, {
-      ok: false,
-      requiresSecret: true,
-      message: 'Server sync access key is incorrect.',
-    });
-    return false;
-  }
-
-  return true;
 };
 
 const requestBodyIsTooLarge = (request) => {
@@ -183,14 +143,10 @@ const writeDatabase = async (data) => {
 };
 
 export default async function handler(request, response) {
-  const managerAuthorization = authorizeManagerApiRequest(request);
+  const authorization = authorizeSyncApiRequest(request);
 
-  if (!managerAuthorization.ok) {
-    sendJson(response, managerAuthorization.status, managerAuthorization.body);
-    return;
-  }
-
-  if (!authorizeRequest(request, response)) {
+  if (!authorization.ok) {
+    sendJson(response, authorization.status, authorization.body);
     return;
   }
 

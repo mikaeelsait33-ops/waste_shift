@@ -11,6 +11,7 @@ import {
 } from '../utils/wasteCalculations';
 import {
   createTodayShiftSummary,
+  getActiveWasteEntries,
   getWasteEntrySyncStatus,
   wasteEntryNeedsCostReview,
 } from '../utils/wasteSync';
@@ -36,7 +37,7 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
     return date;
   });
 
-  const safeItems = Array.isArray(items) ? items : [];
+  const safeItems = getActiveWasteEntries(items);
   const canViewFinancials = Boolean(accessProfile?.canViewFinancials);
   const formatMoney = (value) => (canViewFinancials ? `R${Number(value || 0).toFixed(2)}` : 'Restricted');
   const invoiceDashboard = invoiceStats || {};

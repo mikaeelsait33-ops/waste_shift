@@ -102,6 +102,26 @@ Environment variable checklist:
 - `GEMINI_API_KEY`
 - Optional: `GEMINI_MENU_MODEL`
 
+Production API protection:
+
+- `WASTESHIFT_MANAGER_API_SECRET` is required in production for manager-only serverless routes such as Gemini invoice/menu scanning.
+- `WASTESHIFT_API_SECRET` can be used as a fallback manager secret, but prefer `WASTESHIFT_MANAGER_API_SECRET` for clarity.
+- `WASTESHIFT_SYNC_SECRET` protects the optional Vercel Blob database backup route.
+- In production, API routes fail closed when the needed secret is missing. Local development can still run without these secrets.
+- Managers enter the sync/API key from Settings > Database on trusted devices only.
+- `BLOB_READ_WRITE_TOKEN` is required when using the Vercel Blob backup database.
+
+Production deployment checklist:
+
+1. Add all `VITE_FIREBASE_*` values to Vercel and redeploy.
+2. Enable Firebase Anonymous Auth and publish `firestore.rules`.
+3. Add `WASTESHIFT_MANAGER_API_SECRET` in Vercel before enabling Gemini import/scanning.
+4. Add `GEMINI_API_KEY` in Vercel for invoice and menu scanning.
+5. Add Vercel Blob storage and `BLOB_READ_WRITE_TOKEN` only if using server database backups.
+6. Add `WASTESHIFT_SYNC_SECRET` if Vercel Blob backup load/save should be available from the app.
+7. Run `npm.cmd run lint`, `npm.cmd test`, and `npm.cmd run build` before deploying.
+8. After deploy, open the production URL on a manager device, complete setup, add staff, and verify one waste log plus one invoice confirmation.
+
 ## Invoice Scanning
 
 The Invoices page can scan invoice photos and PDFs with Gemini through the serverless route at `api/gemini-invoice.js`. Add `GEMINI_API_KEY` to local env and Vercel Project Settings > Environment Variables, then redeploy. Manual entry remains available and every scanned line is editable before saving.
@@ -254,7 +274,7 @@ To enable Vercel backups:
 
 1. Add Vercel Blob storage to the project.
 2. Make sure `BLOB_READ_WRITE_TOKEN` is available in the project environment variables.
-3. Optionally set `WASTESHIFT_SYNC_SECRET` to protect backup load/save.
+3. Set `WASTESHIFT_SYNC_SECRET` to protect backup load/save in production.
 4. Redeploy.
 
 When Firebase is configured, Vercel backup is manual from Settings > Database. Browser storage remains a fallback.

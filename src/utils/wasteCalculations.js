@@ -1,4 +1,5 @@
 import { calculateRecipeIngredientCost } from './itemPriceCatalog.js';
+import { isWasteEntryVoided } from './wasteSync.js';
 
 export const WASTE_REASONS = [
   'Dropped',
@@ -246,7 +247,7 @@ export const getEntryGrossProfitLost = (entry) => (
 );
 
 export const createInventoryMovementsFromEntry = (entry) => {
-  if (!entry?.id) {
+  if (!entry?.id || isWasteEntryVoided(entry)) {
     return [];
   }
 

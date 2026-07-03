@@ -35,8 +35,12 @@ const getFirestoreApi = async () => {
       getDoc: firestore.getDoc,
       getDocs: firestore.getDocs,
       getFirestore: firestore.getFirestore,
+      limit: firestore.limit,
+      orderBy: firestore.orderBy,
+      query: firestore.query,
       serverTimestamp: firestore.serverTimestamp,
       setDoc: firestore.setDoc,
+      where: firestore.where,
     }));
   }
 
@@ -225,6 +229,9 @@ const createFirestoreWasteEntryPayload = (entry, authUser = null) => {
     createdBy: toSafeString(entry?.createdBy),
     lastEditedBy: toSafeString(entry?.lastEditedBy),
     status: toSafeString(entry?.status) || 'logged',
+    voidedAt: toSafeString(entry?.voidedAt),
+    voidedBy: toSafeString(entry?.voidedBy),
+    voidReason: toSafeString(entry?.voidReason),
     cost: toSafeCurrency(entry?.cost ?? entry?.foodCostLost),
     foodCostLost: toSafeCurrency(entry?.foodCostLost ?? entry?.cost),
     sellingPrice: entry?.sellingPrice === null || entry?.sellingPrice === undefined
@@ -308,7 +315,9 @@ export const loadFirestoreMenuItems = async () => {
   return snapshot.docs.map(normalizeFirestoreMenuItem).filter(Boolean);
 };
 
-export const loadFirestoreWasteEntries = async () => {
+export const loadFirestoreWasteEntries = async (options = {}) => {
+  const daysBack = Number.isFinite(Number(options.daysBack)) ? Math.max(1, Number(options.daysBack)) : 90;
+  const resultLimit = Number.isFinite(Number(options.limit)) ? Math.max(1, Number(options.limit)) : 750;
   const db = await getFirestoreDb();
 
   if (!db) {
@@ -316,8 +325,15 @@ export const loadFirestoreWasteEntries = async () => {
   }
 
   await ensureFirebaseAuth();
-  const { collection, getDocs } = await getFirestoreApi();
-  const snapshot = await getDocs(collection(db, 'wasteEntries'));
+  const { collection, getDocs, limit, orderBy, query, where } = await getFirestoreApi();
+  const since = new Date();
+  since.setDate(since.getDate() - daysBack);
+  const constraints = [
+    where('createdAt', '>=', since.toISOString()),
+    orderBy('createdAt', 'desc'),
+    limit(resultLimit),
+  ];
+  const snapshot = await getDocs(query(collection(db, 'wasteEntries'), ...constraints));
   return snapshot.docs
     .map(normalizeFirestoreWasteEntry)
     .filter((entry) => entry.name && entry.reason)

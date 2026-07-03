@@ -17,6 +17,7 @@ import {
 import { normalizeImportedMenuItem } from '../src/utils/menuImport.js';
 import { getAccessProfile, requirePermission } from '../src/utils/accessControl.js';
 import { createPinRecord, createRandomPin, validatePin, verifyPin } from '../src/utils/pinAuth.js';
+import { getActiveWasteEntries, getVoidedWasteEntries, isWasteEntryVoided } from '../src/utils/wasteSync.js';
 
 const recipe = {
   name: 'Chicken Burger',
@@ -100,6 +101,20 @@ assert.equal(movements.length, 4);
 assert.equal(movements[2].ingredientName, 'Lettuce');
 assert.equal(movements[2].changeLabel, '40g');
 assert.equal(movements[2].costImpact, 4);
+
+const voidedEntry = {
+  id: 'entry-voided',
+  status: 'voided',
+  voidedAt: '2026-07-03T10:00:00.000Z',
+  date: '03/07/2026',
+  name: 'Rocket',
+  reason: 'Manager correction',
+  cost: 12,
+};
+assert.equal(isWasteEntryVoided(voidedEntry), true);
+assert.equal(createInventoryMovementsFromEntry(voidedEntry).length, 0);
+assert.deepEqual(getActiveWasteEntries([{ id: 'entry-active', status: 'logged' }, voidedEntry]).map((entry) => entry.id), ['entry-active']);
+assert.deepEqual(getVoidedWasteEntries([{ id: 'entry-active', status: 'logged' }, voidedEntry]).map((entry) => entry.id), ['entry-voided']);
 
 const itemPriceCatalog = sanitizeItemPriceCatalog({
   tomato: { name: 'Tomato', price: 3.5, unit: 'each', category: 'Produce' },

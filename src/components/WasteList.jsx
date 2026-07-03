@@ -9,7 +9,13 @@ import {
   getEntryPotentialRevenueLost,
   getWasteClassificationMeta,
 } from '../utils/wasteCalculations';
-import { getWasteEntrySyncStatus, wasteEntryNeedsCostReview } from '../utils/wasteSync';
+import {
+  getActiveWasteEntries,
+  getVoidedWasteEntries,
+  getWasteEntrySyncStatus,
+  isWasteEntryVoided,
+  wasteEntryNeedsCostReview,
+} from '../utils/wasteSync';
 import { DEFAULT_PAGE_SIZE, getVisiblePage } from '../utils/listPerformance';
 
 function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, activeStaffMember }) {
@@ -19,6 +25,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
   const [sortMode, setSortMode] = useState('newest');
   const [syncFilter, setSyncFilter] = useState('All');
   const [costReviewFilter, setCostReviewFilter] = useState('All');
+  const [entryStatusFilter, setEntryStatusFilter] = useState('active');
   const [visibleLimit, setVisibleLimit] = useState(DEFAULT_PAGE_SIZE);
   const [viewMode, setViewMode] = useState('day');
   const [deletedEntry, setDeletedEntry] = useState(null);
@@ -30,12 +37,23 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
   const safeItems = useMemo(() => (Array.isArray(items) ? items : []), [items]);
   const canViewFinancials = Boolean(accessProfile?.canViewFinancials);
   const formatMoney = (value) => (canViewFinancials ? `R${Number(value || 0).toFixed(2)}` : 'Restricted');
+  const statusScopedItems = useMemo(() => {
+    if (entryStatusFilter === 'voided' && accessProfile?.canDeleteEntries) {
+      return getVoidedWasteEntries(safeItems);
+    }
+
+    if (entryStatusFilter === 'all' && accessProfile?.canDeleteEntries) {
+      return safeItems;
+    }
+
+    return getActiveWasteEntries(safeItems);
+  }, [accessProfile?.canDeleteEntries, entryStatusFilter, safeItems]);
   const visibleItems = useMemo(() => (canViewFinancials
-    ? safeItems
-    : safeItems.filter((item) => (
+    ? statusScopedItems
+    : getActiveWasteEntries(statusScopedItems).filter((item) => (
       item?.staffId === activeStaffMember?.id
       || String(item?.staff || '').trim().toLowerCase() === String(activeStaffMember?.name || '').trim().toLowerCase()
-    ))), [activeStaffMember?.id, activeStaffMember?.name, canViewFinancials, safeItems]);
+    ))), [activeStaffMember?.id, activeStaffMember?.name, canViewFinancials, statusScopedItems]);
 
   const parseDate = (dateStr) => {
     if (!dateStr) return new Date(0);
@@ -117,7 +135,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
 
   useEffect(() => {
     setVisibleLimit(DEFAULT_PAGE_SIZE);
-  }, [activeFilter, classificationFilter, costReviewFilter, searchValue, selectedDate, sortMode, syncFilter, viewMode]);
+  }, [activeFilter, classificationFilter, costReviewFilter, entryStatusFilter, searchValue, selectedDate, sortMode, syncFilter, viewMode]);
 
   const totalCost = dateFilteredItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
   const totalCount = dateFilteredItems.length;
@@ -258,13 +276,18 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
     URL.revokeObjectURL(url);
   };
 
-  const handleDeleteClick = (item) => {
+  const handleDeleteClick = async (item) => {
     if (!accessProfile?.canDeleteEntries) {
       return;
     }
 
-    onDeleteEntry(item.id);
-    setDeletedEntry(item);
+    const voidReason = window.prompt('Why is this waste entry being voided?', 'Manager correction');
+    if (voidReason === null) {
+      return;
+    }
+
+    const result = await onDeleteEntry(item.id, voidReason);
+    setDeletedEntry(result?.entry || { ...item, status: 'voided', voidReason });
   };
 
   const handleUndoDelete = () => {
@@ -332,6 +355,13 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
           <option value="needsReview">Needs cost review</option>
           <option value="complete">Cost complete</option>
         </select>
+        {accessProfile?.canDeleteEntries && (
+          <select value={entryStatusFilter} onChange={(e) => setEntryStatusFilter(e.target.value)} className="select">
+            <option value="active">Active entries</option>
+            <option value="voided">Voided entries</option>
+            <option value="all">Active + voided</option>
+          </select>
+        )}
         <button type="button" onClick={exportFilteredItems} className="ghost-button is-warning" disabled={filteredItems.length === 0 || !accessProfile?.canExportData}>
           {accessProfile?.canExportData ? 'Export CSV' : 'Manager only'}
         </button>
@@ -351,7 +381,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
       {deletedEntry && (
         <div className="undo-banner" role="status">
           <span>
-            Removed <strong>{deletedEntry.name}</strong>
+            Voided <strong>{deletedEntry.name}</strong>
           </span>
           <div className="manager-row">
             <button type="button" onClick={handleUndoDelete} className="ghost-button is-warning">
@@ -400,7 +430,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
             {searchValue
               ? 'No items match your search.'
               : viewMode === 'all'
-              ? 'No items found under this scope.'
+              ? entryStatusFilter === 'voided' ? 'No voided entries found under this scope.' : 'No items found under this scope.'
               : viewMode === 'day'
                 ? 'No waste was logged on this day.'
                 : 'No waste was logged this month.'}
@@ -425,7 +455,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
                 : [];
 
             return (
-              <li key={item.id} className={`log-card ${item.isRecipe ? 'is-recipe' : 'is-single'}`}>
+              <li key={item.id} className={`log-card ${item.isRecipe ? 'is-recipe' : 'is-single'}${isWasteEntryVoided(item) ? ' is-voided' : ''}`}>
                 <div className="item-row">
                   <div>
                     <h3 className="log-title">
@@ -444,6 +474,11 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
                     <span className={getWasteEntrySyncStatus(item) === 'synced' ? 'badge is-green cost-status-badge' : 'badge cost-status-badge'}>
                       {getWasteEntrySyncStatus(item)}
                     </span>
+                    {isWasteEntryVoided(item) && (
+                      <span className="badge is-red cost-status-badge">
+                        Voided{item.voidedAt ? ` ${new Date(item.voidedAt).toLocaleDateString()}` : ''}
+                      </span>
+                    )}
                     {item.partialWaste && (
                       <span className="badge is-green cost-status-badge">
                         Partial: {item.wastedComponentCount || wastedComponentNames.length}/{item.totalComponentCount || item.ingredients?.length || '?'}
@@ -465,8 +500,8 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
                       type="button"
                       onClick={() => handleDeleteClick(item)}
                       className="delete-button"
-                      title={`Delete ${item.name}`}
-                      disabled={!accessProfile?.canDeleteEntries}
+                      title={`Void ${item.name}`}
+                      disabled={!accessProfile?.canDeleteEntries || isWasteEntryVoided(item)}
                     >
                       x
                     </button>

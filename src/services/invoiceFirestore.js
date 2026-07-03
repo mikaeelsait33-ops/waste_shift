@@ -44,6 +44,9 @@ const getFirestoreApi = async () => {
       deleteDoc: firestore.deleteDoc,
       increment: firestore.increment,
       initializeApp: firebaseApp.initializeApp,
+      limit: firestore.limit,
+      orderBy: firestore.orderBy,
+      query: firestore.query,
       serverTimestamp: firestore.serverTimestamp,
       setDoc: firestore.setDoc,
       updateDoc: firestore.updateDoc,
@@ -121,7 +124,7 @@ const uniqueStrings = (values) => (
     .filter(Boolean))]
 );
 
-const readCollection = async (collectionName) => {
+const readCollection = async (collectionName, options = {}) => {
   const db = await getFirestoreDb();
 
   if (!db) {
@@ -129,8 +132,21 @@ const readCollection = async (collectionName) => {
   }
 
   await ensureFirebaseAuth();
-  const { collection, getDocs } = await getFirestoreApi();
-  const snapshot = await getDocs(collection(db, collectionName));
+  const { collection, getDocs, limit, orderBy, query } = await getFirestoreApi();
+  const constraints = [];
+
+  if (options.orderByField) {
+    constraints.push(orderBy(options.orderByField, options.direction || 'desc'));
+  }
+
+  if (options.limitCount) {
+    constraints.push(limit(Math.max(1, Number(options.limitCount) || 1)));
+  }
+
+  const collectionRef = collection(db, collectionName);
+  const snapshot = constraints.length > 0
+    ? await getDocs(query(collectionRef, ...constraints))
+    : await getDocs(collectionRef);
   return snapshot.docs.map((docSnapshot) => ({
     id: docSnapshot.id,
     ...docSnapshot.data(),
@@ -441,10 +457,10 @@ export const loadInvoiceWorkspaceData = async () => {
     readCollection('ingredients'),
     readCollection('menuItems'),
     readCollection('stockLevels'),
-    readCollection('stockMovements'),
-    readCollection('invoices'),
+    readCollection('stockMovements', { orderByField: 'createdAt', limitCount: 500 }),
+    readCollection('invoices', { orderByField: 'invoiceDate', limitCount: 300 }),
     readCollection('suppliers'),
-    readCollection('priceHistory'),
+    readCollection('priceHistory', { orderByField: 'date', limitCount: 750 }),
   ]);
   const db = await getFirestoreDb();
   const { doc, getDoc } = await getFirestoreApi();
@@ -625,7 +641,7 @@ export const saveConfirmedInvoice = async ({
   const safeInvoiceNumber = sanitizeString(invoiceNumber) || safeInvoiceId;
   const supplierId = createSupplierId(safeSupplierName);
   const confirmedAt = new Date().toISOString();
-  const safeStockPostingStatus = ['not_posted', 'posted', 'prices_only', 'historical_posted'].includes(stockPostingStatus)
+  const safeStockPostingStatus = ['not_posted', 'posted', 'prices_only', 'historical', 'historical_posted'].includes(stockPostingStatus)
     ? stockPostingStatus
     : 'not_posted';
 
@@ -657,7 +673,11 @@ export const saveConfirmedInvoice = async ({
     lineItems: safeLineItems,
     ingredientRows: Array.isArray(ingredientRows) ? ingredientRows : [],
     scannedAt: new Date().toISOString(),
-    status: safeStockPostingStatus === 'prices_only' ? 'prices_only' : 'confirmed',
+    status: safeStockPostingStatus === 'prices_only'
+      ? 'prices_only'
+      : safeStockPostingStatus === 'historical'
+        ? 'historical'
+        : 'confirmed',
     confirmedAt,
     confirmedBy: sanitizeString(confirmedBy) || 'WasteShift user',
     stockPostingStatus: safeStockPostingStatus,

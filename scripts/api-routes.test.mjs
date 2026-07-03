@@ -39,6 +39,8 @@ const importDatabaseHandler = async ({ syncSecret = '' } = {}) => {
   return (await import(`../api/database.js?case=${importCounter++}`)).default;
 };
 
+delete process.env.VERCEL_ENV;
+delete process.env.WASTESHIFT_MANAGER_API_SECRET;
 const databaseOpenHandler = await importDatabaseHandler();
 
 let response = await callHandler(databaseOpenHandler, {
@@ -68,6 +70,31 @@ response = await callHandler(databaseOpenHandler, {
 assert.equal(response.statusCode, 400);
 assert.equal(response.body.ok, false);
 
+process.env.VERCEL_ENV = 'production';
+delete process.env.WASTESHIFT_MANAGER_API_SECRET;
+const databaseProductionMissingSecretHandler = await importDatabaseHandler();
+
+response = await callHandler(databaseProductionMissingSecretHandler, {
+  method: 'GET',
+});
+assert.equal(response.statusCode, 503);
+assert.equal(response.body.code, 'sync_api_secret_not_configured');
+
+const databaseProductionSyncOnlyHandler = await importDatabaseHandler({ syncSecret: 'safe-test-secret' });
+
+response = await callHandler(databaseProductionSyncOnlyHandler, {
+  method: 'GET',
+});
+assert.equal(response.statusCode, 401);
+
+response = await callHandler(databaseProductionSyncOnlyHandler, {
+  method: 'POST',
+  headers: { 'x-wasteshift-sync-secret': 'safe-test-secret' },
+  body: JSON.stringify({ data: { wasteItems: 'bad' } }),
+});
+assert.equal(response.statusCode, 400);
+
+delete process.env.VERCEL_ENV;
 const databaseProtectedHandler = await importDatabaseHandler({ syncSecret: 'safe-test-secret' });
 
 response = await callHandler(databaseProtectedHandler, {
@@ -102,7 +129,7 @@ response = await callHandler(databaseManagerProtectedHandler, {
   body: JSON.stringify({ data: { wasteItems: 'bad' } }),
 });
 assert.equal(response.statusCode, 401);
-assert.equal(response.body.code, 'manager_api_secret_required');
+assert.equal(response.body.code, 'sync_api_secret_required');
 
 response = await callHandler(databaseManagerProtectedHandler, {
   method: 'POST',
@@ -110,7 +137,7 @@ response = await callHandler(databaseManagerProtectedHandler, {
   body: JSON.stringify({ data: { wasteItems: 'bad' } }),
 });
 assert.equal(response.statusCode, 403);
-assert.equal(response.body.code, 'manager_api_secret_invalid');
+assert.equal(response.body.code, 'sync_api_secret_invalid');
 
 response = await callHandler(databaseManagerProtectedHandler, {
   method: 'POST',
@@ -147,6 +174,26 @@ response = await callHandler(invoiceHandler, {
 });
 assert.equal(response.statusCode, 503);
 assert.match(response.body.message, /Gemini API key/);
+
+process.env.VERCEL_ENV = 'production';
+const productionMenuHandler = (await import(`../api/gemini-menu.js?case=${importCounter++}`)).default;
+const productionInvoiceHandler = (await import(`../api/gemini-invoice.js?case=${importCounter++}`)).default;
+
+response = await callHandler(productionMenuHandler, {
+  method: 'POST',
+  body: JSON.stringify({ text: 'Coffee R35' }),
+});
+assert.equal(response.statusCode, 503);
+assert.equal(response.body.code, 'manager_api_secret_not_configured');
+
+response = await callHandler(productionInvoiceHandler, {
+  method: 'POST',
+  body: JSON.stringify({ file: { name: 'invoice.jpg', mimeType: 'image/jpeg', data: 'abc' } }),
+});
+assert.equal(response.statusCode, 503);
+assert.equal(response.body.code, 'manager_api_secret_not_configured');
+
+delete process.env.VERCEL_ENV;
 
 process.env.WASTESHIFT_MANAGER_API_SECRET = 'manager-api-secret';
 
@@ -198,5 +245,6 @@ assert.equal(fetchWasCalled, false);
 
 globalThis.fetch = originalFetch;
 delete process.env.GEMINI_API_KEY;
+delete process.env.VERCEL_ENV;
 
 console.log('API route tests passed');

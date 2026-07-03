@@ -1,6 +1,23 @@
-export const getWasteEntrySyncStatus = (entry) => (
-  entry?.syncStatus || (entry?.status === 'logged' ? 'local' : entry?.status || 'local')
+export const isWasteEntryVoided = (entry) => (
+  ['voided', 'deleted'].includes(String(entry?.status || '').toLowerCase())
+  || Boolean(entry?.voidedAt)
 );
+
+export const getActiveWasteEntries = (items) => (
+  (Array.isArray(items) ? items : []).filter((entry) => !isWasteEntryVoided(entry))
+);
+
+export const getVoidedWasteEntries = (items) => (
+  (Array.isArray(items) ? items : []).filter(isWasteEntryVoided)
+);
+
+export const getWasteEntrySyncStatus = (entry) => {
+  if (isWasteEntryVoided(entry)) {
+    return entry?.syncStatus || 'voided';
+  }
+
+  return entry?.syncStatus || (entry?.status === 'logged' ? 'local' : entry?.status || 'local');
+};
 
 export const wasteEntryNeedsCostReview = (entry) => (
   ['needs_item_price', 'needs_ingredient_costs'].includes(String(entry?.costStatus || ''))
@@ -8,7 +25,7 @@ export const wasteEntryNeedsCostReview = (entry) => (
 
 export const createTodayShiftSummary = (items, now = new Date()) => {
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const todayItems = (Array.isArray(items) ? items : []).filter((item) => {
+  const todayItems = getActiveWasteEntries(items).filter((item) => {
     const dateValue = String(item?.date || '');
     const parts = dateValue.split('/');
     const itemDate = parts.length === 3
@@ -38,4 +55,3 @@ export const createTodayShiftSummary = (items, now = new Date()) => {
     topReasons,
   };
 };
-

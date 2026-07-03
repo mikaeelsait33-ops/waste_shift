@@ -4,6 +4,7 @@ import ItemPriceManager from './ItemPriceManager';
 import RecipeManager from './RecipeManager';
 import { STAFF_SECTIONS, getStaffSectionMeta, inferStaffSection } from '../utils/staffSections';
 import { getEntryFoodCostLost } from '../utils/wasteCalculations';
+import { getActiveWasteEntries } from '../utils/wasteSync';
 
 const settingsSections = [
   { key: 'security', label: 'Security' },
@@ -601,11 +602,12 @@ function Settings({
     setDailyWasteEntryLimit(String(settings?.dailyWasteEntryLimit || ''));
   }, [settings]);
 
-  const todayItems = getTodayItems(wasteItems);
+  const activeWasteItems = getActiveWasteEntries(wasteItems);
+  const todayItems = getTodayItems(activeWasteItems);
   const todayLoss = todayItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
   const today = new Date();
   const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
-  const currentMonthItems = (Array.isArray(wasteItems) ? wasteItems : []).filter((item) => {
+  const currentMonthItems = activeWasteItems.filter((item) => {
     const itemDate = parseDate(item?.date);
     return itemDate.getMonth() === today.getMonth() && itemDate.getFullYear() === today.getFullYear();
   });
