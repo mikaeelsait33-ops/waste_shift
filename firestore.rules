@@ -10,6 +10,10 @@ service cloud.firestore {
       return /databases/$(database)/documents/staff/$(uid);
     }
 
+    function staffAccessPath(staffId) {
+      return /databases/$(database)/documents/staffAccess/$(staffId);
+    }
+
     function hasStaffProfile() {
       return signedIn() && exists(staffPath(request.auth.uid));
     }
@@ -60,7 +64,25 @@ service cloud.firestore {
         && request.resource.data.roleKey in ['owner', 'manager', 'chef', 'barista', 'waiter']
         && request.resource.data.active is bool
         && request.resource.data.createdAt is string
-        && request.resource.data.lastLoginAt is string;
+        && request.resource.data.lastLoginAt is string
+        && (!('accessGrantId' in request.resource.data) || request.resource.data.accessGrantId is string);
+    }
+
+    function validStaffAccessGrant() {
+      return request.resource.data.staffId is string
+        && request.resource.data.displayName is string
+        && request.resource.data.roleKey in ['owner', 'manager', 'chef', 'barista', 'waiter']
+        && request.resource.data.active is bool
+        && request.resource.data.accessGrantId is string;
+    }
+
+    function hasMatchingStaffAccessGrant() {
+      return request.resource.data.staffId is string
+        && request.resource.data.accessGrantId is string
+        && exists(staffAccessPath(request.resource.data.staffId))
+        && get(staffAccessPath(request.resource.data.staffId)).data.active == true
+        && get(staffAccessPath(request.resource.data.staffId)).data.roleKey == request.resource.data.roleKey
+        && get(staffAccessPath(request.resource.data.staffId)).data.accessGrantId == request.resource.data.accessGrantId;
     }
 
     match /staff/{staffId} {
@@ -70,6 +92,7 @@ service cloud.firestore {
         && (
           (request.auth.uid == staffId && request.resource.data.roleKey in ['chef', 'barista', 'waiter'])
           || (request.auth.uid == staffId && setupIsOpen() && request.resource.data.roleKey in ['owner', 'manager'])
+          || (request.auth.uid == staffId && hasMatchingStaffAccessGrant())
           || canManageBusiness()
         );
       allow update: if signedIn()
@@ -82,6 +105,14 @@ service cloud.firestore {
             && request.resource.data.active == resource.data.active
           )
         );
+      allow delete: if false;
+    }
+
+    match /staffAccess/{staffId} {
+      allow read: if canManageBusiness();
+      allow create, update: if (setupIsOpen() || canManageBusiness())
+        && staffId == request.resource.data.staffId
+        && validStaffAccessGrant();
       allow delete: if false;
     }
 
