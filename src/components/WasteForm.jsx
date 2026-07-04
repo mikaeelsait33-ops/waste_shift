@@ -1469,36 +1469,34 @@ function WasteForm({
           </div>
         </div>
 
-        <div className="sticky-action-bar">
-          <div className="entry-preview">
-            <div className="budget-row">
-              <span className="small-text">{activeWasteItem.name || 'Entry preview'}</span>
-              <span className={Number.isFinite(previewCost) ? 'price' : 'badge'}>
-                {previewCostLabel}
-              </span>
-            </div>
-            <div className="import-summary-grid">
-              <span className="badge">{previewRevenueLabel}</span>
-              {formType === 'recipe' && <span className="badge">{previewProfitLabel}</span>}
-              {componentPreviewLabel && <span className="badge">{componentPreviewLabel}</span>}
-              {formType === 'recipe' && selectedRecipeTotal > 0 && (
-                <span className="badge">Base cost R{selectedRecipeTotal.toFixed(2)}</span>
-              )}
-            </div>
-            <div className="small-text">
-              {previewQuantityLabel}
-              {formType === 'recipe' && selectedRecipeFinancials.costStatus !== 'calculated' ? ' - add ingredient costs in Settings or via invoice import' : ''}
-            </div>
+        <div className="entry-preview">
+          <div className="budget-row">
+            <span className="small-text">{activeWasteItem.name || 'Entry preview'}</span>
+            <span className={Number.isFinite(previewCost) ? 'price' : 'badge'}>
+              {previewCostLabel}
+            </span>
           </div>
-
-          <button
-            type="submit"
-            disabled={isSavingEntry || isProcessingPhoto || (formType === 'recipe' && safeMenuItems.length === 0)}
-            className="primary-button"
-          >
-            {isSavingEntry ? 'Saving...' : isProcessingPhoto ? 'Preparing photo...' : 'Log waste'}
-          </button>
+          <div className="import-summary-grid">
+            <span className="badge">{previewRevenueLabel}</span>
+            {formType === 'recipe' && <span className="badge">{previewProfitLabel}</span>}
+            {componentPreviewLabel && <span className="badge">{componentPreviewLabel}</span>}
+            {formType === 'recipe' && selectedRecipeTotal > 0 && (
+              <span className="badge">Base cost R{selectedRecipeTotal.toFixed(2)}</span>
+            )}
+          </div>
+          <div className="small-text">
+            {previewQuantityLabel}
+            {formType === 'recipe' && selectedRecipeFinancials.costStatus !== 'calculated' ? ' - add ingredient costs in Settings or via invoice import' : ''}
+          </div>
         </div>
+
+        <button
+          type="submit"
+          disabled={isSavingEntry || isProcessingPhoto || (formType === 'recipe' && safeMenuItems.length === 0)}
+          className="primary-button"
+        >
+          {isSavingEntry ? 'Saving...' : isProcessingPhoto ? 'Preparing photo...' : 'Log waste'}
+        </button>
 
         {formMessage && (
           <div className="inline-message" role="status">
