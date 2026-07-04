@@ -1399,15 +1399,15 @@ function InvoiceScanner({
       <div className="section-header">
         <div>
           <p className="eyebrow">Invoices</p>
-          <h2 className="title">Invoice Entry & Stock Control</h2>
-          <p className="subtitle">Enter supplier invoice lines, review prices, update recipes, and put stock on hand.</p>
+          <h2 className="title">Invoice Workflow</h2>
+          <p className="subtitle">Upload, review, match ingredients, then confirm prices and stock in one guided flow.</p>
         </div>
         <div className="segmented-control" aria-label="Invoice views">
           <button type="button" className={`segment-button${activeView === 'entry' ? ' is-active' : ''}`} onClick={() => setActiveView('entry')}>
-            Entry
+            Upload & Review
           </button>
           <button type="button" className={`segment-button${activeView === 'ingredients' ? ' is-active' : ''}`} onClick={() => setActiveView('ingredients')}>
-            Raw Library
+            Ingredients
           </button>
           <button type="button" className={`segment-button${activeView === 'history' ? ' is-active' : ''}`} onClick={() => setActiveView('history')}>
             History

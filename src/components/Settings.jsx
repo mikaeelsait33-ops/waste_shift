@@ -7,6 +7,7 @@ import { getEntryFoodCostLost } from '../utils/wasteCalculations';
 import { getActiveWasteEntries } from '../utils/wasteSync';
 
 const settingsSections = [
+  { key: 'hub', label: 'Overview' },
   { key: 'security', label: 'Security' },
   { key: 'limits', label: 'Limits' },
   { key: 'staff', label: 'Staff' },
@@ -585,7 +586,7 @@ function Settings({
   onRestoreDatabase,
   onResetRestaurantData,
 }) {
-  const [activeSection, setActiveSection] = useState('security');
+  const [activeSection, setActiveSection] = useState('hub');
   const [draftBudget, setDraftBudget] = useState(String(budget || 0));
   const [dailyWasteValueLimit, setDailyWasteValueLimit] = useState(String(settings?.dailyWasteValueLimit || ''));
   const [dailyWasteEntryLimit, setDailyWasteEntryLimit] = useState(String(settings?.dailyWasteEntryLimit || ''));
@@ -622,6 +623,15 @@ function Settings({
   const dailyEntryLimit = Number(settings?.dailyWasteEntryLimit) || 0;
   const dailyValueUsagePercent = dailyValueLimit > 0 ? Math.min(100, (todayLoss / dailyValueLimit) * 100) : 0;
   const dailyEntryUsagePercent = dailyEntryLimit > 0 ? Math.min(100, (todayItems.length / dailyEntryLimit) * 100) : 0;
+  const settingsHubCards = [
+    { key: 'staff', title: 'Staff', meta: `${staffList.length} active profiles`, text: 'Add staff profiles and issue fast PIN codes.' },
+    { key: 'items', title: 'Menu & Recipes', meta: `${menuItems.length} menu items`, text: 'Manage recipes, ingredient costing, menu imports, and item prices.' },
+    { key: 'security', title: 'Security', meta: accessProfile?.roleLabel || 'Access', text: 'Update manager PINs and check the current operator.' },
+    { key: 'limits', title: 'Limits', meta: `Today ${todayItems.length} entries`, text: 'Set daily and monthly waste guardrails.' },
+    { key: 'database', title: 'Database & Backup', meta: firebaseSync?.status || 'Sync', text: 'Review Firebase, backup, restore, and server sync status.' },
+    { key: 'audit', title: 'Audit Log', meta: `${auditLog.length} events`, text: 'Review staff, stock, waste, and inventory history.' },
+    { key: 'danger', title: 'Danger Zone', meta: 'Protected', text: 'Reset or clear data only after deliberate confirmation.', danger: true },
+  ];
 
   const handleSaveLimits = (event) => {
     event.preventDefault();
@@ -658,6 +668,23 @@ function Settings({
           ))}
         </div>
       </div>
+
+      {activeSection === 'hub' && (
+        <div className="settings-hub-grid">
+          {settingsHubCards.map((card) => (
+            <button
+              key={card.key}
+              type="button"
+              className={`settings-hub-card${card.danger ? ' is-danger' : ''}`}
+              onClick={() => setActiveSection(card.key)}
+            >
+              <span className="settings-hub-card__meta">{card.meta}</span>
+              <strong>{card.title}</strong>
+              <span>{card.text}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {activeSection === 'limits' && (
         <form onSubmit={handleSaveLimits} className="panel">

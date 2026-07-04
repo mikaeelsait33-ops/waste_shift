@@ -31,6 +31,7 @@ const getMetricRows = (metricsObj, totalValue) => (
 
 function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceStats }) {
   const [timeframe, setTimeframe] = useState('week');
+  const [dashboardView, setDashboardView] = useState('today');
   const [sectionDate, setSectionDate] = useState(() => {
     const date = new Date();
     date.setHours(0, 0, 0, 0);
@@ -308,40 +309,87 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
           </div>
         </div>
 
-        {safeItems.length === 0 && (
-          <div className="notice-panel notice-panel--warning">
-            <div>
-              <h3 className="breakdown-title">Ready for first entry</h3>
-              <p className="small-text" style={{ margin: 0 }}>
-                The dashboard will rank causes, staff, categories, and budget pace once waste is logged.
-              </p>
-            </div>
-          </div>
-        )}
+        <div className="segmented-control dashboard-view-tabs" aria-label="Dashboard views">
+          {[
+            { key: 'today', label: 'Today' },
+            { key: 'week', label: 'Week' },
+            { key: 'problems', label: 'Problems' },
+            { key: 'reports', label: 'Reports' },
+          ].map((view) => (
+            <button
+              key={view.key}
+              type="button"
+              onClick={() => setDashboardView(view.key)}
+              className={`segment-button${dashboardView === view.key ? ' is-active' : ''}`}
+            >
+              {view.label}
+            </button>
+          ))}
+        </div>
 
-        {attentionItems.length > 0 && (
-          <div className="notice-panel">
-            <div>
-              <h3 className="breakdown-title">Needs attention</h3>
-              <div className="action-list">
-                {attentionItems.map((attentionItem) => (
-                  <div key={attentionItem} className="action-card">{attentionItem}</div>
-                ))}
+        {dashboardView === 'today' && (
+          <>
+            {safeItems.length === 0 && (
+              <div className="notice-panel notice-panel--warning">
+                <div>
+                  <h3 className="breakdown-title">Start by logging your first waste item.</h3>
+                  <p className="small-text" style={{ margin: 0 }}>
+                    WasteShift will rank causes, staff, categories, and budget pace once entries come in.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {attentionItems.length > 0 && (
+              <div className="notice-panel">
+                <div>
+                  <h3 className="breakdown-title">Needs attention now</h3>
+                  <div className="action-list">
+                    {attentionItems.map((attentionItem) => (
+                      <div key={attentionItem} className="action-card">{attentionItem}</div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!canViewFinancials && (
+              <div className="notice-panel notice-panel--warning">
+                <div>
+                  <h3 className="breakdown-title">Financial analytics restricted</h3>
+                  <p className="small-text" style={{ margin: 0 }}>
+                    Select an owner or manager in Settings &gt; Security to view waste cost, revenue loss, exports, and protected actions.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <div className="metrics-grid dashboard-action-grid">
+              <div className="metric-card">
+                <span className={metricValueClass(dailyValueLimit > 0 && todayLoss > dailyValueLimit)}>{formatMoney(todayLoss)}</span>
+                <span className="metric-label">Today&apos;s waste value</span>
+              </div>
+              <div className="metric-card">
+                <span className={metricValueClass(true)}>{formatMoney(weekLoss)}</span>
+                <span className="metric-label">This week</span>
+              </div>
+              <div className="metric-card">
+                <span className="metric-value">{topItem ? topItem[0] : 'None'}</span>
+                <span className="metric-label">Top wasted item</span>
+              </div>
+              <div className="metric-card">
+                <span className="metric-value">{topReason ? topReason[0] : 'None'}</span>
+                <span className="metric-label">Top reason</span>
+              </div>
+              <div className="metric-card">
+                <span className={`metric-value${todayShiftSummary.costReviewCount > 0 ? ' is-danger' : ''}`}>{todayShiftSummary.costReviewCount}</span>
+                <span className="metric-label">Needs price review</span>
+              </div>
+              <div className="metric-card">
+                <span className={`metric-value${Number(invoiceDashboard.lowStockCount || 0) > 0 ? ' is-danger' : ''}`}>{Number(invoiceDashboard.lowStockCount || 0)}</span>
+                <span className="metric-label">Low stock</span>
               </div>
             </div>
-          </div>
-        )}
-
-        {!canViewFinancials && (
-          <div className="notice-panel notice-panel--warning">
-            <div>
-              <h3 className="breakdown-title">Financial analytics restricted</h3>
-              <p className="small-text" style={{ margin: 0 }}>
-                Select an owner or manager in Settings &gt; Security to view waste cost, revenue loss, exports, and protected actions.
-              </p>
-            </div>
-          </div>
-        )}
 
         <div className="shift-summary-panel">
           <div className="section-header">
@@ -395,7 +443,11 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
             </div>
           </div>
         </div>
+          </>
+        )}
 
+        {dashboardView === 'week' && (
+          <>
         <div className="metrics-grid">
           <div className="metric-card">
             <span className={metricValueClass(dailyValueLimit > 0 && todayLoss > dailyValueLimit)}>{formatMoney(todayLoss)}</span>
@@ -438,6 +490,32 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
             <span className="metric-label">Projected month-end food cost</span>
           </div>
         </div>
+          </>
+        )}
+
+        {dashboardView === 'problems' && (
+          <>
+            {attentionItems.length === 0 && Number(invoiceDashboard.lowStockCount || 0) === 0 && todayShiftSummary.costReviewCount === 0 && (
+              <div className="notice-panel notice-panel--success">
+                <div>
+                  <h3 className="breakdown-title">No urgent problems right now.</h3>
+                  <p className="small-text" style={{ margin: 0 }}>Missing costs, low stock, and daily limit issues will appear here.</p>
+                </div>
+              </div>
+            )}
+
+            {attentionItems.length > 0 && (
+              <div className="notice-panel">
+                <div>
+                  <h3 className="breakdown-title">Urgent warnings</h3>
+                  <div className="action-list">
+                    {attentionItems.map((attentionItem) => (
+                      <div key={attentionItem} className="action-card">{attentionItem}</div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
 
         <div className="panel dashboard-invoice-panel">
           <div className="panel-body">
@@ -510,8 +588,10 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
             </div>
           </div>
         </div>
+          </>
+        )}
 
-        {totalItems > 0 && (
+        {dashboardView === 'reports' && totalItems > 0 && (
           <div className="insight-strip" aria-label={`Top trends for ${timeframeLabel}`}>
             <div className="insight-item">
               <span className="insight-label">Most wasted item</span>
@@ -536,6 +616,7 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
           </div>
         )}
 
+        {(dashboardView === 'week' || dashboardView === 'reports') && (
         <div className="section-rings-panel">
           <div className="section-rings-header">
             <div>
@@ -592,7 +673,9 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
             })}
           </div>
         </div>
+        )}
 
+        {dashboardView === 'week' && (
         <div className="budget-panel">
           <div className="budget-row">
             <span className="field-label">Monthly loss limit</span>
@@ -607,8 +690,9 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
           </div>
           <span className="small-text">{formatMoney(remainingBudget)} remaining before threshold breach</span>
         </div>
+        )}
 
-        {(dailyValueLimit > 0 || dailyEntryLimit > 0) && (
+        {dashboardView === 'week' && (dailyValueLimit > 0 || dailyEntryLimit > 0) && (
           <div className="budget-panel">
             <h3 className="breakdown-title">Today&apos;s limits</h3>
             {dailyValueLimit > 0 && (
@@ -637,7 +721,7 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
           </div>
         )}
 
-        {totalItems > 0 && (
+        {dashboardView === 'reports' && totalItems > 0 && (
           <div className="budget-panel">
             <h3 className="breakdown-title">Waste type split</h3>
             {classificationRows.map((row) => (
@@ -654,7 +738,7 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
           </div>
         )}
 
-        {totalItems > 0 && (
+        {dashboardView === 'problems' && totalItems > 0 && (
           <div className="action-panel">
             <div>
               <h3 className="breakdown-title">Recommended next actions</h3>
@@ -671,7 +755,7 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
           </div>
         )}
 
-        {totalItems > 0 && (
+        {dashboardView === 'reports' && totalItems > 0 && (
           <div className="breakdown-grid breakdown-grid--four">
             <div>
               <h3 className="breakdown-title">Loss by reason</h3>
