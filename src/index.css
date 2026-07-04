@@ -1109,24 +1109,25 @@ textarea.input {
   z-index: 8;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
-  align-items: stretch;
-  padding: 10px;
+  gap: 10px;
+  align-items: center;
+  padding: 8px;
   margin-top: 14px;
-  background: rgba(15, 16, 20, 0.96);
+  background: rgba(15, 16, 20, 0.9);
   border: 1px solid var(--panel-border);
-  border-radius: 18px;
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.32);
+  border-radius: 16px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.24);
 }
 
 .sticky-action-bar .entry-preview {
   margin: 0;
+  padding: 10px;
 }
 
 .sticky-action-bar .primary-button {
-  min-height: 54px;
-  min-width: 150px;
-  border-radius: 14px;
+  min-height: 48px;
+  min-width: 132px;
+  border-radius: 13px;
 }
 
 .danger-button {
@@ -2536,15 +2537,37 @@ textarea.input {
   }
 
   .sticky-action-bar {
-    bottom: 84px;
-    grid-template-columns: 1fr;
-    gap: 8px;
-    padding: 8px;
+    bottom: 78px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 7px;
+    padding: 6px;
+    border-radius: 15px;
   }
 
   .sticky-action-bar .primary-button {
-    width: 100%;
-    min-height: 50px;
+    width: auto;
+    min-width: 104px;
+    min-height: 46px;
+    padding-inline: 12px;
+    white-space: nowrap;
+  }
+
+  .sticky-action-bar .entry-preview {
+    padding: 8px;
+  }
+
+  .sticky-action-bar .entry-preview .import-summary-grid,
+  .sticky-action-bar .entry-preview .small-text {
+    display: none;
+  }
+
+  .sticky-action-bar .entry-preview .budget-row {
+    gap: 8px;
+  }
+
+  .sticky-action-bar .entry-preview .price,
+  .sticky-action-bar .entry-preview .badge {
+    font-size: 0.82rem;
   }
 
   .settings-tabs {
