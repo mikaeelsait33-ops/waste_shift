@@ -3007,70 +3007,71 @@ function App() {
       />
 
       <main className={`app-page${activeTab === 'dashboard' || activeTab === 'storeRoom' || activeTab === 'invoices' || activeTab === 'wasteLog' || activeTab === 'settings' ? ' app-page--wide' : ''}`}>
-        <ErrorBoundary key={activeTab}>
-          <Suspense fallback={<PageFallback label="Loading screen" />}>
-            {activeTab === 'dashboard' && (
-              <Dashboard
-                items={activeWasteItems}
-                budget={budget}
-                settings={settings}
+        <div key={activeTab} className="page-transition">
+          <ErrorBoundary key={activeTab}>
+            <Suspense fallback={<PageFallback label="Loading screen" />}>
+              {activeTab === 'dashboard' && (
+                <Dashboard
+                  items={activeWasteItems}
+                  budget={budget}
+                  settings={settings}
+                  staffList={staffList}
+                  accessProfile={accessProfile}
+                  invoiceStats={invoiceDashboardStats}
+                />
+              )}
+
+            {activeTab === 'logWaste' && (
+              <WasteForm
+                onAddEntry={handleAddEntry}
+                wasteItems={activeWasteItems}
+                recipes={effectiveRecipes}
+                menuItems={menuItems}
                 staffList={staffList}
+                portionProfiles={portionProfiles}
+                itemPriceCatalog={itemPriceCatalog}
                 accessProfile={accessProfile}
-                invoiceStats={invoiceDashboardStats}
+                onSavePortionProfile={handleSavePortionProfile}
+                activeStaffId={activeStaffId}
+                onActiveStaffChange={setActiveStaffId}
+                onRetryEntrySync={handleRetryWasteEntrySync}
               />
             )}
 
-          {activeTab === 'logWaste' && (
-            <WasteForm
-              onAddEntry={handleAddEntry}
-              wasteItems={activeWasteItems}
-              recipes={effectiveRecipes}
-              menuItems={menuItems}
-              staffList={staffList}
-              portionProfiles={portionProfiles}
-              itemPriceCatalog={itemPriceCatalog}
-              accessProfile={accessProfile}
-              onSavePortionProfile={handleSavePortionProfile}
-              activeStaffId={activeStaffId}
-              onActiveStaffChange={setActiveStaffId}
-              onRetryEntrySync={handleRetryWasteEntrySync}
-            />
-          )}
+            {activeTab === 'wasteLog' && (
+              <WasteList
+                items={wasteItems}
+                onDeleteEntry={handleDeleteEntry}
+                onRestoreEntry={handleRestoreEntry}
+                accessProfile={accessProfile}
+                activeStaffMember={activeStaffMember}
+              />
+            )}
 
-          {activeTab === 'wasteLog' && (
-            <WasteList
-              items={wasteItems}
-              onDeleteEntry={handleDeleteEntry}
-              onRestoreEntry={handleRestoreEntry}
-              accessProfile={accessProfile}
-              activeStaffMember={activeStaffMember}
-            />
-          )}
+            {activeTab === 'storeRoom' && (
+              <StoreRoom
+                storeRoomItems={storeRoomItems}
+                storeRoomMovements={storeRoomMovements}
+                itemPriceCatalog={itemPriceCatalog}
+                accessProfile={accessProfile}
+                onSaveStoreRoomItem={handleSaveStoreRoomItem}
+                onRecordStoreRoomMovement={handleRecordStoreRoomMovement}
+                onDeleteStoreRoomItem={handleDeleteStoreRoomItem}
+              />
+            )}
 
-          {activeTab === 'storeRoom' && (
-            <StoreRoom
-              storeRoomItems={storeRoomItems}
-              storeRoomMovements={storeRoomMovements}
-              itemPriceCatalog={itemPriceCatalog}
-              accessProfile={accessProfile}
-              onSaveStoreRoomItem={handleSaveStoreRoomItem}
-              onRecordStoreRoomMovement={handleRecordStoreRoomMovement}
-              onDeleteStoreRoomItem={handleDeleteStoreRoomItem}
-            />
-          )}
-
-          {activeTab === 'invoices' && (
-            <InvoiceScanner
-              accessProfile={accessProfile}
-              recipes={effectiveRecipes}
-              menuItems={menuItems}
-              itemPriceCatalog={itemPriceCatalog}
-              inventoryMovements={inventoryMovements}
-              onInvoiceSaved={refreshInvoiceDashboardStats}
-              onInvoicePricesUpdated={handleInvoicePricesUpdated}
-              onIngredientDeleted={handleInvoiceIngredientDeleted}
-            />
-          )}
+            {activeTab === 'invoices' && (
+              <InvoiceScanner
+                accessProfile={accessProfile}
+                recipes={effectiveRecipes}
+                menuItems={menuItems}
+                itemPriceCatalog={itemPriceCatalog}
+                inventoryMovements={inventoryMovements}
+                onInvoiceSaved={refreshInvoiceDashboardStats}
+                onInvoicePricesUpdated={handleInvoicePricesUpdated}
+                onIngredientDeleted={handleInvoiceIngredientDeleted}
+              />
+            )}
 
             {activeTab === 'settings' && (
               <Settings
@@ -3117,8 +3118,9 @@ function App() {
                 onResetRestaurantData={handleResetRestaurantData}
               />
             )}
-          </Suspense>
-        </ErrorBoundary>
+            </Suspense>
+          </ErrorBoundary>
+        </div>
       </main>
     </div>
   );
