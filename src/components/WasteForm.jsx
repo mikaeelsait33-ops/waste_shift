@@ -233,6 +233,8 @@ function WasteForm({
   const [draftSavedAt, setDraftSavedAt] = useState('');
   const [lastSavedEntryId, setLastSavedEntryId] = useState('');
   const submitInFlightRef = useRef(false);
+  const submitButtonRef = useRef(null);
+  const [smartSubmitVisible, setSmartSubmitVisible] = useState(false);
 
   const getTodayYMD = () => new Date().toISOString().split('T')[0];
   const [wasteDate, setWasteDate] = useState(getTodayYMD());
@@ -387,6 +389,8 @@ function WasteForm({
       ? `${selectedRecipeComponentCount} of ${allRecipeComponents.length} components`
       : 'Full item'
     : '';
+  const submitIsDisabled = isSavingEntry || isProcessingPhoto || (formType === 'recipe' && safeMenuItems.length === 0);
+  const smartSubmitCanShow = smartSubmitVisible && Boolean(activeWasteItem.name) && !submitIsDisabled;
   const quickReasonOptions = useMemo(() => (
     Array.from(new Set([
       suggestedReason,
@@ -537,6 +541,27 @@ function WasteForm({
       setSelectedStaffId(activeStaffId);
     }
   }, [activeStaffId, selectedStaffId]);
+
+  useEffect(() => {
+    const submitButton = submitButtonRef.current;
+
+    if (!submitButton || typeof IntersectionObserver === 'undefined') {
+      setSmartSubmitVisible(false);
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver(([entry]) => {
+      setSmartSubmitVisible(!entry?.isIntersecting);
+    }, {
+      root: null,
+      threshold: 0.45,
+      rootMargin: '0px 0px -96px 0px',
+    });
+
+    observer.observe(submitButton);
+
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     let isCancelled = false;
@@ -1491,12 +1516,25 @@ function WasteForm({
         </div>
 
         <button
+          ref={submitButtonRef}
           type="submit"
-          disabled={isSavingEntry || isProcessingPhoto || (formType === 'recipe' && safeMenuItems.length === 0)}
+          disabled={submitIsDisabled}
           className="primary-button"
         >
           {isSavingEntry ? 'Saving...' : isProcessingPhoto ? 'Preparing photo...' : 'Log waste'}
         </button>
+
+        {smartSubmitCanShow && (
+          <div className="smart-submit-rail" role="status" aria-label="Waste entry quick submit">
+            <button type="submit" className="smart-submit-button">
+              <span>
+                <strong>{previewCostLabel}</strong>
+                <small>{activeWasteItem.name}</small>
+              </span>
+              <span>Log</span>
+            </button>
+          </div>
+        )}
 
         {formMessage && (
           <div className="inline-message" role="status">

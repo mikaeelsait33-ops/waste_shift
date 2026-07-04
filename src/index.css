@@ -365,13 +365,16 @@ button:disabled {
   justify-content: center;
   min-height: 44px;
   width: 100%;
+  gap: 8px;
   padding: 10px 14px;
   color: #ffffff;
-  background: linear-gradient(135deg, #0a84ff, #24b2ff);
-  border: 1px solid rgba(130, 199, 255, 0.38);
-  border-radius: 14px;
+  background:
+    linear-gradient(#101116, #101116) padding-box,
+    linear-gradient(135deg, #feda75, #fa7e1e, #d62976, #962fbf, #0a84ff) border-box;
+  border: 1px solid transparent;
+  border-radius: 999px;
   font-weight: 860;
-  box-shadow: 0 10px 24px rgba(10, 132, 255, 0.2);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
 }
 
 .bottom-nav {
@@ -1101,6 +1104,82 @@ textarea.input {
 .auth-form .primary-button,
 .form-panel .primary-button {
   width: 100%;
+}
+
+.smart-submit-rail {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 45;
+  width: min(342px, calc(100vw - 28px));
+  pointer-events: none;
+}
+
+.smart-submit-button {
+  pointer-events: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 52px;
+  padding: 7px 8px 7px 8px;
+  color: #ffffff;
+  background: rgba(13, 14, 18, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32), var(--inner-highlight);
+}
+
+.smart-submit-button span:first-child {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 9px;
+  min-width: 0;
+  text-align: left;
+}
+
+.smart-submit-button span:first-child::before {
+  content: "";
+  grid-row: 1 / span 2;
+  align-self: center;
+  width: 32px;
+  height: 32px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at center, #111217 52%, transparent 54%) padding-box,
+    linear-gradient(135deg, #feda75, #fa7e1e, #d62976, #962fbf, #0a84ff) border-box;
+}
+
+.smart-submit-button strong,
+.smart-submit-button small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.smart-submit-button strong {
+  font-size: 0.86rem;
+  line-height: 1.05;
+}
+
+.smart-submit-button small {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 0.66rem;
+}
+
+.smart-submit-button span:last-child {
+  display: inline-grid;
+  place-items: center;
+  min-width: 54px;
+  min-height: 36px;
+  padding: 0 12px;
+  background: linear-gradient(135deg, #0a84ff, #24b2ff);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 860;
+  box-shadow: 0 8px 18px rgba(10, 132, 255, 0.22);
 }
 
 .danger-button {
@@ -2292,7 +2371,6 @@ textarea.input {
     width: auto;
     min-height: 40px;
     padding: 8px 12px;
-    border-radius: 12px;
   }
 
   .operator-chip {
@@ -2312,51 +2390,82 @@ textarea.input {
 
   .bottom-nav {
     position: fixed;
-    left: max(10px, env(safe-area-inset-left));
-    right: max(10px, env(safe-area-inset-right));
+    left: max(12px, env(safe-area-inset-left));
+    right: max(12px, env(safe-area-inset-right));
     bottom: max(10px, env(safe-area-inset-bottom));
     z-index: 50;
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(54px, 1fr));
-    gap: 4px;
-    min-height: 62px;
-    padding: 6px;
-    background: rgba(15, 16, 20, 0.97);
-    border: 1px solid var(--panel-border);
-    border-radius: 20px;
-    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.42);
+    gap: 2px;
+    min-height: 66px;
+    padding: 7px;
+    background: rgba(8, 9, 12, 0.96);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 27px;
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.44), var(--inner-highlight);
   }
 
   .bottom-nav-button {
+    position: relative;
     display: grid;
     place-items: center;
-    gap: 3px;
+    gap: 2px;
     min-width: 0;
-    min-height: 50px;
+    min-height: 52px;
     padding: 5px 4px;
     color: var(--muted);
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 15px;
-    font-size: 0.68rem;
+    border-radius: 21px;
+    font-size: 0.64rem;
     font-weight: 780;
+    transition: background 160ms ease, color 160ms ease, transform 160ms ease;
   }
 
   .bottom-nav-button.is-active {
     color: var(--text);
-    background: rgba(10, 132, 255, 0.16);
-    border-color: rgba(130, 199, 255, 0.18);
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .bottom-nav-button.is-active::after {
+    content: "";
+    position: absolute;
+    bottom: 4px;
+    width: 4px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--accent-strong);
   }
 
   .bottom-nav-button.is-primary {
     color: #ffffff;
-    background: linear-gradient(135deg, #0a84ff, #24b2ff);
-    box-shadow: 0 8px 22px rgba(10, 132, 255, 0.24);
+    background: transparent;
+    box-shadow: none;
   }
 
   .bottom-nav-marker {
-    width: 24px;
-    height: 24px;
+    width: 31px;
+    height: 31px;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background:
+      linear-gradient(#16171b, #16171b) padding-box,
+      linear-gradient(135deg, #feda75, #fa7e1e, #d62976, #962fbf, #0a84ff) border-box;
+    color: #ffffff;
+    font-size: 0.74rem;
+  }
+
+  .bottom-nav-button.is-active .bottom-nav-marker {
+    background:
+      linear-gradient(#111217, #111217) padding-box,
+      linear-gradient(135deg, #0a84ff, #24b2ff) border-box;
+  }
+
+  .bottom-nav-button.is-primary .bottom-nav-marker {
+    background: linear-gradient(135deg, #0a84ff, #24b2ff);
+    border-color: rgba(255, 255, 255, 0.14);
+    box-shadow: 0 8px 18px rgba(10, 132, 255, 0.22);
   }
 
   .app-page {
@@ -2507,6 +2616,27 @@ textarea.input {
   .auth-form .primary-button,
   .form-panel .primary-button {
     width: 100%;
+  }
+
+  .smart-submit-rail {
+    right: 12px;
+    bottom: calc(88px + env(safe-area-inset-bottom));
+    width: min(330px, calc(100vw - 24px));
+  }
+
+  .smart-submit-button {
+    min-height: 50px;
+    gap: 8px;
+    padding: 6px 7px;
+  }
+
+  .smart-submit-button small {
+    max-width: none;
+  }
+
+  .smart-submit-button span:last-child {
+    min-width: 44px;
+    min-height: 30px;
   }
 
   .settings-tabs {

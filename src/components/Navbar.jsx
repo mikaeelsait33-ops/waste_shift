@@ -1,7 +1,7 @@
 const navItems = [
-  { key: 'dashboard', label: 'Dashboard', shortLabel: 'Dash', marker: 'D' },
+  { key: 'dashboard', label: 'Dashboard', shortLabel: 'Home', marker: 'D' },
   { key: 'logWaste', label: 'Log Waste', shortLabel: 'Log', marker: '+' },
-  { key: 'invoices', label: 'Invoices', shortLabel: 'Invoices', marker: 'I' },
+  { key: 'invoices', label: 'Invoices', shortLabel: 'Scan', marker: 'I' },
   { key: 'storeRoom', label: 'Stock', shortLabel: 'Stock', marker: 'S' },
   { key: 'wasteLog', label: 'History', shortLabel: 'More', marker: 'H' },
   { key: 'settings', label: 'Settings', shortLabel: 'More', marker: 'M' },
