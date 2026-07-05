@@ -1329,7 +1329,7 @@ function WasteForm({
                   : activeItemPriceRecord
                     ? `Price saved for ${activeItemPriceRecord.unit}, but this unit cannot be converted.`
                     : canEditManualCost
-                      ? 'Add this item in Settings > Menu & Recipes > Item Prices for staff auto-costing.'
+                      ? 'Add this item in Settings > Ingredients for staff auto-costing.'
                       : 'Management needs to add this item price.'}
               </span>
             )}

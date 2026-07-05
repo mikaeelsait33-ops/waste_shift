@@ -31,6 +31,7 @@ const getFirestoreApi = async () => {
       initializeApp: firebaseApp.initializeApp,
       getApps: firebaseApp.getApps,
       collection: firestore.collection,
+      deleteDoc: firestore.deleteDoc,
       doc: firestore.doc,
       getDoc: firestore.getDoc,
       getDocs: firestore.getDocs,
@@ -421,6 +422,30 @@ export const saveFirestoreMenuItem = async ({ key, name, totalCost, menuPrice = 
   }, { merge: true });
 
   return { ok: true };
+};
+
+export const deleteFirestoreMenuItems = async (itemKeys = []) => {
+  const db = await getFirestoreDb();
+
+  if (!db) {
+    return { ok: false, skipped: true, deletedCount: 0 };
+  }
+
+  await ensureFirebaseAuth();
+  const { collection, deleteDoc, doc, getDocs } = await getFirestoreApi();
+  const safeKeys = [...new Set((Array.isArray(itemKeys) ? itemKeys : [])
+    .map((key) => String(key || '').trim())
+    .filter(Boolean))];
+
+  if (safeKeys.length > 0) {
+    await Promise.all(safeKeys.map((key) => deleteDoc(doc(db, 'menuItems', key))));
+    return { ok: true, deletedCount: safeKeys.length };
+  }
+
+  const snapshot = await getDocs(collection(db, 'menuItems'));
+  await Promise.all(snapshot.docs.map((docSnapshot) => deleteDoc(docSnapshot.ref)));
+
+  return { ok: true, deletedCount: snapshot.docs.length };
 };
 
 export const saveFirestoreWasteEntry = async (entry) => {

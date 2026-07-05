@@ -420,7 +420,7 @@ function DataManager({
               <span className="badge">{importPreview.recipes} recipes</span>
               <span className="badge">{importPreview.staff} staff</span>
               <span className="badge">{importPreview.customMenuItems} custom prices</span>
-              <span className="badge">{importPreview.itemPrices} item prices</span>
+              <span className="badge">{importPreview.itemPrices} ingredient prices</span>
               <span className="badge">{importPreview.storeRoomItems} store items</span>
               <span className="badge">{importPreview.storeRoomMovements} stock moves</span>
               <span className="badge">{importPreview.portionProfiles} portions</span>
@@ -443,7 +443,7 @@ function DataManager({
             <span className="badge">{customMenuItemCount}</span>
           </div>
           <div className="budget-row" style={{ marginTop: '10px' }}>
-            <span className="small-text">Waste item prices</span>
+            <span className="small-text">Raw ingredient prices</span>
             <span className="badge">{itemPriceCount}</span>
           </div>
           <div className="budget-row" style={{ marginTop: '10px' }}>

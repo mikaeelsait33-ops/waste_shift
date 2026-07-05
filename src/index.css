@@ -2308,6 +2308,28 @@ textarea.input {
   overflow-wrap: anywhere;
 }
 
+.invoice-history-filter-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.5fr) minmax(150px, 0.65fr) minmax(150px, 0.65fr);
+  gap: 12px;
+  align-items: end;
+  margin: 14px 0;
+}
+
+.invoice-history-filter-grid .field {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.invoice-history-filter-grid .input {
+  width: 100%;
+  min-width: 0;
+}
+
+.invoice-history-filter-search {
+  min-width: 220px;
+}
+
 .low-stock-alert-list {
   display: grid;
   gap: 8px;
@@ -2363,6 +2385,31 @@ textarea.input {
 
 .invoice-history-lines {
   margin-top: 10px;
+}
+
+.invoice-supplier-group {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.035)),
+    var(--surface-muted);
+}
+
+.invoice-supplier-group > summary {
+  grid-template-columns: minmax(180px, 1fr) auto auto auto auto;
+}
+
+.invoice-supplier-invoices {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.invoice-supplier-invoice {
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.invoice-supplier-invoice summary {
+  grid-template-columns: minmax(140px, 1fr) auto auto auto auto;
 }
 
 .raw-ingredient-card {
@@ -2673,6 +2720,7 @@ textarea.input {
   .action-panel,
   .database-grid,
   .invoice-entry-grid,
+  .invoice-history-filter-grid,
   .invoice-report-grid,
   .invoice-impact-row,
   .invoice-report-row,

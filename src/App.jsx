@@ -33,6 +33,7 @@ import {
 import {
   firestoreIsConfigured,
   getFirestoreRuntimeInfo,
+  deleteFirestoreMenuItems,
   loadFirestoreDatabaseSnapshot,
   loadFirestoreMenuItems,
   loadFirestoreWasteEntries,
@@ -40,7 +41,7 @@ import {
   saveFirestoreMenuItem,
   saveFirestoreWasteEntry,
 } from './services/firestoreMenuItems';
-import { loadInvoiceDashboardStats } from './services/invoiceFirestore';
+import { deleteIngredient, loadInvoiceDashboardStats, saveIngredientPriceRecord } from './services/invoiceFirestore';
 import {
   createDefaultRestaurantProfile,
   loadRestaurantProfile,
@@ -64,9 +65,33 @@ const E2E_TEST_MODE = import.meta.env.VITE_WASTESHIFT_E2E === 'true';
 const FIRESTORE_CONFIGURED = !E2E_TEST_MODE && firestoreIsConfigured();
 const OLD_DEFAULT_COST_BASIS = 'Menu price from menuItems.csv split evenly across listed ingredients.';
 const STAFF_FRESH_START_VERSION = 'empty-staff-roster-v1';
+const ACCESS_ROLE_LABELS = {
+  owner: 'Owner',
+  manager: 'Manager',
+  chef: 'Chef',
+  barista: 'Barista',
+  waiter: 'Waiter',
+};
 const DEFAULT_SETTINGS = {
   dailyWasteValueLimit: 0,
   dailyWasteEntryLimit: 0,
+};
+
+const createSessionStaffFallback = (session) => {
+  if (!session?.staffId) {
+    return null;
+  }
+
+  const roleKey = String(session.roleKey || '').trim().toLowerCase();
+
+  return {
+    id: session.staffId,
+    name: session.staffName || 'Current operator',
+    role: ACCESS_ROLE_LABELS[roleKey] || 'Manager',
+    roleKey,
+    staffSection: roleKey === 'manager' || roleKey === 'owner' ? 'management' : '',
+    isSessionFallback: true,
+  };
 };
 
 const Dashboard = lazy(() => import('./components/Dashboard'));
@@ -934,8 +959,9 @@ function App() {
     mergeStaffMembers(baseStaffList, customStaffList)
   ), [baseStaffList, customStaffList]);
   const activeStaffMember = useMemo(() => (
-    staffList.find((member) => member.id === activeStaffId) || null
-  ), [activeStaffId, staffList]);
+    staffList.find((member) => member.id === activeStaffId)
+    || createSessionStaffFallback(authSession)
+  ), [activeStaffId, authSession, staffList]);
   const accessProfile = useMemo(() => getAccessProfile(activeStaffMember), [activeStaffMember]);
   const activeWasteItems = useMemo(() => getActiveWasteEntries(wasteItems), [wasteItems]);
 
@@ -1909,7 +1935,7 @@ function App() {
   };
 
   const handleSaveItemPrice = (priceRecord) => {
-    const permission = requirePermission(accessProfile, 'canManageMenu', 'manage item prices');
+    const permission = requirePermission(accessProfile, 'canManageMenu', 'manage raw ingredient prices');
     if (!permission.ok) {
       alert(permission.message);
       return;
@@ -1921,7 +1947,7 @@ function App() {
     });
 
     if (!cleanedRecord) {
-      alert('Enter an item name, price, and unit.');
+      alert('Enter an ingredient name, price, and unit.');
       return;
     }
 
@@ -1967,6 +1993,13 @@ function App() {
 
     setItemPriceCatalog(nextCatalog);
 
+    if (FIRESTORE_CONFIGURED) {
+      saveIngredientPriceRecord(cleanedRecord)
+        .catch((error) => {
+          console.warn('Could not sync manual ingredient price to Firebase:', error);
+        });
+    }
+
     if (repricedEntries > 0) {
       setWasteItems(nextWasteItems);
       setInventoryMovements(nextWasteItems.flatMap(createInventoryMovementsFromEntry));
@@ -1974,7 +2007,7 @@ function App() {
 
     setAuditLog(prevLog => [
       createAuditLogEntry({
-        action: 'Item price saved',
+        action: 'Ingredient price saved',
         user: activeStaffMember?.name || 'System',
         relatedItem: cleanedRecord.name,
         afterValue: {
@@ -1988,7 +2021,7 @@ function App() {
   };
 
   const handleDeleteItemPrice = (itemPriceKey) => {
-    const permission = requirePermission(accessProfile, 'canManageMenu', 'remove item prices');
+    const permission = requirePermission(accessProfile, 'canManageMenu', 'remove raw ingredient prices');
     if (!permission.ok) {
       alert(permission.message);
       return;
@@ -2002,10 +2035,17 @@ function App() {
       return nextCatalog;
     });
 
+    if (FIRESTORE_CONFIGURED && itemPriceKey) {
+      deleteIngredient(itemPriceKey)
+        .catch((error) => {
+          console.warn('Could not delete raw ingredient price from Firebase:', error);
+        });
+    }
+
     if (deletedRecord) {
       setAuditLog(prevLog => [
         createAuditLogEntry({
-          action: 'Item price removed',
+          action: 'Ingredient price removed',
           user: activeStaffMember?.name || 'System',
           relatedItem: deletedRecord.name,
           beforeValue: deletedRecord,
@@ -2864,18 +2904,80 @@ function App() {
     }
   };
 
-  // Completely wipes out browser storage cache memory for custom recipes
-  const handleClearRecipes = () => {
-    const permission = requirePermission(accessProfile, 'canClearData', 'clear the recipe database');
+  const handleClearRecipes = async () => {
+    const permission = requirePermission(accessProfile, 'canClearData', 'wipe the menu');
     if (!permission.ok) {
       alert(permission.message);
       return;
     }
 
-    if (window.confirm('Are you sure you want to completely clear out your entire recipe database? This cannot be undone.')) {
-      setRecipes({});
-      localStorage.setItem('customRecipes', JSON.stringify({}));
-      localStorage.setItem('defaultRecipeSeedVersion', DEFAULT_RECIPE_SEED_VERSION);
+    const menuCount = menuItems.length;
+    const recipeCount = Object.keys(recipes || {}).length;
+    const appSavedCount = Array.isArray(customMenuItems) ? customMenuItems.length : 0;
+    const firestoreKeys = [...new Set([
+      ...firestoreMenuItems.flatMap((item) => [item.firestoreId, item.key]),
+      ...Object.keys(recipes || {}),
+      ...(Array.isArray(customMenuItems) ? customMenuItems.map((item) => item.key) : []),
+    ].map((key) => String(key || '').trim()).filter(Boolean))];
+
+    if (menuCount === 0 && recipeCount === 0 && appSavedCount === 0 && firestoreKeys.length === 0) {
+      alert('There is no menu data to wipe.');
+      return;
+    }
+
+    const typedConfirmation = window.prompt(`Type WIPE MENU to delete ${menuCount} menu item${menuCount === 1 ? '' : 's'} and ${recipeCount} recipe breakdown${recipeCount === 1 ? '' : 's'}.`);
+
+    if (typedConfirmation !== 'WIPE MENU') {
+      return;
+    }
+
+    setRecipes({});
+    setCustomMenuItems([]);
+    setFirestoreMenuItems([]);
+    localStorage.setItem('customRecipes', JSON.stringify({}));
+    localStorage.setItem('customMenuItems', JSON.stringify([]));
+    localStorage.setItem('defaultRecipeSeedVersion', DEFAULT_RECIPE_SEED_VERSION);
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: 'Menu wiped',
+        user: activeStaffMember?.name || 'System',
+        relatedItem: 'Menu & recipes',
+        beforeValue: {
+          menuItems: menuCount,
+          recipes: recipeCount,
+          appSavedMenuItems: appSavedCount,
+          firestoreMenuItems: firestoreKeys.length,
+        },
+      }),
+      ...prevLog,
+    ].slice(0, 500));
+
+    if (!FIRESTORE_CONFIGURED) {
+      setFirebaseSync(prev => ({
+        ...prev,
+        status: 'local',
+        message: 'Menu wiped locally. Firebase is not configured.',
+        menuItemCount: 0,
+      }));
+      return;
+    }
+
+    try {
+      const result = await deleteFirestoreMenuItems(firestoreKeys);
+      setFirebaseSync(prev => ({
+        ...prev,
+        status: 'synced',
+        message: `Menu wiped. Removed ${result.deletedCount || firestoreKeys.length} Firebase menu item${(result.deletedCount || firestoreKeys.length) === 1 ? '' : 's'}.`,
+        lastSavedAt: new Date().toISOString(),
+        menuItemCount: 0,
+      }));
+    } catch (error) {
+      console.warn('Could not wipe Firebase menu items.', error);
+      setFirebaseSync(prev => ({
+        ...prev,
+        status: 'error',
+        message: `${error?.message || 'Could not wipe Firebase menu items.'} Local menu was wiped; refresh may reload Firebase items until this is fixed.`,
+      }));
     }
   };
 

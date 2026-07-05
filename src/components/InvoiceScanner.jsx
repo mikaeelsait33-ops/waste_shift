@@ -83,6 +83,10 @@ const EMPTY_MANUAL_LINE = {
   lineTotal: '',
 };
 
+const getInvoiceSupplierName = (invoice) => (
+  String(invoice?.supplier || invoice?.supplierName || '').trim() || 'Unknown supplier'
+);
+
 const createLocalMenuItems = (recipes, menuItems) => (
   (Array.isArray(menuItems) ? menuItems : []).map((menuItem) => {
     const recipe = recipes?.[menuItem.key] || {};
@@ -431,10 +435,50 @@ function InvoiceScanner({
       return true;
     });
   }, [historyEndDate, historySearch, historyStartDate, workspace.invoices]);
-  const visibleInvoicePage = useMemo(() => getVisiblePage(filteredInvoices, {
+  const invoiceSupplierGroups = useMemo(() => {
+    const groupedSuppliers = new Map();
+
+    filteredInvoices.forEach((invoice) => {
+      const supplier = getInvoiceSupplierName(invoice);
+      const currentGroup = groupedSuppliers.get(supplier) || {
+        supplier,
+        invoiceCount: 0,
+        lineCount: 0,
+        latestInvoiceDate: '',
+        totalExVAT: 0,
+        totalVAT: 0,
+        totalIncVAT: 0,
+        invoices: [],
+      };
+      const invoiceDateValue = String(invoice.invoiceDate || invoice.scannedAt || '').slice(0, 10);
+      const invoices = [...currentGroup.invoices, invoice].sort((a, b) => (
+        new Date(b.invoiceDate || b.scannedAt || 0).getTime() - new Date(a.invoiceDate || a.scannedAt || 0).getTime()
+      ));
+
+      groupedSuppliers.set(supplier, {
+        ...currentGroup,
+        invoiceCount: currentGroup.invoiceCount + 1,
+        lineCount: currentGroup.lineCount + (Array.isArray(invoice.lineItems) ? invoice.lineItems.length : 0),
+        latestInvoiceDate: !currentGroup.latestInvoiceDate || new Date(invoiceDateValue || 0) > new Date(currentGroup.latestInvoiceDate || 0)
+          ? invoiceDateValue
+          : currentGroup.latestInvoiceDate,
+        totalExVAT: roundMoney(currentGroup.totalExVAT + Number(invoice.totalExVAT || 0)),
+        totalVAT: roundMoney(currentGroup.totalVAT + Number(invoice.totalVAT || 0)),
+        totalIncVAT: roundMoney(currentGroup.totalIncVAT + Number(invoice.totalIncVAT || 0)),
+        invoices,
+      });
+    });
+
+    return [...groupedSuppliers.values()].sort((a, b) => (
+      new Date(b.latestInvoiceDate || 0).getTime() - new Date(a.latestInvoiceDate || 0).getTime()
+      || b.totalExVAT - a.totalExVAT
+      || a.supplier.localeCompare(b.supplier)
+    ));
+  }, [filteredInvoices]);
+  const visibleInvoiceSupplierPage = useMemo(() => getVisiblePage(invoiceSupplierGroups, {
     limit: visibleInvoiceLimit,
     fallbackLimit: DEFAULT_PAGE_SIZE,
-  }), [filteredInvoices, visibleInvoiceLimit]);
+  }), [invoiceSupplierGroups, visibleInvoiceLimit]);
   const historySummary = useMemo(() => ({
     totalExVAT: roundMoney(filteredInvoices.reduce((sum, invoice) => sum + Number(invoice.totalExVAT || 0), 0)),
     totalVAT: roundMoney(filteredInvoices.reduce((sum, invoice) => sum + Number(invoice.totalVAT || 0), 0)),
@@ -2089,7 +2133,17 @@ function InvoiceScanner({
                         {update.status}
                       </span>
                       {update.status === 'low' && (
-                        <button type="button" className="ghost-button compact-action">Add to Order List</button>
+                        <button
+                          type="button"
+                          className="ghost-button compact-action"
+                          onClick={() => {
+                            setStockSearch(update.ingredientName || update.ingredientId || '');
+                            setActiveView('stock');
+                            setMessage(`${update.ingredientName || 'Ingredient'} opened in stock movements.`);
+                          }}
+                        >
+                          View in stock
+                        </button>
                       )}
                     </div>
                   ))}
@@ -2304,61 +2358,102 @@ function InvoiceScanner({
               </div>
             </div>
 
-            <div className="field-grid">
-              <input type="search" value={historySearch} onChange={(event) => setHistorySearch(event.target.value)} className="input" placeholder="Search supplier" />
-              <input type="date" value={historyStartDate} onChange={(event) => setHistoryStartDate(event.target.value)} className="input" />
-              <input type="date" value={historyEndDate} onChange={(event) => setHistoryEndDate(event.target.value)} className="input" />
+            <div className="invoice-history-filter-grid">
+              <div className="field invoice-history-filter-search">
+                <label htmlFor="invoice-history-search">Supplier</label>
+                <input
+                  id="invoice-history-search"
+                  type="search"
+                  value={historySearch}
+                  onChange={(event) => setHistorySearch(event.target.value)}
+                  className="input"
+                  placeholder="Search supplier"
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="invoice-history-start">From</label>
+                <input
+                  id="invoice-history-start"
+                  type="date"
+                  value={historyStartDate}
+                  onChange={(event) => setHistoryStartDate(event.target.value)}
+                  className="input"
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="invoice-history-end">To</label>
+                <input
+                  id="invoice-history-end"
+                  type="date"
+                  value={historyEndDate}
+                  onChange={(event) => setHistoryEndDate(event.target.value)}
+                  className="input"
+                />
+              </div>
             </div>
 
             <div className="invoice-history-list">
               {filteredInvoices.length === 0 ? (
                 <div className="empty-state">No confirmed invoices match this filter.</div>
-              ) : visibleInvoicePage.records.map((invoice) => (
-                <details key={invoice.id} className="invoice-history-row">
+              ) : visibleInvoiceSupplierPage.records.map((supplierGroup) => (
+                <details key={supplierGroup.supplier} className="invoice-history-row invoice-supplier-group">
                   <summary>
-                    <strong>{invoice.supplier || 'Unknown supplier'}</strong>
-                    <span>{invoice.invoiceNumber ? `#${invoice.invoiceNumber}` : 'No invoice no.'}</span>
-                    <span>{invoice.invoiceDate || 'No date'}</span>
-                    <span>{formatMoney(invoice.totalExVAT)} ex VAT</span>
-                    <span className="badge">{invoice.status || 'confirmed'}</span>
+                    <strong>{supplierGroup.supplier}</strong>
+                    <span>{supplierGroup.invoiceCount} invoice{supplierGroup.invoiceCount === 1 ? '' : 's'}</span>
+                    <span>{supplierGroup.latestInvoiceDate || 'No date'}</span>
+                    <span>{formatMoney(supplierGroup.totalExVAT)} ex VAT</span>
+                    <span className="badge">{supplierGroup.lineCount} lines</span>
                   </summary>
-                  <div className="invoice-history-lines">
-                    <div className="stock-movement-row">
-                      <span className="small-text">
-                        {invoice.invoiceNumber ? `Invoice #${invoice.invoiceNumber}` : 'No invoice number'} | {invoice.lineItems?.length || 0} line{invoice.lineItems?.length === 1 ? '' : 's'}
-                      </span>
-                      <button
-                        type="button"
-                        className="ghost-button compact-action is-danger"
-                        onClick={() => handleDeleteInvoice(invoice)}
-                        disabled={!canManageInvoices || deletingInvoiceId === invoice.id}
-                      >
-                        {deletingInvoiceId === invoice.id ? 'Deleting...' : 'Delete invoice'}
-                      </button>
-                    </div>
-                    {(Array.isArray(invoice.lineItems) ? invoice.lineItems : []).map((item) => (
-                      <div key={item.id || item.itemName} className="stock-movement-row">
-                        <strong>{item.itemName}</strong>
-                        <span className="small-text">{item.quantity} {item.unit}</span>
-                        <span>{formatMoney(item.priceExVAT)} ex</span>
-                        <span>{formatMoney(item.priceIncVAT)} incl</span>
-                      </div>
+                  <div className="invoice-history-lines invoice-supplier-invoices">
+                    {supplierGroup.invoices.map((invoice) => (
+                      <details key={invoice.id} className="invoice-history-row invoice-supplier-invoice">
+                        <summary>
+                          <strong>{invoice.invoiceNumber ? `#${invoice.invoiceNumber}` : 'No invoice no.'}</strong>
+                          <span>{invoice.invoiceDate || 'No date'}</span>
+                          <span>{formatMoney(invoice.totalExVAT)} ex VAT</span>
+                          <span>{formatMoney(invoice.totalIncVAT)} incl VAT</span>
+                          <span className="badge">{invoice.status || 'confirmed'}</span>
+                        </summary>
+                        <div className="invoice-history-lines">
+                          <div className="stock-movement-row">
+                            <span className="small-text">
+                              {invoice.invoiceNumber ? `Invoice #${invoice.invoiceNumber}` : 'No invoice number'} | {invoice.lineItems?.length || 0} line{invoice.lineItems?.length === 1 ? '' : 's'}
+                            </span>
+                            <button
+                              type="button"
+                              className="ghost-button compact-action is-danger"
+                              onClick={() => handleDeleteInvoice(invoice)}
+                              disabled={!canManageInvoices || deletingInvoiceId === invoice.id}
+                            >
+                              {deletingInvoiceId === invoice.id ? 'Deleting...' : 'Delete invoice'}
+                            </button>
+                          </div>
+                          {(Array.isArray(invoice.lineItems) ? invoice.lineItems : []).map((item) => (
+                            <div key={item.id || item.itemName} className="stock-movement-row">
+                              <strong>{item.itemName}</strong>
+                              <span className="small-text">{item.quantity} {item.unit}</span>
+                              <span>{formatMoney(item.priceExVAT)} ex</span>
+                              <span>{formatMoney(item.priceIncVAT)} incl</span>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
                     ))}
                   </div>
                 </details>
               ))}
             </div>
-            {visibleInvoicePage.hasMore && (
+            {visibleInvoiceSupplierPage.hasMore && (
               <div className="load-more-row">
                 <button
                   type="button"
                   className="ghost-button is-warning"
-                  onClick={() => setVisibleInvoiceLimit(visibleInvoicePage.nextLimit)}
+                  onClick={() => setVisibleInvoiceLimit(visibleInvoiceSupplierPage.nextLimit)}
                 >
-                  Load more invoices
+                  Load more suppliers
                 </button>
                 <span className="small-text">
-                  Showing {visibleInvoicePage.visibleCount} of {visibleInvoicePage.totalCount}
+                  Showing {visibleInvoiceSupplierPage.visibleCount} of {visibleInvoiceSupplierPage.totalCount}
                 </span>
               </div>
             )}

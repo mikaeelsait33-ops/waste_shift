@@ -13,6 +13,7 @@ const testFiles = [
   'scripts/auth-permissions.test.mjs',
   'scripts/api-routes.test.mjs',
   'scripts/large-dataset.test.mjs',
+  'scripts/button-audit.mjs',
 ];
 
 const runTestFile = (file) => new Promise((resolve, reject) => {

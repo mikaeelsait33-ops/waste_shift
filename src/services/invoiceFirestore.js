@@ -574,6 +574,46 @@ export const saveIngredient = async (ingredientDraft) => {
   return { ok: true, ingredient: payload };
 };
 
+export const saveIngredientPriceRecord = async (priceRecord) => {
+  const db = await getFirestoreDb();
+  const name = sanitizeString(priceRecord?.name);
+  const id = sanitizeString(priceRecord?.id || priceRecord?.key) || createInvoiceKey(name);
+
+  if (!db || !name || !id) {
+    return { ok: false, skipped: true };
+  }
+
+  const unit = sanitizeString(priceRecord?.unit || priceRecord?.priceUnit) || 'each';
+  const latestCost = sanitizeNumber(priceRecord?.price ?? priceRecord?.latestCost ?? priceRecord?.lastPriceExVAT);
+  const baseUnit = sanitizeString(priceRecord?.baseUnit);
+  const costPerBaseUnitExVAT = sanitizeNumber(priceRecord?.costPerBaseUnit);
+
+  await ensureFirebaseAuth();
+  const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
+  const payload = {
+    id,
+    key: id,
+    name,
+    category: sanitizeString(priceRecord?.category) || 'Other',
+    unit,
+    defaultUnit: baseUnit || unit,
+    active: true,
+    source: sanitizeString(priceRecord?.source) || 'Manual ingredient price',
+    latestCost,
+    costUnit: unit,
+    currentPrice: latestCost,
+    lastPriceExVAT: latestCost,
+    baseUnit,
+    costPerBaseUnitExVAT: roundUnitPrice(costPerBaseUnitExVAT),
+    updatedAt: serverTimestamp(),
+    createdAt: priceRecord?.createdAt || serverTimestamp(),
+  };
+
+  await setDoc(doc(db, 'ingredients', id), payload, { merge: true });
+
+  return { ok: true, ingredient: payload };
+};
+
 export const deleteIngredient = async (ingredientId) => {
   const db = await getFirestoreDb();
   const id = sanitizeString(ingredientId);

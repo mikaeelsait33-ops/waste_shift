@@ -46,7 +46,7 @@ function ItemPriceManager({
     const parsedPrice = Number.parseFloat(price);
 
     if (!trimmedName) {
-      setMessage('Enter an item name.');
+      setMessage('Enter an ingredient name.');
       return;
     }
 
@@ -62,7 +62,7 @@ function ItemPriceManager({
       price: parsedPrice,
       unit,
     });
-    setMessage(`${trimmedName} price saved.`);
+    setMessage(`${trimmedName} ingredient price saved.`);
     resetForm();
   };
 
@@ -76,12 +76,12 @@ function ItemPriceManager({
   };
 
   const handleDelete = (record) => {
-    if (window.confirm(`Remove the saved price for ${record.name}?`)) {
+    if (window.confirm(`Remove the saved raw ingredient price for ${record.name}?`)) {
       onDeleteItemPrice?.(record.key);
       if (editingKey === record.key) {
         resetForm();
       }
-      setMessage(`${record.name} price removed.`);
+      setMessage(`${record.name} ingredient price removed.`);
     }
   };
 
@@ -90,9 +90,9 @@ function ItemPriceManager({
       <div className="panel-body">
         <div className="section-header">
           <div>
-            <p className="eyebrow">Item pricing</p>
-            <h2 className="title">Waste Item Prices</h2>
-            <p className="subtitle">Set ingredient and drink prices so staff entries calculate waste cost automatically.</p>
+            <p className="eyebrow">Ingredients</p>
+            <h2 className="title">Raw Ingredient Library</h2>
+            <p className="subtitle">Set raw ingredient and drink prices from invoices or manual entries. These records do not create menu recipes.</p>
           </div>
           <span className="badge">{priceRows.length} priced</span>
         </div>
@@ -100,13 +100,13 @@ function ItemPriceManager({
         <form onSubmit={handleSubmit}>
           <div className="item-price-form-grid">
             <div className="field">
-              <label htmlFor="item-price-name">Item</label>
+              <label htmlFor="item-price-name">Ingredient</label>
               <input
                 id="item-price-name"
                 type="text"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder="e.g. Tomato"
+                placeholder="e.g. Rocket"
                 className="input"
               />
             </div>
@@ -150,7 +150,7 @@ function ItemPriceManager({
 
           <div className="manager-row">
             <button type="submit" className="primary-button item-price-primary-action" disabled={!canManagePrices}>
-              {canManagePrices ? (editingKey ? 'Update price' : 'Save price') : 'Manager only'}
+              {canManagePrices ? (editingKey ? 'Update ingredient price' : 'Save ingredient price') : 'Manager only'}
             </button>
             {editingKey && (
               <button type="button" onClick={resetForm} className="ghost-button">
@@ -171,7 +171,7 @@ function ItemPriceManager({
             type="search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search item prices"
+            placeholder="Search raw ingredients"
             className="input"
           />
         </div>
@@ -179,7 +179,7 @@ function ItemPriceManager({
         {searchValue && (
           <div className="search-status" role="status">
             <span>
-              <strong>{priceRows.length}</strong> price{priceRows.length === 1 ? '' : 's'} for <strong>{search.trim()}</strong>
+              <strong>{priceRows.length}</strong> ingredient price{priceRows.length === 1 ? '' : 's'} for <strong>{search.trim()}</strong>
             </span>
             <button type="button" onClick={() => setSearch('')} className="ghost-button compact-action">
               Clear search
@@ -189,7 +189,7 @@ function ItemPriceManager({
 
         {priceRows.length === 0 ? (
           <div className="empty-state">
-            {searchValue ? `No item prices match "${search.trim()}".` : 'No item prices saved yet.'}
+            {searchValue ? `No raw ingredient prices match "${search.trim()}".` : 'No raw ingredient prices saved yet.'}
           </div>
         ) : (
           <div className="item-price-list">

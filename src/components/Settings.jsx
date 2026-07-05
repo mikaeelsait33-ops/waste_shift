@@ -11,6 +11,7 @@ const settingsSections = [
   { key: 'security', label: 'Security' },
   { key: 'limits', label: 'Limits' },
   { key: 'staff', label: 'Staff' },
+  { key: 'ingredients', label: 'Ingredients' },
   { key: 'items', label: 'Menu & Recipes' },
   { key: 'audit', label: 'Audit' },
   { key: 'database', label: 'Database' },
@@ -623,9 +624,13 @@ function Settings({
   const dailyEntryLimit = Number(settings?.dailyWasteEntryLimit) || 0;
   const dailyValueUsagePercent = dailyValueLimit > 0 ? Math.min(100, (todayLoss / dailyValueLimit) * 100) : 0;
   const dailyEntryUsagePercent = dailyEntryLimit > 0 ? Math.min(100, (todayItems.length / dailyEntryLimit) * 100) : 0;
+  const rawIngredientCount = itemPriceCatalog && typeof itemPriceCatalog === 'object' && !Array.isArray(itemPriceCatalog)
+    ? Object.keys(itemPriceCatalog).length
+    : 0;
   const settingsHubCards = [
     { key: 'staff', title: 'Staff', meta: `${staffList.length} active profiles`, text: 'Add staff profiles and issue fast PIN codes.' },
-    { key: 'items', title: 'Menu & Recipes', meta: `${menuItems.length} menu items`, text: 'Manage recipes, ingredient costing, menu imports, and item prices.' },
+    { key: 'ingredients', title: 'Ingredients', meta: `${rawIngredientCount} raw items`, text: 'Manage raw ingredient prices from invoices and manual cost entries.' },
+    { key: 'items', title: 'Menu & Recipes', meta: `${menuItems.length} menu items`, text: 'Manage sellable dishes, menu imports, and recipe breakdowns.' },
     { key: 'security', title: 'Security', meta: accessProfile?.roleLabel || 'Access', text: 'Update manager PINs and check the current operator.' },
     { key: 'limits', title: 'Limits', meta: `Today ${todayItems.length} entries`, text: 'Set daily and monthly waste guardrails.' },
     { key: 'database', title: 'Database & Backup', meta: firebaseSync?.status || 'Sync', text: 'Review Firebase, backup, restore, and server sync status.' },
@@ -853,19 +858,23 @@ function Settings({
         />
       )}
 
-      {activeSection === 'items' && (
-        <>
+      {activeSection === 'ingredients' && (
           <ItemPriceManager
             itemPriceCatalog={itemPriceCatalog}
             accessProfile={accessProfile}
             onSaveItemPrice={onSaveItemPrice}
             onDeleteItemPrice={onDeleteItemPrice}
           />
+      )}
+
+      {activeSection === 'items' && (
+        <>
           <RecipeManager
             recipes={recipes}
             menuItems={menuItems}
             customMenuItems={customMenuItems}
             itemPriceCatalog={itemPriceCatalog}
+            accessProfile={accessProfile}
             onAddRecipe={onAddRecipe}
             onClearRecipes={onClearRecipes}
             onSaveMenuItem={onSaveMenuItem}

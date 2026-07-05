@@ -11,6 +11,8 @@ const wasteList = await read('../src/components/WasteList.jsx');
 const dashboard = await read('../src/components/Dashboard.jsx');
 const settings = await read('../src/components/Settings.jsx');
 const invoiceScanner = await read('../src/components/InvoiceScanner.jsx');
+const recipeManager = await read('../src/components/RecipeManager.jsx');
+const menuImportPanel = await read('../src/components/MenuImportPanel.jsx');
 
 assert.match(app, /activeTab === 'dashboard'/);
 assert.match(app, /activeTab === 'logWaste'/);
@@ -18,6 +20,8 @@ assert.match(app, /activeTab === 'wasteLog'/);
 assert.match(app, /activeTab === 'invoices'/);
 assert.match(app, /activeTab === 'settings'/);
 assert.match(app, /onResetRestaurantData/);
+assert.match(app, /WIPE MENU/);
+assert.match(app, /deleteFirestoreMenuItems/);
 
 assert.match(setupWizard, /Set Up This Restaurant/);
 assert.match(setupWizard, /Manager PINs do not match/);
@@ -40,6 +44,11 @@ assert.match(wasteList, /Load more entries/);
 assert.match(wasteList, /Needs cost review/);
 assert.match(settings, /Reset restaurant data/);
 assert.match(settings, /Staff setup/);
+assert.match(settings, /accessProfile=\{accessProfile\}/);
+assert.match(recipeManager, /accessProfile=\{accessProfile\}/);
+assert.match(recipeManager, /Wipe menu/);
+assert.match(menuImportPanel, /canUseAiImports/);
+assert.match(menuImportPanel, /Your manager role is active/);
 assert.match(invoiceScanner, /Load more invoice lines/);
 assert.match(invoiceScanner, /Cost review queue/);
 

@@ -47,6 +47,7 @@ function RecipeManager({
   menuItems,
   customMenuItems,
   itemPriceCatalog,
+  accessProfile,
   onAddRecipe,
   onClearRecipes,
   onSaveMenuItem,
@@ -115,7 +116,6 @@ function RecipeManager({
     return [...entriesByKey.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [safeMenuItems, safeRecipes]);
 
-  const recipeEntries = Object.entries(safeRecipes);
   const recipeSearchValue = recipeSearch.trim().toLowerCase();
   const filteredCatalogEntries = catalogEntries.filter((entry) => {
     if (!recipeSearchValue) return true;
@@ -262,6 +262,7 @@ function RecipeManager({
     <section className="inventory-section">
       <MenuImportPanel
         existingMenuItems={safeMenuItems}
+        accessProfile={accessProfile}
         activeStaffMember={activeStaffMember}
         onSaveApprovedItems={onImportMenuItems}
       />
@@ -434,9 +435,9 @@ function RecipeManager({
             </div>
             <div className="manager-row">
               <span className="badge">{filteredCatalogEntries.length} shown</span>
-              {recipeEntries.length > 0 && (
+              {catalogEntries.length > 0 && (
                 <button type="button" onClick={onClearRecipes} className="danger-button">
-                  Wipe recipe breakdowns
+                  Wipe menu
                 </button>
               )}
             </div>

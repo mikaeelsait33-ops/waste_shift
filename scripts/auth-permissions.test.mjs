@@ -41,9 +41,11 @@ const chefProfile = getAccessProfile({ id: 'staff_3', name: 'Chef', role: 'Chef'
 
 assert.equal(managerProfile.canManageStaff, true);
 assert.equal(managerProfile.canClearData, true);
+assert.equal(managerProfile.canUseAiImports, true);
 assert.equal(staffProfile.canLogWaste, true);
 assert.equal(staffProfile.canManageStaff, false);
 assert.equal(staffProfile.canViewFinancials, false);
+assert.equal(staffProfile.canUseAiImports, false);
 assert.equal(staffProfile.canCreateWasteOnly, true);
 assert.equal(chefProfile.canManageMenu, true);
 assert.equal(chefProfile.canManageStoreRoom, true);

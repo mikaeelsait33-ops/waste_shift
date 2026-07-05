@@ -36,6 +36,7 @@ const createFilePayload = async (file) => {
 
 function MenuImportPanel({
   existingMenuItems = [],
+  accessProfile,
   activeStaffMember,
   onSaveApprovedItems,
   compact = false,
@@ -48,6 +49,10 @@ function MenuImportPanel({
   const [message, setMessage] = useState('');
   const [isExtracting, setIsExtracting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const hasAccessProfile = Boolean(accessProfile);
+  const canUseAiImports = !hasAccessProfile || Boolean(accessProfile?.canUseAiImports);
+  const canSaveImportedItems = !hasAccessProfile || Boolean(accessProfile?.canManageMenu);
+  const operatorLabel = accessProfile?.operatorName || activeStaffMember?.name || 'Current operator';
 
   const approvedItems = useMemo(() => (
     reviewItems.filter((item) => item.approved && !item.rejected && item.name.trim() && item.warnings.length === 0)
@@ -78,6 +83,11 @@ function MenuImportPanel({
   };
 
   const extractWithGemini = async (file = null) => {
+    if (!canUseAiImports) {
+      setMessage(`${operatorLabel} is not allowed to use Gemini menu import. Use a manager login, or paste text/CSV for review.`);
+      return;
+    }
+
     if (!file && !sourceText.trim()) {
       setMessage('Paste menu text or upload a menu PDF/image before using Gemini.');
       return;
@@ -112,7 +122,12 @@ function MenuImportPanel({
         if (file && payload?.ocr?.rawText) {
           setSourceText(payload.ocr.rawText);
         }
-        throw new Error(payload.message || payload.errors?.[0] || 'Menu import failed.');
+        const protectedApiMessage = ['manager_api_secret_required', 'sync_api_secret_required'].includes(payload.code)
+          ? 'Gemini menu import is protected by the server access key. Your manager role is active, but this browser needs the sync access key saved in Settings > Database & Backup before using Gemini.'
+          : payload.code === 'manager_api_secret_invalid' || payload.code === 'sync_api_secret_invalid'
+            ? 'Gemini menu import is protected, and the saved access key was rejected. Check the key in Settings > Database & Backup.'
+            : payload.message || payload.errors?.[0] || 'Menu import failed.';
+        throw new Error(protectedApiMessage);
       }
 
       const extractedMenuItems = file
@@ -205,6 +220,11 @@ function MenuImportPanel({
   };
 
   const saveApprovedItems = async () => {
+    if (!canSaveImportedItems) {
+      setMessage(`${operatorLabel} is not allowed to save menu imports. Use a manager account.`);
+      return;
+    }
+
     if (approvedItems.length === 0) {
       setMessage('Approve at least one valid menu item before saving.');
       return;
@@ -271,18 +291,38 @@ function MenuImportPanel({
           <button type="button" className="ghost-button" onClick={() => extractWithGemini()} disabled={isExtracting || isSaving}>
             {isExtracting ? 'Extracting...' : 'Use Gemini'}
           </button>
-          <label className="ghost-button" htmlFor="menu-import-file">
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => {
+              if (!canUseAiImports) {
+                setMessage(`${operatorLabel} is not allowed to upload menu files for Gemini/OCR. Use a manager login.`);
+                return;
+              }
+              fileInputRef.current?.click();
+            }}
+            disabled={isExtracting || isSaving || !canUseAiImports}
+          >
             Upload file
-          </label>
+          </button>
           <input
             ref={fileInputRef}
             id="menu-import-file"
             type="file"
             accept=".csv,text/csv,text/plain,application/pdf,image/png,image/jpeg,image/webp"
             onChange={handleFileChange}
+            disabled={!canUseAiImports}
             style={{ display: 'none' }}
           />
         </div>
+
+        {!canUseAiImports && (
+          <div className="notice-panel notice-panel--warning">
+            <p className="small-text" style={{ margin: 0 }}>
+              Manager access is required for Gemini/OCR menu imports. Text review is still available.
+            </p>
+          </div>
+        )}
 
         {reviewItems.length > 0 && (
           <div className="smart-panel">
@@ -294,8 +334,8 @@ function MenuImportPanel({
               <button type="button" className="ghost-button" onClick={approveHighConfidence}>
                 Approve high confidence
               </button>
-              <button type="button" className="primary-button" onClick={saveApprovedItems} disabled={isSaving || approvedItems.length === 0}>
-                {isSaving ? 'Saving...' : 'Save approved'}
+              <button type="button" className="primary-button" onClick={saveApprovedItems} disabled={isSaving || approvedItems.length === 0 || !canSaveImportedItems}>
+                {isSaving ? 'Saving...' : canSaveImportedItems ? 'Save approved' : 'Manager only'}
               </button>
             </div>
 
