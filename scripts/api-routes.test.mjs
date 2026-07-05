@@ -151,9 +151,11 @@ delete process.env.GEMINI_API_KEY;
 delete process.env.GOOGLE_GEMINI_API_KEY;
 delete process.env.GOOGLE_API_KEY;
 delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+delete process.env.OCR_SPACE_API_KEY;
 
 const menuHandler = (await import(`../api/gemini-menu.js?case=${importCounter++}`)).default;
 const invoiceHandler = (await import(`../api/gemini-invoice.js?case=${importCounter++}`)).default;
+const scanDocumentHandler = (await import(`../api/scan-document.js?case=${importCounter++}`)).default;
 
 response = await callHandler(menuHandler, { method: 'GET' });
 assert.equal(response.statusCode, 405);
@@ -175,9 +177,20 @@ response = await callHandler(invoiceHandler, {
 assert.equal(response.statusCode, 503);
 assert.match(response.body.message, /Gemini API key/);
 
+response = await callHandler(scanDocumentHandler, { method: 'GET' });
+assert.equal(response.statusCode, 405);
+
+response = await callHandler(scanDocumentHandler, {
+  method: 'POST',
+  body: JSON.stringify({ documentType: 'invoice', file: { name: 'invoice.jpg', mimeType: 'image/jpeg', data: 'abc' } }),
+});
+assert.equal(response.statusCode, 503);
+assert.match(response.body.message, /OCR\.space API key/);
+
 process.env.VERCEL_ENV = 'production';
 const productionMenuHandler = (await import(`../api/gemini-menu.js?case=${importCounter++}`)).default;
 const productionInvoiceHandler = (await import(`../api/gemini-invoice.js?case=${importCounter++}`)).default;
+const productionScanDocumentHandler = (await import(`../api/scan-document.js?case=${importCounter++}`)).default;
 
 response = await callHandler(productionMenuHandler, {
   method: 'POST',
@@ -189,6 +202,13 @@ assert.equal(response.body.code, 'manager_api_secret_not_configured');
 response = await callHandler(productionInvoiceHandler, {
   method: 'POST',
   body: JSON.stringify({ file: { name: 'invoice.jpg', mimeType: 'image/jpeg', data: 'abc' } }),
+});
+assert.equal(response.statusCode, 503);
+assert.equal(response.body.code, 'manager_api_secret_not_configured');
+
+response = await callHandler(productionScanDocumentHandler, {
+  method: 'POST',
+  body: JSON.stringify({ documentType: 'invoice', file: { name: 'invoice.jpg', mimeType: 'image/jpeg', data: 'abc' } }),
 });
 assert.equal(response.statusCode, 503);
 assert.equal(response.body.code, 'manager_api_secret_not_configured');
@@ -246,5 +266,102 @@ assert.equal(fetchWasCalled, false);
 globalThis.fetch = originalFetch;
 delete process.env.GEMINI_API_KEY;
 delete process.env.VERCEL_ENV;
+
+process.env.OCR_SPACE_API_KEY = 'ocr-test-key';
+process.env.GEMINI_API_KEY = 'gemini-test-key';
+const scannerFetchCalls = [];
+globalThis.fetch = async (url, options = {}) => {
+  scannerFetchCalls.push({ url: String(url), body: String(options.body || '') });
+
+  if (String(url).includes('ocr.space') && scannerFetchCalls.length === 1) {
+    return {
+      ok: true,
+      text: async () => JSON.stringify({
+        IsErroredOnProcessing: false,
+        ParsedResults: [{ ParsedText: 'tiny' }],
+      }),
+    };
+  }
+
+  if (String(url).includes('ocr.space') && scannerFetchCalls.length === 2) {
+    return {
+      ok: true,
+      text: async () => JSON.stringify({
+        IsErroredOnProcessing: false,
+        ParsedResults: [{
+          ParsedText: 'Raw Naturally Nutritious\nTax Invoice INV-123 Date 2026-07-01\nDescription Quantity Unit Price Total\nTomatoes Kg 2 R29.90 R59.80\nTotal R59.80',
+        }],
+      }),
+    };
+  }
+
+  return {
+    ok: true,
+    text: async () => JSON.stringify({
+      candidates: [{
+        content: {
+          parts: [{
+            text: JSON.stringify({
+              supplierName: 'Raw Naturally Nutritious',
+              invoiceNumber: 'INV-123',
+              invoiceDate: '2026-07-01',
+              currency: 'ZAR',
+              subtotal: 59.8,
+              vatAmount: 0,
+              totalAmount: 59.8,
+              lineItems: [{
+                description: 'Tomatoes Kg',
+                quantity: 2,
+                purchaseUnit: 'kg',
+                unitPrice: 29.9,
+                lineTotal: 59.8,
+                vatIncluded: false,
+                category: 'Produce',
+                confidence: 0.94,
+                needsReview: false,
+              }],
+              warnings: [],
+            }),
+          }],
+        },
+      }],
+    }),
+  };
+};
+
+response = await callHandler(scanDocumentHandler, {
+  method: 'POST',
+  body: JSON.stringify({
+    documentType: 'invoice',
+    file: { name: 'invoice.jpg', mimeType: 'image/jpeg', data: 'aW52b2ljZQ==' },
+  }),
+});
+assert.equal(response.statusCode, 200);
+assert.equal(response.body.success, true);
+assert.equal(response.body.ocr.engineUsed, 3);
+assert.equal(response.body.extracted.supplierName, 'Raw Naturally Nutritious');
+assert.equal(response.body.extracted.lineItems[0].description, 'Tomatoes Kg');
+assert.match(scannerFetchCalls[0].body, /OCREngine=2/);
+assert.match(scannerFetchCalls[1].body, /OCREngine=3/);
+assert.match(scannerFetchCalls[2].url, /gemini-2\.5-flash-lite/);
+
+fetchWasCalled = false;
+globalThis.fetch = async () => {
+  fetchWasCalled = true;
+  throw new Error('External fetch should not be reached for scanner validation failures.');
+};
+response = await callHandler(scanDocumentHandler, {
+  method: 'POST',
+  body: JSON.stringify({
+    documentType: 'invoice',
+    file: { name: 'bad.txt', mimeType: 'text/plain', data: 'abc' },
+  }),
+});
+assert.equal(response.statusCode, 400);
+assert.equal(fetchWasCalled, false);
+
+globalThis.fetch = originalFetch;
+delete process.env.OCR_SPACE_API_KEY;
+delete process.env.GEMINI_API_KEY;
 
 console.log('API route tests passed');

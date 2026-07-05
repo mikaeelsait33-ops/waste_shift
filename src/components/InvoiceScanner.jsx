@@ -41,6 +41,16 @@ const MAX_SCAN_BYTES = 8 * 1024 * 1024;
 const SUPPORTED_SCAN_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
 const INVOICE_REVIEW_PAGE_SIZE = 20;
 const INGREDIENT_LIBRARY_PAGE_SIZE = 30;
+const SCAN_STAGE_LABELS = {
+  idle: 'Ready',
+  uploading: 'Uploading',
+  ocr: 'Running OCR',
+  gemini: 'Cleaning data',
+  needs_review: 'Needs review',
+  ready_to_save: 'Ready to save',
+  saved: 'Saved',
+  failed: 'Failed',
+};
 
 const formatMoney = (value) => `R${Number(value || 0).toFixed(2)}`;
 const formatUnitMoney = (value) => `R${Number(value || 0).toFixed(4)}`;
@@ -290,6 +300,9 @@ function InvoiceScanner({
   const [isScanningInvoice, setIsScanningInvoice] = useState(false);
   const [isBatchScanning, setIsBatchScanning] = useState(false);
   const [scanSummary, setScanSummary] = useState(null);
+  const [scanStage, setScanStage] = useState('idle');
+  const [scannerRawText, setScannerRawText] = useState('');
+  const [scannerMetadata, setScannerMetadata] = useState(null);
   const scanFileInputRef = useRef(null);
   const [newDrawerLineId, setNewDrawerLineId] = useState('');
   const [newIngredientDrafts, setNewIngredientDrafts] = useState({});
@@ -822,36 +835,35 @@ function InvoiceScanner({
     setMessage(`${nextLine.itemName} added as a manual invoice line.`);
   };
 
-  const scanFileWithGemini = async (file) => {
+  const scanFileWithOcrPipeline = async (file) => {
     const scanPayload = await createScanPayload(file);
-    const response = await fetch('/api/gemini-invoice', {
+    const response = await fetch('/api/scan-document', {
         method: 'POST',
         headers: getManagerApiHeaders({ 'content-type': 'application/json' }),
         body: JSON.stringify({
           file: scanPayload,
+          documentType: 'invoice',
+          preferredEngine: 2,
+          supplierHint: supplierName,
           vatMode,
           vatRate,
         }),
       });
     const body = await response.json().catch(() => ({}));
 
-    if (!response.ok || !body?.ok) {
-      throw new Error(body?.message || 'Gemini could not read this invoice.');
+    if (!response.ok || body?.success === false) {
+      throw new Error(body?.message || body?.errors?.[0] || 'OCR scanner could not read this invoice.');
     }
 
-    const invoice = body.invoice || {};
-    const nextVatMode = invoice.vatMode === 'exclusive' || invoice.vatMode === 'inclusive'
-      ? invoice.vatMode
-      : vatMode;
-    const nextVatRate = Number.isFinite(Number(invoice.vatRate))
-      ? Number(invoice.vatRate)
-      : vatRate;
+    const invoice = body.extracted || {};
+    const nextVatMode = vatMode;
+    const nextVatRate = vatRate;
     const scanId = createRecordId('scan');
-    const scannedLines = (Array.isArray(invoice.items) ? invoice.items : [])
+    const scannedLines = (Array.isArray(invoice.lineItems) ? invoice.lineItems : [])
       .map((item, index) => {
-        const itemName = String(item?.itemName || '').trim();
+        const itemName = String(item?.description || item?.itemName || '').trim();
         const quantity = Number(item?.quantity) > 0 ? Number(item.quantity) : 1;
-        const lineTotal = getScannedLineTotal(item, nextVatMode);
+        const lineTotal = Number(item?.lineTotal) > 0 ? Number(item.lineTotal) : getScannedLineTotal(item, nextVatMode);
         const unitPrice = Number(item?.unitPrice) > 0
           ? Number(item.unitPrice)
           : quantity > 0
@@ -866,19 +878,20 @@ function InvoiceScanner({
           id: `${scanId}_${index}_${createInvoiceKey(itemName) || 'line'}`,
           itemName,
           quantity,
-          unit: normalizeInvoiceUnit(item?.unit || 'each'),
+          unit: normalizeInvoiceUnit(item?.purchaseUnit || item?.unit || 'each'),
           unitPrice: roundMoney(unitPrice),
           lineTotal: roundMoney(lineTotal),
           vatMode: nextVatMode,
           vatRate: nextVatRate,
-          rawLine: item?.rawLine || `Gemini scan: ${itemName}`,
+          rawLine: item?.rawLine || `OCR scan: ${itemName}`,
           confidence: Number(item?.confidence) || 0.82,
+          needsReview: Boolean(item?.needsReview),
         }, { vatMode: nextVatMode, vatRate: nextVatRate });
       })
       .filter(Boolean);
 
     if (scannedLines.length === 0) {
-      throw new Error('Gemini did not find usable invoice line items. Try a clearer, flatter photo.');
+      throw new Error('OCR scan did not find usable invoice line items. Try a clearer, flatter photo.');
     }
 
     return {
@@ -889,15 +902,36 @@ function InvoiceScanner({
       invoiceDate: /^\d{4}-\d{2}-\d{2}$/.test(invoice.invoiceDate || '') ? invoice.invoiceDate : '',
       vatMode: nextVatMode,
       vatRate: nextVatRate,
-      extractedTotals: invoice.totals || null,
+      extractedTotals: {
+        totalExVAT: Number(invoice.subtotal || 0),
+        totalVAT: Number(invoice.vatAmount || 0),
+        totalIncVAT: Number(invoice.totalAmount || 0),
+      },
       lineItems: scannedLines,
+      rawText: body.ocr?.rawText || '',
+      scannerMetadata: body.scannerMetadata || {
+        ocrEngineUsed: body.ocr?.engineUsed,
+        confidence: body.confidence,
+        reviewStatus: body.needsReview ? 'needs_review' : 'ready_to_save',
+      },
       summary: {
         fileName: file.name,
         lineCount: scannedLines.length,
         supplierName: invoice.supplierName || '',
         invoiceNumber: invoice.invoiceNumber || '',
-        totals: invoice.totals || null,
-        model: body.model || 'Gemini',
+        totals: {
+          totalExVAT: Number(invoice.subtotal || 0),
+          totalVAT: Number(invoice.vatAmount || 0),
+          totalIncVAT: Number(invoice.totalAmount || 0),
+        },
+        model: `OCR.space Engine ${body.ocr?.engineUsed || 2} -> Gemini Flash-Lite`,
+        confidence: body.confidence,
+        needsReview: body.needsReview,
+        warnings: [
+          ...(body.ocr?.warnings || []),
+          ...(invoice.warnings || []),
+          ...(body.errors || []),
+        ],
       },
     };
   };
@@ -921,6 +955,9 @@ function InvoiceScanner({
     setStockUpdates([]);
     setScanFile(draft.file || null);
     setScanSummary(draft.summary || null);
+    setScannerRawText(draft.rawText || '');
+    setScannerMetadata(draft.scannerMetadata || null);
+    setScanStage(draft.status === 'saved' ? 'saved' : 'needs_review');
     setActiveBatchDraftId(draft.id);
     setMessage(`${draft.fileName} loaded for review.`);
   };
@@ -930,6 +967,9 @@ function InvoiceScanner({
     const invalidFile = files.find((file) => !SUPPORTED_SCAN_TYPES.has(file.type));
 
     setScanSummary(null);
+    setScanStage('idle');
+    setScannerRawText('');
+    setScannerMetadata(null);
     setActiveBatchDraftId('');
 
     if (invalidFile) {
@@ -957,7 +997,7 @@ function InvoiceScanner({
     }
 
     setMessage(files.length === 1
-      ? `${files[0].name} selected for Gemini scanning.`
+      ? `${files[0].name} selected for OCR + Gemini scanning.`
       : `${files.length} invoices selected. Scan all or review them one at a time.`);
   };
 
@@ -970,9 +1010,12 @@ function InvoiceScanner({
     try {
       setIsScanningInvoice(true);
       setScanSummary(null);
-      setMessage('Scanning invoice with Gemini...');
+      setScanStage('uploading');
+      setMessage('Uploading invoice for OCR...');
 
-      const scannedDraft = await scanFileWithGemini(scanFile);
+      setScanStage('ocr');
+      setMessage('Running OCR.space, then cleaning data with Gemini...');
+      const scannedDraft = await scanFileWithOcrPipeline(scanFile);
 
       if (scannedDraft.supplierName) setSupplierName(scannedDraft.supplierName);
       if (scannedDraft.invoiceNumber) setInvoiceNumber(scannedDraft.invoiceNumber);
@@ -984,6 +1027,9 @@ function InvoiceScanner({
       setConfirmedInvoice(null);
       setStockUpdates([]);
       setScanSummary(scannedDraft.summary);
+      setScannerRawText(scannedDraft.rawText || '');
+      setScannerMetadata(scannedDraft.scannerMetadata || null);
+      setScanStage(scannedDraft.summary?.needsReview ? 'needs_review' : 'ready_to_save');
       setBatchDrafts((currentDrafts) => currentDrafts.map((draft) => (
         draft.file === scanFile
           ? {
@@ -995,9 +1041,10 @@ function InvoiceScanner({
             }
           : draft
       )));
-      setMessage(`Gemini added ${scannedDraft.lineItems.length} invoice line${scannedDraft.lineItems.length === 1 ? '' : 's'} for review.`);
+      setMessage(`OCR + Gemini added ${scannedDraft.lineItems.length} invoice line${scannedDraft.lineItems.length === 1 ? '' : 's'} for review.`);
     } catch (error) {
-      setMessage(error?.message || 'Could not scan this invoice with Gemini.');
+      setScanStage('failed');
+      setMessage(error?.message || 'Could not scan this invoice with OCR + Gemini.');
     } finally {
       setIsScanningInvoice(false);
     }
@@ -1011,7 +1058,8 @@ function InvoiceScanner({
 
     try {
       setIsBatchScanning(true);
-      setMessage(`Scanning ${batchDrafts.length} invoice${batchDrafts.length === 1 ? '' : 's'} with Gemini...`);
+      setScanStage('ocr');
+      setMessage(`Scanning ${batchDrafts.length} invoice${batchDrafts.length === 1 ? '' : 's'} with OCR + Gemini...`);
 
       const readyDrafts = [];
 
@@ -1021,7 +1069,7 @@ function InvoiceScanner({
         )));
 
         try {
-          const scannedDraft = await scanFileWithGemini(draft.file);
+          const scannedDraft = await scanFileWithOcrPipeline(draft.file);
           const readyDraft = {
             ...draft,
             ...scannedDraft,
@@ -1047,6 +1095,7 @@ function InvoiceScanner({
         loadBatchDraftForReview(readyDrafts[0]);
       }
 
+      setScanStage(readyDrafts.length > 0 ? 'needs_review' : 'failed');
       setMessage(`Batch scan complete: ${readyDrafts.length} of ${batchDrafts.length} invoice${batchDrafts.length === 1 ? '' : 's'} ready for review.`);
     } finally {
       setIsBatchScanning(false);
@@ -1297,12 +1346,15 @@ function InvoiceScanner({
         vatMode,
         confirmedBy: accessProfile?.operatorName || 'WasteShift user',
         stockPostingStatus,
+        scannerMetadata,
         rawText: [
+          scannerRawText ? `OCR raw text:\n${scannerRawText}` : '',
+          scannerMetadata ? `Scanner metadata: ${JSON.stringify(scannerMetadata)}` : '',
           `Supplier: ${supplierName || 'Unknown supplier'}`,
           `Invoice number: ${invoiceNumber || invoiceId}`,
           `Invoice date: ${invoiceDate}`,
           manualSourceText,
-        ].join('\n'),
+        ].filter(Boolean).join('\n\n'),
       });
 
       if (!result?.ok) {
@@ -1316,6 +1368,7 @@ function InvoiceScanner({
         ingredientRows,
         stockPostingStatus,
       });
+      setScanStage('saved');
       setBatchDrafts((currentDrafts) => currentDrafts.map((draft) => (
         draft.id === activeBatchDraftId
           ? { ...draft, status: 'saved', savedInvoiceId: result.invoiceId }
@@ -1542,7 +1595,7 @@ function InvoiceScanner({
                 {hasExtractedTotals && (
                   <div className="notice-panel notice-panel--info">
                     <div>
-                      <h3 className="breakdown-title">Gemini extracted totals</h3>
+                      <h3 className="breakdown-title">Scanner extracted totals</h3>
                       <p className="small-text" style={{ margin: 0 }}>
                         Ex {formatMoney(extractedTotals.totalExVAT)} | VAT {formatMoney(extractedTotals.totalVAT)} | Incl {formatMoney(extractedTotals.totalIncVAT)}
                       </p>
@@ -1559,7 +1612,7 @@ function InvoiceScanner({
                   <div>
                     <p className="eyebrow">Capture</p>
                     <h2 className="title">Scan or Add Lines</h2>
-                    <p className="subtitle">Use Gemini for invoice photos or add rows manually.</p>
+                    <p className="subtitle">OCR.space reads the file first, Gemini cleans the text into editable lines, and nothing saves until you confirm.</p>
                   </div>
                   <span className="badge">{lineItems.length} lines</span>
                 </div>
@@ -1595,6 +1648,9 @@ function InvoiceScanner({
                         setBatchDrafts([]);
                         setActiveBatchDraftId('');
                         setScanSummary(null);
+                        setScannerRawText('');
+                        setScannerMetadata(null);
+                        setScanStage('idle');
                         if (scanFileInputRef.current) {
                           scanFileInputRef.current.value = '';
                         }
@@ -1613,7 +1669,7 @@ function InvoiceScanner({
                             <span className="small-text">
                               {draft.status === 'ready' && `${draft.lineCount} lines ready`}
                               {draft.status === 'queued' && 'Waiting to scan'}
-                              {draft.status === 'scanning' && 'Scanning with Gemini...'}
+                              {draft.status === 'scanning' && 'OCR + Gemini scanning...'}
                               {draft.status === 'saved' && `Saved${draft.savedInvoiceId ? ` as ${draft.savedInvoiceId}` : ''}`}
                               {draft.status === 'error' && (draft.error || 'Could not scan')}
                             </span>
@@ -1649,7 +1705,27 @@ function InvoiceScanner({
                       {scanSummary.supplierName && <span className="badge">{scanSummary.supplierName}</span>}
                       {scanSummary.invoiceNumber && <span className="badge">#{scanSummary.invoiceNumber}</span>}
                       {scanSummary.totals?.totalIncVAT > 0 && <span className="badge">{formatMoney(scanSummary.totals.totalIncVAT)} incl</span>}
+                      {Number.isFinite(Number(scanSummary.confidence)) && <span className="badge">{Math.round(scanSummary.confidence * 100)}% confidence</span>}
+                      {scanSummary.needsReview && <span className="badge is-yellow">Needs review</span>}
                       <span className="small-text">{scanSummary.model}</span>
+                    </div>
+                  )}
+                  <div className="invoice-scan-status" aria-label="Scanner progress">
+                    {Object.entries(SCAN_STAGE_LABELS).filter(([stage]) => stage !== 'idle' || scanStage === 'idle').map(([stage, label]) => (
+                      <span key={stage} className={`badge${scanStage === stage ? stage === 'failed' ? ' is-red' : stage === 'saved' ? ' is-green' : ' is-blue' : ''}`}>
+                        {label}
+                      </span>
+                    ))}
+                  </div>
+                  {scanSummary?.warnings?.length > 0 && (
+                    <div className="notice-panel notice-panel--warning">
+                      <div>
+                        <h3 className="breakdown-title">Scanner warnings</h3>
+                        <p className="small-text" style={{ margin: 0 }}>
+                          {scanSummary.warnings.slice(0, 3).join(' ')}
+                        </p>
+                      </div>
+                      <span className="badge is-yellow">Review carefully</span>
                     </div>
                   )}
                 </div>

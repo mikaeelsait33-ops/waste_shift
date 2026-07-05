@@ -99,7 +99,9 @@ Environment variable checklist:
 - `VITE_FIREBASE_STORAGE_BUCKET`
 - `VITE_FIREBASE_MESSAGING_SENDER_ID`
 - `VITE_FIREBASE_APP_ID`
+- `OCR_SPACE_API_KEY` or `OCR_API_KEY`
 - `GEMINI_API_KEY`
+- Optional: `GEMINI_SCAN_MODEL`
 - Optional: `GEMINI_MENU_MODEL`
 
 Production API protection:
@@ -115,8 +117,8 @@ Production deployment checklist:
 
 1. Add all `VITE_FIREBASE_*` values to Vercel and redeploy.
 2. Enable Firebase Anonymous Auth and publish `firestore.rules`.
-3. Add `WASTESHIFT_MANAGER_API_SECRET` in Vercel before enabling Gemini import/scanning.
-4. Add `GEMINI_API_KEY` in Vercel for invoice and menu scanning.
+3. Add `WASTESHIFT_MANAGER_API_SECRET` in Vercel before enabling OCR/Gemini import and scanning.
+4. Add `OCR_SPACE_API_KEY` or `OCR_API_KEY`, plus `GEMINI_API_KEY`, in Vercel for invoice and menu scanning.
 5. Add Vercel Blob storage and `BLOB_READ_WRITE_TOKEN` only if using server database backups.
 6. Add `WASTESHIFT_SYNC_SECRET` if Vercel Blob backup load/save should be available from the app.
 7. Run `npm.cmd run lint`, `npm.cmd test`, and `npm.cmd run build` before deploying.
@@ -124,7 +126,9 @@ Production deployment checklist:
 
 ## Invoice Scanning
 
-The Invoices page can scan invoice photos and PDFs with Gemini through the serverless route at `api/gemini-invoice.js`. Add `GEMINI_API_KEY` to local env and Vercel Project Settings > Environment Variables, then redeploy. Manual entry remains available and every scanned line is editable before saving.
+The Invoices page scans invoice photos and PDFs through `api/scan-document.js`. The server calls OCR.space Engine 2 first, retries Engine 3 when OCR text is weak, then sends only the OCR text to Gemini Flash-Lite for structured JSON cleanup. Add `OCR_SPACE_API_KEY` or `OCR_API_KEY`, plus `GEMINI_API_KEY`, to local env and Vercel Project Settings > Environment Variables, then redeploy.
+
+Manual entry remains available and every scanned line is editable before saving. Confirmed invoice records store the OCR raw text and scanner metadata for debugging.
 
 ## Ingredient Cost Intelligence
 
@@ -137,10 +141,11 @@ Recipe and waste costing use the invoice-backed item price catalog where possibl
 Recommended invoice workflow:
 
 1. Upload or scan the invoice.
-2. Review supplier, invoice date, VAT mode, totals, and every line.
+2. Review supplier, invoice date, VAT mode, totals, OCR/Gemini confidence, and every line.
 3. Match each line to an existing raw ingredient or create a new one.
-4. Save the reviewed invoice.
-5. Check the raw ingredient library and dashboard for missing costs, low stock, and price increases.
+4. Choose prices only, prices + stock, or historical invoice.
+5. Confirm the reviewed invoice.
+6. Check the raw ingredient library and dashboard for missing costs, low stock, and price increases.
 
 Troubleshooting invoice costs:
 
@@ -159,12 +164,13 @@ Staff codes entered during setup are shown once in the wizard but are stored as 
 
 ## Menu Import
 
-Menu items can be added manually in the setup wizard or later in Settings > Menu & Recipes. The import panel supports pasted text, CSV files, and Gemini-assisted PDF/image extraction through `api/gemini-menu.js`.
+Menu items can be added manually in the setup wizard or later in Settings > Menu & Recipes. The import panel supports pasted text, CSV files, and OCR-assisted PDF/image extraction through `api/scan-document.js`.
 
-Gemini setup:
+Scanner setup:
 
+- Add `OCR_SPACE_API_KEY` or `OCR_API_KEY` to local env and Vercel Project Settings > Environment Variables.
 - Add `GEMINI_API_KEY` to local env and Vercel Project Settings > Environment Variables.
-- Optional: set `GEMINI_MENU_MODEL`; otherwise the app uses `gemini-2.5-flash`.
+- Optional: set `GEMINI_SCAN_MODEL`; otherwise the app uses `gemini-2.5-flash-lite`.
 - Redeploy after changing Vercel env vars.
 
 Supported menu import files:
@@ -174,7 +180,7 @@ Supported menu import files:
 - `.pdf`
 - `.jpg`, `.png`, `.webp`
 
-Every import opens a review list first. Managers can edit item names/categories/prices, approve valid rows, reject bad rows, approve high-confidence rows, and then save only approved items. If Gemini is missing or fails, text and CSV import still work.
+Every import opens a review list first. Managers can edit item names/categories/prices, approve valid rows, reject bad rows, approve high-confidence rows, and then save only approved items. Scanned menu descriptions may include suggested ingredients for review, but WasteShift does not silently create finalized recipes from menu scans. If OCR/Gemini is missing or fails, text and CSV import still work.
 
 Import history is saved in Firestore under `menuImports`.
 

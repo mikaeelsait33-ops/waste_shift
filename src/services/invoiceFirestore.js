@@ -622,6 +622,7 @@ export const saveConfirmedInvoice = async ({
   vatRate,
   vatMode,
   rawText,
+  scannerMetadata = null,
   confirmedBy = '',
   stockPostingStatus = 'not_posted',
 }) => {
@@ -687,6 +688,16 @@ export const saveConfirmedInvoice = async ({
     vatRate: sanitizeNumber(vatRate, 0.15),
     vatMode: sanitizeString(vatMode) || 'inclusive',
     rawText: sanitizeString(rawText).slice(0, 12000),
+    scannerMetadata: scannerMetadata && typeof scannerMetadata === 'object'
+      ? {
+          ocrEngineUsed: sanitizeNumber(scannerMetadata.ocrEngineUsed),
+          scanDateTime: sanitizeString(scannerMetadata.scanDateTime),
+          documentType: sanitizeString(scannerMetadata.documentType || 'invoice'),
+          confidence: sanitizeNumber(scannerMetadata.confidence),
+          reviewStatus: sanitizeString(scannerMetadata.reviewStatus || 'needs_review'),
+          restaurantId: sanitizeString(scannerMetadata.restaurantId),
+        }
+      : null,
     updatedAt: serverTimestamp(),
   }, { merge: true });
 

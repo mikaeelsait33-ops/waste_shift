@@ -84,30 +84,62 @@ function MenuImportPanel({
     }
 
     setIsExtracting(true);
-    setMessage('Extracting menu items with Gemini...');
+    setMessage(file ? 'Running OCR.space and cleaning menu text with Gemini...' : 'Extracting menu items with Gemini...');
 
     try {
-      const response = await fetch('/api/gemini-menu', {
+      const filePayload = file ? await createFilePayload(file) : null;
+      const response = await fetch(file ? '/api/scan-document' : '/api/gemini-menu', {
         method: 'POST',
         headers: getManagerApiHeaders({ 'content-type': 'application/json' }),
-        body: JSON.stringify({
-          text: file ? '' : sourceText,
-          file: file ? await createFilePayload(file) : null,
-        }),
+        body: JSON.stringify(file
+          ? {
+              documentType: 'menu',
+              preferredEngine: 2,
+              file: {
+                name: filePayload.name,
+                mimeType: filePayload.mimeType,
+                data: filePayload.base64,
+              },
+            }
+          : {
+              text: sourceText,
+              file: null,
+            }),
       });
       const payload = await response.json().catch(() => ({}));
 
-      if (!response.ok || payload.ok === false) {
-        throw new Error(payload.message || 'Gemini menu import failed.');
+      if (!response.ok || payload.ok === false || payload.success === false) {
+        if (file && payload?.ocr?.rawText) {
+          setSourceText(payload.ocr.rawText);
+        }
+        throw new Error(payload.message || payload.errors?.[0] || 'Menu import failed.');
       }
 
+      const extractedMenuItems = file
+        ? (payload.extracted?.menuItems || []).map((item) => ({
+            name: item.name,
+            category: item.category || '',
+            sellingPrice: item.sellingPrice,
+            description: [
+              item.description || '',
+              (item.possibleIngredients || []).length > 0
+                ? `Suggested ingredients for review: ${(item.possibleIngredients || []).map((ingredient) => ingredient.ingredientName).join(', ')}`
+                : '',
+            ].filter(Boolean).join(' '),
+            components: [],
+            confidence: item.confidence,
+            warnings: [],
+            source: 'ocr-gemini',
+          }))
+        : (payload.items || []);
+
       loadReviewItems(
-        payload.items || [],
-        file ? file.type || 'file' : 'gemini-text',
-        file?.name || sourceName || 'Gemini menu import'
+        extractedMenuItems,
+        file ? 'ocr-gemini-menu' : 'gemini-text',
+        file?.name || sourceName || 'Menu import'
       );
     } catch (error) {
-      setMessage(`${error?.message || 'Gemini is unavailable.'} You can still use manual text or CSV import.`);
+      setMessage(`${error?.message || 'Scanner is unavailable.'} You can still use manual text or CSV import.`);
     } finally {
       setIsExtracting(false);
     }
