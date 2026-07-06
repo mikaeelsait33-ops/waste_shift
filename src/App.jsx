@@ -31,12 +31,14 @@ import {
   roundCurrency,
 } from './utils/wasteCalculations';
 import {
+  archiveFirestoreMenuItem,
   firestoreIsConfigured,
   getFirestoreRuntimeInfo,
   deleteFirestoreMenuItems,
   loadFirestoreDatabaseSnapshot,
   loadFirestoreMenuItems,
   loadFirestoreWasteEntries,
+  restoreFirestoreMenuItem,
   saveFirestoreDatabaseSnapshot,
   saveFirestoreMenuItem,
   saveFirestoreWasteEntry,
@@ -96,6 +98,7 @@ const createSessionStaffFallback = (session) => {
 
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const InvoiceScanner = lazy(() => import('./components/InvoiceScanner'));
+const Reports = lazy(() => import('./components/Reports'));
 const Settings = lazy(() => import('./components/Settings'));
 const SetupWizard = lazy(() => import('./components/SetupWizard'));
 const StoreRoom = lazy(() => import('./components/StoreRoom'));
@@ -390,10 +393,14 @@ const attachRecipeInfo = (menuItem, recipes) => {
   };
 };
 
+const menuRecordIsArchived = (record) => Boolean(record?.archived || record?.recipe?.archived);
+
 const mergeMenuItems = (baseMenuItems, customMenuItems, recipes) => {
-  const customByKey = new Map(customMenuItems.map((item) => [item.key, item]));
-  const baseKeys = new Set(baseMenuItems.map((item) => item.key));
-  const mergedBaseItems = baseMenuItems.map((baseItem) => {
+  const activeBaseItems = baseMenuItems.filter((item) => !menuRecordIsArchived(item) && !recipes?.[item.key]?.archived);
+  const activeCustomItems = customMenuItems.filter((item) => !menuRecordIsArchived(item) && !recipes?.[item.key]?.archived);
+  const customByKey = new Map(activeCustomItems.map((item) => [item.key, item]));
+  const baseKeys = new Set(activeBaseItems.map((item) => item.key));
+  const mergedBaseItems = activeBaseItems.map((baseItem) => {
     const customItem = customByKey.get(baseItem.key);
 
     if (!customItem) {
@@ -405,7 +412,7 @@ const mergeMenuItems = (baseMenuItems, customMenuItems, recipes) => {
       menuPrice: customItem.menuPrice,
     }, recipes);
   });
-  const customOnlyItems = customMenuItems
+  const customOnlyItems = activeCustomItems
     .filter((item) => !baseKeys.has(item.key))
     .map((item) => attachRecipeInfo(item, recipes))
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -427,6 +434,9 @@ const createRecipeMapFromFirestoreMenuItems = (firestoreMenuItems) => (
       ...(item.menuPrice !== null && item.menuPrice !== undefined ? { menuPrice: item.menuPrice } : {}),
       totalCost: item.totalCost || 0,
       firestoreId: item.firestoreId || key,
+      archived: Boolean(item.archived),
+      archivedAt: item.archivedAt || '',
+      archivedBy: item.archivedBy || '',
       ingredients: (Array.isArray(item.components) ? item.components : []).map((component, index) => {
         const normalizedIngredient = normalizeRecipeIngredient({
           ...component,
@@ -509,6 +519,7 @@ const sanitizeStoreRoomItems = (items) => {
       const id = item?.id || createStoreRoomItemId(name);
       const quantity = Number.parseFloat(item?.quantity);
       const parLevel = Number.parseFloat(item?.parLevel);
+      const reorderPoint = Number.parseFloat(item?.reorderPoint);
 
       if (!name || !id) {
         return null;
@@ -522,6 +533,11 @@ const sanitizeStoreRoomItems = (items) => {
         location: String(item?.location || '').trim(),
         quantity: Number.isFinite(quantity) && quantity > 0 ? Math.round(quantity * 1000) / 1000 : 0,
         parLevel: Number.isFinite(parLevel) && parLevel > 0 ? Math.round(parLevel * 1000) / 1000 : 0,
+        reorderPoint: Number.isFinite(reorderPoint) && reorderPoint > 0 ? Math.round(reorderPoint * 1000) / 1000 : 0,
+        normalizedKey: item?.normalizedKey || createItemPriceKey(name),
+        priceCatalogKey: String(item?.priceCatalogKey || createItemPriceKey(name)).trim(),
+        supplier: String(item?.supplier || '').trim(),
+        lastPrice: Number.isFinite(Number(item?.lastPrice)) ? Number(item.lastPrice) : null,
         notes: String(item?.notes || '').trim(),
         createdAt: String(item?.createdAt || ''),
         updatedAt: String(item?.updatedAt || ''),
@@ -937,6 +953,9 @@ function App() {
         totalCost: item.totalCost,
         ingredientCount: Array.isArray(recipe?.ingredients) ? recipe.ingredients.length : 0,
         firestoreId: item.firestoreId,
+        archived: Boolean(item.archived || recipe?.archived),
+        archivedAt: item.archivedAt || recipe?.archivedAt || '',
+        archivedBy: item.archivedBy || recipe?.archivedBy || '',
       };
     })
   ), [effectiveRecipes, firestoreMenuItems]);
@@ -1866,6 +1885,27 @@ function App() {
   }, [isOnline, updateWasteEntrySyncStatus]);
 
   const handleAddEntry = async (newEntry) => {
+    const duplicateWindowMs = 90 * 1000;
+    const nowMs = new Date(newEntry?.createdAt || newEntry?.timestamp || Date.now()).getTime();
+    const duplicateEntry = wasteItems.find((item) => {
+      const itemTime = new Date(item?.createdAt || item?.timestamp || 0).getTime();
+
+      return Math.abs(nowMs - itemTime) <= duplicateWindowMs
+        && String(item?.status || 'logged') !== 'voided'
+        && String(item?.name || '').trim().toLowerCase() === String(newEntry?.name || '').trim().toLowerCase()
+        && String(item?.reason || '').trim().toLowerCase() === String(newEntry?.reason || '').trim().toLowerCase()
+        && String(item?.staffId || item?.staff || '').trim().toLowerCase() === String(newEntry?.staffId || newEntry?.staff || '').trim().toLowerCase()
+        && Number(item?.quantity || 0) === Number(newEntry?.quantity || 0);
+    });
+
+    if (duplicateEntry) {
+      return {
+        ok: false,
+        duplicate: true,
+        message: `${newEntry?.name || 'This item'} was already logged moments ago. Check the Waste Log before saving it again.`,
+      };
+    }
+
     const entryWithSync = {
       ...newEntry,
       syncStatus: FIRESTORE_CONFIGURED ? 'pending' : 'local',
@@ -2189,7 +2229,8 @@ function App() {
       }),
       ...prevLog,
     ].slice(0, 500));
-  }, [activeStaffMember?.name, itemPriceCatalog, recipes, wasteItems]);
+    refreshInvoiceDashboardStats();
+  }, [activeStaffMember?.name, itemPriceCatalog, recipes, refreshInvoiceDashboardStats, wasteItems]);
 
   const handleInvoiceIngredientDeleted = useCallback((ingredient) => {
     const key = createItemPriceKey(ingredient?.name);
@@ -2239,21 +2280,40 @@ function App() {
     const name = String(itemDraft?.name || '').trim();
     const id = itemDraft?.id || createStoreRoomItemId(name);
     const parLevel = Number.parseFloat(itemDraft?.parLevel);
+    const reorderPoint = Number.parseFloat(itemDraft?.reorderPoint);
+    const normalizedKey = createItemPriceKey(name);
+    const priceCatalogRecord = itemDraft?.priceCatalogKey
+      ? itemPriceCatalog[itemDraft.priceCatalogKey]
+      : itemPriceCatalog[normalizedKey];
 
     if (!name || !id) {
       return { ok: false, message: 'Enter a stock item name.' };
     }
 
     const existingItem = storeRoomItems.find((item) => item.id === id);
+    const duplicateItem = storeRoomItems.find((item) => (
+      item.id !== id
+      && (item.normalizedKey === normalizedKey || createItemPriceKey(item.name) === normalizedKey)
+    ));
+
+    if (duplicateItem) {
+      return { ok: false, message: `${duplicateItem.name} is already in the store room.` };
+    }
+
     const now = new Date().toISOString();
     const nextItem = {
       id,
       name,
-      category: String(itemDraft?.category || 'Other').trim() || 'Other',
-      unit: String(itemDraft?.unit || existingItem?.unit || 'each').trim() || 'each',
+      category: String(itemDraft?.category || priceCatalogRecord?.category || 'Other').trim() || 'Other',
+      unit: String(itemDraft?.unit || existingItem?.unit || priceCatalogRecord?.baseUnit || priceCatalogRecord?.unit || 'each').trim() || 'each',
       location: String(itemDraft?.location || '').trim(),
       quantity: existingItem?.quantity || 0,
       parLevel: Number.isFinite(parLevel) && parLevel > 0 ? Math.round(parLevel * 1000) / 1000 : 0,
+      reorderPoint: Number.isFinite(reorderPoint) && reorderPoint > 0 ? Math.round(reorderPoint * 1000) / 1000 : 0,
+      normalizedKey,
+      priceCatalogKey: itemDraft?.priceCatalogKey || priceCatalogRecord?.key || normalizedKey,
+      supplier: String(itemDraft?.supplier || priceCatalogRecord?.supplier || '').trim(),
+      lastPrice: Number.isFinite(Number(priceCatalogRecord?.price)) ? Number(priceCatalogRecord.price) : existingItem?.lastPrice ?? null,
       notes: String(itemDraft?.notes || '').trim(),
       createdAt: existingItem?.createdAt || now,
       updatedAt: now,
@@ -2294,7 +2354,15 @@ function App() {
 
     const item = storeRoomItems.find((stockItem) => stockItem.id === movementDraft?.itemId);
     const quantity = Number.parseFloat(movementDraft?.quantity);
-    const type = movementDraft?.type === 'stock_out' ? 'stock_out' : 'stock_in';
+    const stockInTypes = new Set(['stock_in', 'received', 'count_correction_in']);
+    const stockOutTypes = new Set(['stock_out', 'issued_kitchen', 'issued_bar', 'waste', 'supplier_return', 'damaged', 'count_correction_out']);
+    const requestedType = String(movementDraft?.type || '').trim();
+    const type = stockInTypes.has(requestedType)
+      ? requestedType
+      : stockOutTypes.has(requestedType)
+        ? requestedType
+        : 'received';
+    const isStockIn = stockInTypes.has(type);
 
     if (!item) {
       return { ok: false, message: 'Choose a store room item.' };
@@ -2305,7 +2373,7 @@ function App() {
     }
 
     const previousQuantity = Number(item.quantity) || 0;
-    const nextQuantity = type === 'stock_in'
+    const nextQuantity = isStockIn
       ? previousQuantity + quantity
       : previousQuantity - quantity;
 
@@ -2319,7 +2387,7 @@ function App() {
       quantity,
       previousQuantity,
       nextQuantity,
-      reason: movementDraft?.reason || (type === 'stock_in' ? 'Stock received' : 'Stock removed'),
+      reason: movementDraft?.reason || (isStockIn ? 'Stock received' : 'Stock removed'),
       notes: movementDraft?.notes,
     });
 
@@ -2336,7 +2404,7 @@ function App() {
     setStoreRoomMovements(prevMovements => [movement, ...prevMovements].slice(0, 1000));
     setAuditLog(prevLog => [
       createAuditLogEntry({
-        action: type === 'stock_in' ? 'Store room stock added' : 'Store room stock removed',
+        action: isStockIn ? 'Store room stock added' : 'Store room stock removed',
         user: activeStaffMember?.name || 'System',
         relatedItem: item.name,
         afterValue: movement,
@@ -2344,7 +2412,7 @@ function App() {
       ...prevLog,
     ].slice(0, 500));
 
-    return { ok: true, message: `${item.name} ${type === 'stock_in' ? 'added' : 'removed'}.` };
+    return { ok: true, message: `${item.name} ${isStockIn ? 'added' : 'removed'}.` };
   };
 
   const handleDeleteStoreRoomItem = (itemId) => {
@@ -2782,14 +2850,151 @@ function App() {
     });
   };
 
-  const handleDeleteCustomMenuItem = (menuItemKey) => {
-    const permission = requirePermission(accessProfile, 'canManageMenu', 'remove menu items');
+  const handleDeleteCustomMenuItem = async (menuItemKey) => {
+    const permission = requirePermission(accessProfile, 'canManageMenu', 'archive menu items');
     if (!permission.ok) {
       alert(permission.message);
       return;
     }
 
-    setCustomMenuItems(prevItems => prevItems.filter((item) => item.key !== menuItemKey));
+    const menuItem = menuItems.find((item) => item.key === menuItemKey)
+      || customMenuItems.find((item) => item.key === menuItemKey)
+      || firestoreMenuItems.find((item) => item.key === menuItemKey || item.firestoreId === menuItemKey)
+      || { key: menuItemKey, name: menuItemKey };
+
+    if (!window.confirm(`Archive ${menuItem.name}? It will disappear from active waste logging, but old waste history will stay intact.`)) {
+      return;
+    }
+
+    const archivedAt = new Date().toISOString();
+    const archivedBy = activeStaffMember?.name || 'System';
+    const archivedRecord = {
+      key: menuItemKey,
+      name: menuItem.name || menuItemKey,
+      menuPrice: menuItem.menuPrice ?? recipes?.[menuItemKey]?.menuPrice ?? null,
+      totalCost: menuItem.totalCost ?? recipes?.[menuItemKey]?.totalCost ?? 0,
+      components: menuItem.components || recipes?.[menuItemKey]?.ingredients || [],
+      archived: true,
+      archivedAt,
+      archivedBy,
+    };
+
+    setCustomMenuItems(prevItems => {
+      const existingIndex = prevItems.findIndex((item) => item.key === menuItemKey);
+
+      if (existingIndex === -1) {
+        return [...prevItems, archivedRecord];
+      }
+
+      return prevItems.map((item, index) => (
+        index === existingIndex ? { ...item, ...archivedRecord } : item
+      ));
+    });
+    setRecipes(prevRecipes => {
+      const recipe = prevRecipes?.[menuItemKey];
+
+      if (!recipe) {
+        return prevRecipes;
+      }
+
+      return {
+        ...prevRecipes,
+        [menuItemKey]: {
+          ...recipe,
+          archived: true,
+          archivedAt,
+          archivedBy,
+        },
+      };
+    });
+    setFirestoreMenuItems(prevItems => prevItems.map((item) => (
+      item.key === menuItemKey || item.firestoreId === menuItemKey
+        ? { ...item, archived: true, archivedAt, archivedBy }
+        : item
+    )));
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: 'Menu item archived',
+        user: archivedBy,
+        relatedItem: menuItem.name || menuItemKey,
+        beforeValue: menuItem,
+        afterValue: { key: menuItemKey, archived: true, archivedAt },
+      }),
+      ...prevLog,
+    ].slice(0, 500));
+
+    if (FIRESTORE_CONFIGURED) {
+      try {
+        await archiveFirestoreMenuItem(menuItemKey, archivedBy);
+      } catch (error) {
+        console.warn('Could not archive Firebase menu item.', error);
+        setFirebaseSync(prev => ({
+          ...prev,
+          status: 'error',
+          message: `${menuItem.name} was archived locally, but Firebase did not update yet.`,
+        }));
+      }
+    }
+  };
+
+  const handleRestoreMenuItem = async (menuItemKey) => {
+    const permission = requirePermission(accessProfile, 'canManageMenu', 'restore menu items');
+
+    if (!permission.ok) {
+      alert(permission.message);
+      return;
+    }
+
+    const restoredBy = activeStaffMember?.name || 'System';
+    setCustomMenuItems(prevItems => prevItems.map((item) => (
+      item.key === menuItemKey
+        ? { ...item, archived: false, archivedAt: '', archivedBy: '' }
+        : item
+    )));
+    setRecipes(prevRecipes => {
+      const recipe = prevRecipes?.[menuItemKey];
+
+      if (!recipe) {
+        return prevRecipes;
+      }
+
+      return {
+        ...prevRecipes,
+        [menuItemKey]: {
+          ...recipe,
+          archived: false,
+          archivedAt: '',
+          archivedBy: '',
+        },
+      };
+    });
+    setFirestoreMenuItems(prevItems => prevItems.map((item) => (
+      item.key === menuItemKey || item.firestoreId === menuItemKey
+        ? { ...item, archived: false, archivedAt: '', archivedBy: '' }
+        : item
+    )));
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: 'Menu item restored',
+        user: restoredBy,
+        relatedItem: menuItemKey,
+        afterValue: { key: menuItemKey, archived: false },
+      }),
+      ...prevLog,
+    ].slice(0, 500));
+
+    if (FIRESTORE_CONFIGURED) {
+      try {
+        await restoreFirestoreMenuItem(menuItemKey);
+      } catch (error) {
+        console.warn('Could not restore Firebase menu item.', error);
+        setFirebaseSync(prev => ({
+          ...prev,
+          status: 'error',
+          message: 'Menu item restored locally, but Firebase did not update yet.',
+        }));
+      }
+    }
   };
 
   const handleDeleteEntry = async (idToDelete, voidReason = 'Manager correction') => {
@@ -3128,7 +3333,7 @@ function App() {
         onLogout={handleLogout}
       />
 
-      <main className={`app-page${activeTab === 'dashboard' || activeTab === 'storeRoom' || activeTab === 'invoices' || activeTab === 'wasteLog' || activeTab === 'settings' ? ' app-page--wide' : ''}`}>
+      <main className={`app-page${activeTab === 'dashboard' || activeTab === 'storeRoom' || activeTab === 'invoices' || activeTab === 'wasteLog' || activeTab === 'reports' || activeTab === 'settings' ? ' app-page--wide' : ''}`}>
         <div key={activeTab} className="page-transition">
           <ErrorBoundary key={activeTab}>
             <Suspense fallback={<PageFallback label="Loading screen" />}>
@@ -3140,6 +3345,7 @@ function App() {
                   staffList={staffList}
                   accessProfile={accessProfile}
                   invoiceStats={invoiceDashboardStats}
+                  onNavigate={setActiveTab}
                 />
               )}
 
@@ -3195,6 +3401,15 @@ function App() {
               />
             )}
 
+            {activeTab === 'reports' && (
+              <Reports
+                wasteItems={wasteItems}
+                storeRoomMovements={storeRoomMovements}
+                activeStaffMember={activeStaffMember}
+                accessProfile={accessProfile}
+              />
+            )}
+
             {activeTab === 'settings' && (
               <Settings
                 budget={budget}
@@ -3229,6 +3444,7 @@ function App() {
                 onClearRecipes={handleClearRecipes}
                 onSaveMenuItem={handleUpsertMenuItem}
                 onRemoveCustomMenuItem={handleDeleteCustomMenuItem}
+                onRestoreMenuItem={handleRestoreMenuItem}
                 onImportMenuItems={saveApprovedMenuItems}
                 onSaveItemPrice={handleSaveItemPrice}
                 onDeleteItemPrice={handleDeleteItemPrice}

@@ -20,13 +20,24 @@ const STORE_ROOM_UNITS = [
 
 const MOVEMENT_REASONS = [
   'Delivery received',
-  'Prep issued',
   'Kitchen issued',
   'Bar issued',
+  'Waste recorded',
   'Count correction',
   'Supplier return',
   'Damaged stock',
   'Other',
+];
+
+const MOVEMENT_TYPES = [
+  { value: 'received', label: 'Received', direction: 'in' },
+  { value: 'issued_kitchen', label: 'Issued to kitchen', direction: 'out' },
+  { value: 'issued_bar', label: 'Issued to bar', direction: 'out' },
+  { value: 'waste', label: 'Waste', direction: 'out' },
+  { value: 'count_correction_in', label: 'Count correction +', direction: 'in' },
+  { value: 'count_correction_out', label: 'Count correction -', direction: 'out' },
+  { value: 'supplier_return', label: 'Supplier return', direction: 'out' },
+  { value: 'damaged', label: 'Damaged', direction: 'out' },
 ];
 
 const formatNumber = (value) => {
@@ -67,9 +78,10 @@ function StoreRoom({
   const [unit, setUnit] = useState('each');
   const [location, setLocation] = useState('');
   const [parLevel, setParLevel] = useState('');
+  const [reorderPoint, setReorderPoint] = useState('');
   const [itemNotes, setItemNotes] = useState('');
   const [movementItemId, setMovementItemId] = useState('');
-  const [movementType, setMovementType] = useState('stock_in');
+  const [movementType, setMovementType] = useState('received');
   const [movementQuantity, setMovementQuantity] = useState('');
   const [movementReason, setMovementReason] = useState('Delivery received');
   const [movementNotes, setMovementNotes] = useState('');
@@ -88,6 +100,15 @@ function StoreRoom({
       ...safeItems.map((item) => item.name),
     ])).sort((a, b) => a.localeCompare(b))
   ), [safeItemPriceCatalog, safeItems]);
+  const priceRecordByName = useMemo(() => {
+    const lookup = new Map();
+
+    Object.values(safeItemPriceCatalog).forEach((record) => {
+      lookup.set(String(record.name || '').trim().toLowerCase(), record);
+    });
+
+    return lookup;
+  }, [safeItemPriceCatalog]);
   const searchValue = search.trim().toLowerCase();
   const filteredItems = useMemo(() => {
     if (!searchValue) {
@@ -102,7 +123,10 @@ function StoreRoom({
       item.notes,
     ].some((part) => String(part || '').toLowerCase().includes(searchValue)));
   }, [safeItems, searchValue]);
-  const lowStockItems = safeItems.filter((item) => Number(item.parLevel) > 0 && Number(item.quantity) <= Number(item.parLevel));
+  const lowStockItems = safeItems.filter((item) => {
+    const threshold = Number(item.reorderPoint || item.parLevel || 0);
+    return threshold > 0 && Number(item.quantity) <= threshold;
+  });
   const recentMovements = safeMovements.slice(0, 80);
   const selectedMovementItem = safeItems.find((item) => item.id === movementItemId);
   const canManageStoreRoom = Boolean(accessProfile?.canManageStoreRoom);
@@ -120,6 +144,7 @@ function StoreRoom({
     setUnit('each');
     setLocation('');
     setParLevel('');
+    setReorderPoint('');
     setItemNotes('');
   };
 
@@ -130,6 +155,7 @@ function StoreRoom({
     setUnit(item.unit || 'each');
     setLocation(item.location || '');
     setParLevel(item.parLevel ? String(item.parLevel) : '');
+    setReorderPoint(item.reorderPoint ? String(item.reorderPoint) : '');
     setItemNotes(item.notes || '');
     setMessage(`Editing ${item.name}.`);
   };
@@ -138,8 +164,20 @@ function StoreRoom({
     setMovementItemId(item.id);
     setMovementType(type);
     setMovementQuantity('');
-    setMovementReason(type === 'stock_in' ? 'Delivery received' : 'Kitchen issued');
-    setMessage(`${type === 'stock_in' ? 'Putting stock into' : 'Removing stock from'} ${item.name}.`);
+    setMovementReason(type === 'received' ? 'Delivery received' : 'Kitchen issued');
+    setMessage(`${type === 'received' ? 'Putting stock into' : 'Removing stock from'} ${item.name}.`);
+  };
+
+  const handleItemNameChange = (value) => {
+    setItemName(value);
+    const matchingPriceRecord = priceRecordByName.get(String(value || '').trim().toLowerCase());
+
+    if (!matchingPriceRecord || editingItemId) {
+      return;
+    }
+
+    setCategory(matchingPriceRecord.category || category);
+    setUnit(matchingPriceRecord.baseUnit || matchingPriceRecord.unit || unit);
   };
 
   const handleItemSubmit = (event) => {
@@ -152,6 +190,7 @@ function StoreRoom({
       unit,
       location,
       parLevel,
+      reorderPoint,
       notes: itemNotes,
     });
 
@@ -261,7 +300,7 @@ function StoreRoom({
                 <input
                   id="store-item-name"
                   value={itemName}
-                  onChange={(event) => setItemName(event.target.value)}
+                  onChange={(event) => handleItemNameChange(event.target.value)}
                   list="store-room-item-options"
                   className="input"
                   disabled={!canManageStoreRoom}
@@ -325,6 +364,20 @@ function StoreRoom({
                   disabled={!canManageStoreRoom}
                 />
               </div>
+              <div className="field">
+                <label htmlFor="store-item-reorder">Reorder point</label>
+                <input
+                  id="store-item-reorder"
+                  type="number"
+                  min="0"
+                  step="0.001"
+                  value={reorderPoint}
+                  onChange={(event) => setReorderPoint(event.target.value)}
+                  placeholder="Optional"
+                  className="input"
+                  disabled={!canManageStoreRoom}
+                />
+              </div>
             </div>
 
             <div className="field">
@@ -362,7 +415,7 @@ function StoreRoom({
             <div className="section-header">
               <div>
                 <p className="eyebrow">Movement</p>
-                <h2 className="title">Put In / Remove</h2>
+                <h2 className="title">Stock Movement</h2>
               </div>
               {selectedMovementItem && <span className="badge">{formatQuantity(selectedMovementItem)}</span>}
             </div>
@@ -386,31 +439,20 @@ function StoreRoom({
             </div>
 
             <div className="field">
-              <span className="field-label">Movement type</span>
-              <div className="segmented-control" aria-label="Store room movement type">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMovementType('stock_in');
-                    setMovementReason('Delivery received');
-                  }}
-                  className={`segment-button${movementType === 'stock_in' ? ' is-active' : ''}`}
-                  disabled={!canManageStoreRoom}
-                >
-                  Put in
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMovementType('stock_out');
-                    setMovementReason('Kitchen issued');
-                  }}
-                  className={`segment-button${movementType === 'stock_out' ? ' is-active' : ''}`}
-                  disabled={!canManageStoreRoom}
-                >
-                  Remove
-                </button>
-              </div>
+              <label htmlFor="store-movement-type">Movement type</label>
+              <select
+                id="store-movement-type"
+                value={movementType}
+                onChange={(event) => setMovementType(event.target.value)}
+                className="select"
+                disabled={!canManageStoreRoom}
+              >
+                {MOVEMENT_TYPES.map((movementOption) => (
+                  <option key={movementOption.value} value={movementOption.value}>
+                    {movementOption.label}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div className="field-grid">
@@ -457,7 +499,7 @@ function StoreRoom({
             </div>
 
             <button type="submit" className="primary-button" disabled={!canManageStoreRoom || safeItems.length === 0}>
-              {movementType === 'stock_in' ? 'Put stock in' : 'Remove stock'}
+              Record movement
             </button>
           </div>
         </form>
@@ -507,7 +549,8 @@ function StoreRoom({
           ) : (
             <div className="stock-grid">
               {filteredItems.map((item) => {
-                const isLow = Number(item.parLevel) > 0 && Number(item.quantity) <= Number(item.parLevel);
+                const lowThreshold = Number(item.reorderPoint || item.parLevel || 0);
+                const isLow = lowThreshold > 0 && Number(item.quantity) <= lowThreshold;
 
                 return (
                   <div key={item.id} className={`inventory-card stock-card${isLow ? ' is-low-stock' : ''}`}>
@@ -523,17 +566,18 @@ function StoreRoom({
                       <span className={`badge${isLow ? ' is-red' : ' is-green'}`}>
                         {item.parLevel > 0 ? `Par ${formatNumber(item.parLevel)} ${item.unit}` : 'No par'}
                       </span>
+                      {item.reorderPoint > 0 && <span className="badge">Reorder {formatNumber(item.reorderPoint)} {item.unit}</span>}
                       {item.lastMovementAt && <span className="badge">Moved {formatDateTime(item.lastMovementAt)}</span>}
                     </div>
 
                     {item.notes && <p className="small-text stock-card-note">{item.notes}</p>}
 
                     <div className="manager-row stock-card-actions">
-                      <button type="button" onClick={() => handleQuickMovement(item, 'stock_in')} className="ghost-button compact-action" disabled={!canManageStoreRoom}>
-                        Put in
+                      <button type="button" onClick={() => handleQuickMovement(item, 'received')} className="ghost-button compact-action" disabled={!canManageStoreRoom}>
+                        Receive
                       </button>
-                      <button type="button" onClick={() => handleQuickMovement(item, 'stock_out')} className="ghost-button compact-action" disabled={!canManageStoreRoom}>
-                        Remove
+                      <button type="button" onClick={() => handleQuickMovement(item, 'issued_kitchen')} className="ghost-button compact-action" disabled={!canManageStoreRoom}>
+                        Issue
                       </button>
                       <button type="button" onClick={() => handleEditItem(item)} className="ghost-button compact-action" disabled={!canManageStoreRoom}>
                         Edit
@@ -572,8 +616,8 @@ function StoreRoom({
                       {formatDateTime(movement.createdAt)} - {movement.staffName}
                     </span>
                   </div>
-                  <span className={`badge${movement.type === 'stock_out' ? ' is-red' : ' is-green'}`}>
-                    {movement.type === 'stock_out' ? '-' : '+'}{formatNumber(movement.quantity)} {movement.unit}
+                  <span className={`badge${String(movement.type || '').includes('out') || ['issued_kitchen', 'issued_bar', 'waste', 'supplier_return', 'damaged'].includes(movement.type) ? ' is-red' : ' is-green'}`}>
+                    {String(movement.type || '').includes('out') || ['issued_kitchen', 'issued_bar', 'waste', 'supplier_return', 'damaged'].includes(movement.type) ? '-' : '+'}{formatNumber(movement.quantity)} {movement.unit}
                   </span>
                   <span className="small-text">{movement.reason || 'Movement'}</span>
                   <span className="small-text">

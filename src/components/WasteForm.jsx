@@ -987,6 +987,11 @@ function WasteForm({
       setIsSavingEntry(false);
     }
 
+    if (saveResult && saveResult.ok === false) {
+      setFormMessage(saveResult.message || 'Could not save this waste entry.');
+      return;
+    }
+
     setLastSavedEntryId(finalEntry.id);
     setFormMessage(
       saveResult?.syncStatus === 'failed'

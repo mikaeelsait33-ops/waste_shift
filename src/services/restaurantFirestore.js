@@ -1,20 +1,7 @@
 import { getFirestoreDb, ensureFirebaseAuth } from './firestoreMenuItems';
+import { getManagerApiHeaders } from '../utils/apiHeaders';
 
 const RESTAURANT_PROFILE_REF = ['restaurants', 'main'];
-const RESET_COLLECTIONS = [
-  'menuItems',
-  'wasteEntries',
-  'ingredients',
-  'recipes',
-  'inventory',
-  'stockLevels',
-  'invoices',
-  'suppliers',
-  'priceHistory',
-  'menuImports',
-  'auditLogs',
-];
-
 const getFirestoreApi = async () => {
   const firestore = await import('firebase/firestore');
 
@@ -131,36 +118,33 @@ export const saveMenuImportHistory = async (historyRecord) => {
   return { ok: true, id: safeId };
 };
 
-const deleteCollectionDocuments = async (db, collectionName) => {
-  const { collection, deleteDoc, doc, getDocs } = await getFirestoreApi();
-  const snapshot = await getDocs(collection(db, collectionName));
-
-  await Promise.all(snapshot.docs.map((documentSnapshot) => (
-    deleteDoc(doc(db, collectionName, documentSnapshot.id))
-  )));
-
-  return snapshot.docs.length;
-};
-
 export const resetRestaurantFirestoreData = async () => {
-  const db = await getFirestoreDb();
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 30000);
 
-  if (!db) {
-    return { ok: false, skipped: true, deletedCounts: {} };
+  try {
+    const response = await fetch('/api/admin-reset', {
+      method: 'POST',
+      headers: getManagerApiHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ confirmation: 'RESET' }),
+      signal: controller.signal,
+    });
+    const body = await response.json().catch(() => ({}));
+
+    if (!response.ok || !body?.ok) {
+      const message = body?.message
+        || 'Server reset is not configured. Add Firebase Admin credentials and manager secret.';
+      throw new Error(message);
+    }
+
+    return body;
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error('Reset timed out. Check Vercel function logs and try again.');
+    }
+
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
   }
-
-  await ensureFirebaseAuth();
-  const deletedCounts = {};
-
-  for (const collectionName of RESET_COLLECTIONS) {
-    deletedCounts[collectionName] = await deleteCollectionDocuments(db, collectionName);
-  }
-
-  await saveRestaurantProfile({
-    ...createDefaultRestaurantProfile(),
-    setupCompleted: false,
-  });
-
-  return { ok: true, deletedCounts };
 };
-

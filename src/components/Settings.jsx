@@ -577,6 +577,7 @@ function Settings({
   onClearRecipes,
   onSaveMenuItem,
   onRemoveCustomMenuItem,
+  onRestoreMenuItem,
   onImportMenuItems,
   onSaveItemPrice,
   onDeleteItemPrice,
@@ -879,6 +880,7 @@ function Settings({
             onClearRecipes={onClearRecipes}
             onSaveMenuItem={onSaveMenuItem}
             onRemoveCustomMenuItem={onRemoveCustomMenuItem}
+            onRestoreMenuItem={onRestoreMenuItem}
             onImportMenuItems={onImportMenuItems}
             activeStaffMember={activeStaffMember}
           />
@@ -968,12 +970,17 @@ function Settings({
                 type="button"
                 onClick={async () => {
                   setIsResettingRestaurant(true);
-                  const result = await onResetRestaurantData?.(resetConfirmation);
-                  setMessage(result?.message || 'Reset request finished.');
-                  if (result?.ok) {
-                    setResetConfirmation('');
+                  try {
+                    const result = await onResetRestaurantData?.(resetConfirmation);
+                    setMessage(result?.message || 'Reset request finished.');
+                    if (result?.ok) {
+                      setResetConfirmation('');
+                    }
+                  } catch (error) {
+                    setMessage(error?.message || 'Could not reset restaurant data.');
+                  } finally {
+                    setIsResettingRestaurant(false);
                   }
-                  setIsResettingRestaurant(false);
                 }}
                 className="danger-button"
                 disabled={!accessProfile?.canClearData || isResettingRestaurant}

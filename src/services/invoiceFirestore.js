@@ -1124,6 +1124,14 @@ export const loadInvoiceDashboardStats = async () => {
   if (!hasFirebaseConfig) {
     return {
       totalSpendThisMonth: 0,
+      totalSpendTodayExVAT: 0,
+      totalSpendThisWeekExVAT: 0,
+      totalSpendThisWeekIncVAT: 0,
+      totalVatThisWeek: 0,
+      totalSpendThisMonthExVAT: 0,
+      totalSpendThisMonthIncVAT: 0,
+      invoiceCountThisWeek: 0,
+      topSuppliersThisWeek: [],
       topIngredients: [],
       priceIncreasesThisMonth: [],
       significantPriceIncreaseCount: 0,
@@ -1149,11 +1157,44 @@ export const loadInvoiceDashboardStats = async () => {
   ));
   const stockLevels = stockDocs.map(normalizeStockLevel).filter(Boolean);
   const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const tomorrowStart = new Date(todayStart);
+  tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+  const weekStart = new Date(todayStart);
+  const dayOfWeek = weekStart.getDay();
+  weekStart.setDate(weekStart.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const activeInvoices = invoices.filter((invoice) => String(invoice.status || '').toLowerCase() !== 'deleted');
+  const inactiveStatuses = new Set(['deleted', 'voided', 'cancelled', 'canceled']);
+  const getInvoiceDate = (invoice) => new Date(invoice.invoiceDate || invoice.scannedAt || invoice.createdAt || 0);
+  const getInvoiceExVat = (invoice) => Number(invoice.totalExVAT ?? invoice.totalExVat ?? invoice.subtotal ?? 0);
+  const getInvoiceVat = (invoice) => Number(invoice.vatAmount ?? invoice.totalVAT ?? invoice.totalVat ?? 0);
+  const getInvoiceIncVat = (invoice) => {
+    const explicitTotal = Number(invoice.totalIncVAT ?? invoice.totalIncVat ?? invoice.totalAmount ?? invoice.total ?? 0);
+
+    return explicitTotal > 0 ? explicitTotal : getInvoiceExVat(invoice) + getInvoiceVat(invoice);
+  };
+  const activeInvoices = invoices.filter((invoice) => !inactiveStatuses.has(String(invoice.status || '').toLowerCase()));
+  const invoicesToday = activeInvoices.filter((invoice) => {
+    const invoiceDate = getInvoiceDate(invoice);
+    return invoiceDate >= todayStart && invoiceDate < tomorrowStart;
+  });
+  const invoicesThisWeek = activeInvoices.filter((invoice) => {
+    const invoiceDate = getInvoiceDate(invoice);
+    return invoiceDate >= weekStart && invoiceDate < tomorrowStart;
+  });
   const invoicesThisMonth = activeInvoices.filter((invoice) => (
-    new Date(invoice.invoiceDate || invoice.scannedAt || 0) >= monthStart
+    getInvoiceDate(invoice) >= monthStart
   ));
+  const suppliersThisWeek = invoicesThisWeek.reduce((acc, invoice) => {
+    const supplier = String(invoice.supplier || invoice.supplierName || 'Unknown supplier').trim() || 'Unknown supplier';
+    const current = acc.get(supplier) || { supplier, invoiceCount: 0, totalExVAT: 0, totalIncVAT: 0 };
+
+    current.invoiceCount += 1;
+    current.totalExVAT += getInvoiceExVat(invoice);
+    current.totalIncVAT += getInvoiceIncVat(invoice);
+    acc.set(supplier, current);
+    return acc;
+  }, new Map());
   const normalizedIngredients = ingredients
     .map(normalizeIngredientRecord)
     .filter(Boolean);
@@ -1204,7 +1245,22 @@ export const loadInvoiceDashboardStats = async () => {
     .filter((item) => item.increasePercent > 0 && item.latestDate && item.latestDate >= monthStart);
 
   return {
-    totalSpendThisMonth: roundMoney(invoicesThisMonth.reduce((sum, invoice) => sum + Number(invoice.totalExVAT || 0), 0)),
+    totalSpendTodayExVAT: roundMoney(invoicesToday.reduce((sum, invoice) => sum + getInvoiceExVat(invoice), 0)),
+    totalSpendThisWeekExVAT: roundMoney(invoicesThisWeek.reduce((sum, invoice) => sum + getInvoiceExVat(invoice), 0)),
+    totalSpendThisWeekIncVAT: roundMoney(invoicesThisWeek.reduce((sum, invoice) => sum + getInvoiceIncVat(invoice), 0)),
+    totalVatThisWeek: roundMoney(invoicesThisWeek.reduce((sum, invoice) => sum + getInvoiceVat(invoice), 0)),
+    totalSpendThisMonthExVAT: roundMoney(invoicesThisMonth.reduce((sum, invoice) => sum + getInvoiceExVat(invoice), 0)),
+    totalSpendThisMonthIncVAT: roundMoney(invoicesThisMonth.reduce((sum, invoice) => sum + getInvoiceIncVat(invoice), 0)),
+    totalSpendThisMonth: roundMoney(invoicesThisMonth.reduce((sum, invoice) => sum + getInvoiceExVat(invoice), 0)),
+    invoiceCountThisWeek: invoicesThisWeek.length,
+    topSuppliersThisWeek: [...suppliersThisWeek.values()]
+      .sort((a, b) => b.totalExVAT - a.totalExVAT)
+      .slice(0, 5)
+      .map((supplier) => ({
+        ...supplier,
+        totalExVAT: roundMoney(supplier.totalExVAT),
+        totalIncVAT: roundMoney(supplier.totalIncVAT),
+      })),
     topIngredients,
     priceIncreasesThisMonth,
     significantPriceIncreaseCount: significantPriceIncreases.length,

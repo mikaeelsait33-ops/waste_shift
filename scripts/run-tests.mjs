@@ -10,6 +10,7 @@ const testFiles = [
   'scripts/shift-workflow.test.mjs',
   'scripts/ingredient-intelligence.test.mjs',
   'scripts/master-ingredients.test.mjs',
+  'scripts/reports.test.mjs',
   'scripts/performance.test.mjs',
   'scripts/auth-permissions.test.mjs',
   'scripts/api-routes.test.mjs',

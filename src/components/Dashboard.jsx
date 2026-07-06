@@ -29,7 +29,7 @@ const getMetricRows = (metricsObj, totalValue) => (
     }))
 );
 
-function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceStats }) {
+function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceStats, onNavigate }) {
   const [timeframe, setTimeframe] = useState('week');
   const [dashboardView, setDashboardView] = useState('today');
   const [sectionDate, setSectionDate] = useState(() => {
@@ -389,6 +389,10 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
                 <span className={`metric-value${Number(invoiceDashboard.lowStockCount || 0) > 0 ? ' is-danger' : ''}`}>{Number(invoiceDashboard.lowStockCount || 0)}</span>
                 <span className="metric-label">Low stock</span>
               </div>
+              <button type="button" className="metric-card metric-card--button" onClick={() => onNavigate?.('wasteLog')}>
+                <span className="metric-value">View</span>
+                <span className="metric-label">Waste Log</span>
+              </button>
             </div>
 
         <div className="shift-summary-panel">
@@ -531,12 +535,24 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
 
             <div className="metrics-grid">
               <div className="metric-card">
-                <span className={metricValueClass(true)}>{formatMoney(invoiceDashboard.totalSpendThisMonth)}</span>
+                <span className={metricValueClass(true)}>{formatMoney(invoiceDashboard.totalSpendThisWeekExVAT)}</span>
+                <span className="metric-label">Spend this week excl VAT</span>
+              </div>
+              <div className="metric-card">
+                <span className={metricValueClass(true)}>{formatMoney(invoiceDashboard.totalSpendThisWeekIncVAT)}</span>
+                <span className="metric-label">Spend this week incl VAT</span>
+              </div>
+              <div className="metric-card">
+                <span className={metricValueClass(true)}>{formatMoney(invoiceDashboard.totalVatThisWeek)}</span>
+                <span className="metric-label">VAT this week</span>
+              </div>
+              <div className="metric-card">
+                <span className={metricValueClass(true)}>{formatMoney(invoiceDashboard.totalSpendThisMonthExVAT ?? invoiceDashboard.totalSpendThisMonth)}</span>
                 <span className="metric-label">Spend this month excl VAT</span>
               </div>
               <div className="metric-card">
-                <span className="metric-value">{invoiceDashboard.topIngredients?.[0]?.name || 'None'}</span>
-                <span className="metric-label">Most expensive ingredient</span>
+                <span className="metric-value">{invoiceDashboard.topSuppliersThisWeek?.[0]?.supplier || 'None'}</span>
+                <span className="metric-label">Top supplier this week</span>
               </div>
               <div className="metric-card">
                 <span className={`metric-value${Number(invoiceDashboard.priceIncreasesThisMonth?.length || 0) > 0 ? ' is-danger' : ''}`}>

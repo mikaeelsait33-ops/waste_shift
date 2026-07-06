@@ -39,6 +39,10 @@ const importDatabaseHandler = async ({ syncSecret = '' } = {}) => {
   return (await import(`../api/database.js?case=${importCounter++}`)).default;
 };
 
+const importAdminResetHandler = async () => (
+  (await import(`../api/admin-reset.js?case=${importCounter++}`)).default
+);
+
 delete process.env.VERCEL_ENV;
 delete process.env.WASTESHIFT_MANAGER_API_SECRET;
 const databaseOpenHandler = await importDatabaseHandler();
@@ -73,12 +77,20 @@ assert.equal(response.body.ok, false);
 process.env.VERCEL_ENV = 'production';
 delete process.env.WASTESHIFT_MANAGER_API_SECRET;
 const databaseProductionMissingSecretHandler = await importDatabaseHandler();
+const adminResetProductionMissingSecretHandler = await importAdminResetHandler();
 
 response = await callHandler(databaseProductionMissingSecretHandler, {
   method: 'GET',
 });
 assert.equal(response.statusCode, 503);
 assert.equal(response.body.code, 'sync_api_secret_not_configured');
+
+response = await callHandler(adminResetProductionMissingSecretHandler, {
+  method: 'POST',
+  body: JSON.stringify({ confirmation: 'RESET' }),
+});
+assert.equal(response.statusCode, 503);
+assert.equal(response.body.code, 'manager_api_secret_not_configured');
 
 const databaseProductionSyncOnlyHandler = await importDatabaseHandler({ syncSecret: 'safe-test-secret' });
 
@@ -216,6 +228,39 @@ assert.equal(response.body.code, 'manager_api_secret_not_configured');
 delete process.env.VERCEL_ENV;
 
 process.env.WASTESHIFT_MANAGER_API_SECRET = 'manager-api-secret';
+delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+delete process.env.FIREBASE_ADMIN_PROJECT_ID;
+delete process.env.FIREBASE_ADMIN_CLIENT_EMAIL;
+delete process.env.FIREBASE_ADMIN_PRIVATE_KEY;
+
+const adminResetHandler = await importAdminResetHandler();
+
+response = await callHandler(adminResetHandler, {
+  method: 'GET',
+});
+assert.equal(response.statusCode, 405);
+
+response = await callHandler(adminResetHandler, {
+  method: 'POST',
+  headers: { 'x-wasteshift-manager-secret': 'wrong' },
+  body: JSON.stringify({ confirmation: 'RESET' }),
+});
+assert.equal(response.statusCode, 403);
+
+response = await callHandler(adminResetHandler, {
+  method: 'POST',
+  headers: { 'x-wasteshift-manager-secret': 'manager-api-secret' },
+  body: JSON.stringify({ confirmation: 'NOPE' }),
+});
+assert.equal(response.statusCode, 400);
+
+response = await callHandler(adminResetHandler, {
+  method: 'POST',
+  headers: { 'x-wasteshift-manager-secret': 'manager-api-secret' },
+  body: JSON.stringify({ confirmation: 'RESET' }),
+});
+assert.equal(response.statusCode, 501);
+assert.equal(response.body.code, 'firebase_admin_not_configured');
 
 response = await callHandler(menuHandler, {
   method: 'POST',

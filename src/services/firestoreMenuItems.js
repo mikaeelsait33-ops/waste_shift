@@ -118,6 +118,9 @@ const sanitizeComponent = (component, index) => {
   return {
     key: component?.key || createItemPriceKey(`${name}-${index}`),
     name,
+    ingredientId: toSafeString(component?.ingredientId || component?.priceCatalogKey),
+    priceCatalogKey: toSafeString(component?.priceCatalogKey || component?.ingredientId),
+    displayName: toSafeString(component?.displayName) || name,
     quantity: normalizedIngredient.quantity || '',
     quantityValue: normalizedIngredient.quantityValue ?? null,
     unit: normalizedIngredient.unit || '',
@@ -300,6 +303,9 @@ export const normalizeFirestoreMenuItem = (docSnapshot) => {
     menuPrice,
     totalCost,
     components,
+    archived: Boolean(data?.archived),
+    archivedAt: toSafeString(data?.archivedAt),
+    archivedBy: toSafeString(data?.archivedBy),
   };
 };
 
@@ -394,7 +400,16 @@ export const saveFirestoreDatabaseSnapshot = async (databaseData) => {
   return { ok: true, updatedAt: exportedAt };
 };
 
-export const saveFirestoreMenuItem = async ({ key, name, totalCost, menuPrice = null, components }) => {
+export const saveFirestoreMenuItem = async ({
+  key,
+  name,
+  totalCost,
+  menuPrice = null,
+  components,
+  archived = false,
+  archivedAt = '',
+  archivedBy = '',
+}) => {
   const db = await getFirestoreDb();
   const safeName = String(name || '').trim();
   const safeKey = key || createItemPriceKey(safeName);
@@ -418,6 +433,54 @@ export const saveFirestoreMenuItem = async ({ key, name, totalCost, menuPrice = 
     totalCost: resolvedTotalCost,
     ...(menuPrice !== null && menuPrice !== undefined ? { menuPrice: roundCurrency(Number(menuPrice) || 0) } : {}),
     components: safeComponents,
+    archived: Boolean(archived),
+    archivedAt: toSafeString(archivedAt),
+    archivedBy: toSafeString(archivedBy),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+
+  return { ok: true };
+};
+
+export const archiveFirestoreMenuItem = async (key, archivedBy = 'WasteShift user') => {
+  const db = await getFirestoreDb();
+  const safeKey = toSafeString(key);
+
+  if (!db || !safeKey) {
+    return { ok: false, skipped: true };
+  }
+
+  await ensureFirebaseAuth();
+  const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
+  const archivedAt = new Date().toISOString();
+
+  await setDoc(doc(db, 'menuItems', safeKey), {
+    key: safeKey,
+    archived: true,
+    archivedAt,
+    archivedBy: toSafeString(archivedBy) || 'WasteShift user',
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+
+  return { ok: true, archivedAt };
+};
+
+export const restoreFirestoreMenuItem = async (key) => {
+  const db = await getFirestoreDb();
+  const safeKey = toSafeString(key);
+
+  if (!db || !safeKey) {
+    return { ok: false, skipped: true };
+  }
+
+  await ensureFirebaseAuth();
+  const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
+
+  await setDoc(doc(db, 'menuItems', safeKey), {
+    key: safeKey,
+    archived: false,
+    archivedAt: '',
+    archivedBy: '',
     updatedAt: serverTimestamp(),
   }, { merge: true });
 

@@ -53,12 +53,14 @@ function RecipeManager({
   onClearRecipes,
   onSaveMenuItem,
   onRemoveCustomMenuItem,
+  onRestoreMenuItem,
   onImportMenuItems,
   activeStaffMember,
 }) {
   const [recipeName, setRecipeName] = useState('');
   const [recipePrice, setRecipePrice] = useState('');
   const [recipeSearch, setRecipeSearch] = useState('');
+  const [archiveFilter, setArchiveFilter] = useState('active');
   const [editingKey, setEditingKey] = useState('');
   const [message, setMessage] = useState('');
   const [ingredients, setIngredients] = useState([createBlankIngredient()]);
@@ -100,6 +102,9 @@ function RecipeManager({
         menuPrice: item.menuPrice,
         recipe: safeRecipes[item.key],
         isMenuItem: true,
+        archived: Boolean(item.archived || safeRecipes[item.key]?.archived),
+        archivedAt: item.archivedAt || safeRecipes[item.key]?.archivedAt || '',
+        archivedBy: item.archivedBy || safeRecipes[item.key]?.archivedBy || '',
       });
     });
 
@@ -107,7 +112,13 @@ function RecipeManager({
       const existingEntry = entriesByKey.get(key);
 
       if (existingEntry) {
-        entriesByKey.set(key, { ...existingEntry, recipe });
+        entriesByKey.set(key, {
+          ...existingEntry,
+          recipe,
+          archived: Boolean(existingEntry.archived || recipe?.archived),
+          archivedAt: existingEntry.archivedAt || recipe?.archivedAt || '',
+          archivedBy: existingEntry.archivedBy || recipe?.archivedBy || '',
+        });
         return;
       }
 
@@ -117,6 +128,9 @@ function RecipeManager({
         menuPrice: recipe?.menuPrice ?? null,
         recipe,
         isMenuItem: false,
+        archived: Boolean(recipe?.archived),
+        archivedAt: recipe?.archivedAt || '',
+        archivedBy: recipe?.archivedBy || '',
       });
     });
 
@@ -125,6 +139,8 @@ function RecipeManager({
 
   const recipeSearchValue = recipeSearch.trim().toLowerCase();
   const filteredCatalogEntries = catalogEntries.filter((entry) => {
+    if (archiveFilter === 'active' && entry.archived) return false;
+    if (archiveFilter === 'archived' && !entry.archived) return false;
     if (!recipeSearchValue) return true;
 
     const safeIngredients = Array.isArray(entry.recipe?.ingredients) ? entry.recipe.ingredients : [];
@@ -137,6 +153,7 @@ function RecipeManager({
       ...safeIngredients.map((ingredient) => ingredient.category),
     ].some((part) => String(part || '').toLowerCase().includes(recipeSearchValue));
   });
+  const archivedCount = catalogEntries.filter((entry) => entry.archived).length;
 
   const resetRecipeForm = () => {
     setEditingKey('');
@@ -475,6 +492,7 @@ function RecipeManager({
             </div>
             <div className="manager-row">
               <span className="badge">{filteredCatalogEntries.length} shown</span>
+              {archivedCount > 0 && <span className="badge">{archivedCount} archived</span>}
               {catalogEntries.length > 0 && (
                 <button type="button" onClick={onClearRecipes} className="danger-button">
                   Wipe menu
@@ -484,7 +502,7 @@ function RecipeManager({
           </div>
 
           {catalogEntries.length > 0 && (
-            <div className="toolbar toolbar--single">
+            <div className="toolbar">
               <input
                 type="search"
                 value={recipeSearch}
@@ -492,6 +510,11 @@ function RecipeManager({
                 placeholder="Search menu items or ingredients"
                 className="input"
               />
+              <select value={archiveFilter} onChange={(event) => setArchiveFilter(event.target.value)} className="select">
+                <option value="active">Active menu</option>
+                <option value="archived">Archived menu</option>
+                <option value="all">Active + archived</option>
+              </select>
             </div>
           )}
 
@@ -534,6 +557,7 @@ function RecipeManager({
                       </span>
                     </div>
                     <div className="manager-row">
+                      {item.archived && <span className="badge is-red">Archived</span>}
                       {hasLocalChange && <span className="badge is-green">App saved</span>}
                       {priceGap !== null && safeIngredients.length > 0 && (
                         <span className={priceGap < 0 ? 'badge is-red' : 'badge'}>
@@ -546,9 +570,13 @@ function RecipeManager({
                       <button type="button" onClick={() => handleEditItem(item)} className="ghost-button is-warning">
                         Edit
                       </button>
-                      {hasLocalChange && (
-                        <button type="button" onClick={() => onRemoveCustomMenuItem?.(item.key)} className="delete-button" title={`Remove app-saved price for ${item.name}`}>
-                          x
+                      {item.archived ? (
+                        <button type="button" onClick={() => onRestoreMenuItem?.(item.key)} className="ghost-button compact-action">
+                          Restore
+                        </button>
+                      ) : (
+                        <button type="button" onClick={() => onRemoveCustomMenuItem?.(item.key)} className="danger-button compact-action">
+                          Archive
                         </button>
                       )}
                     </div>

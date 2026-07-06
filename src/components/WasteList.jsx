@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import DateNavigator from './DateNavigator';
 import {
   DEFAULT_WASTE_CLASSIFICATION,
   WASTE_CATEGORY_OPTIONS,
@@ -18,6 +17,14 @@ import {
 } from '../utils/wasteSync';
 import { DEFAULT_PAGE_SIZE, getVisiblePage } from '../utils/listPerformance';
 
+const getWeekStart = (date) => {
+  const value = new Date(date);
+  value.setHours(0, 0, 0, 0);
+  const day = value.getDay();
+  value.setDate(value.getDate() - (day === 0 ? 6 : day - 1));
+  return value;
+};
+
 function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, activeStaffMember }) {
   const [activeFilter, setActiveFilter] = useState('All');
   const [classificationFilter, setClassificationFilter] = useState('All');
@@ -27,13 +34,10 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
   const [costReviewFilter, setCostReviewFilter] = useState('All');
   const [entryStatusFilter, setEntryStatusFilter] = useState('active');
   const [visibleLimit, setVisibleLimit] = useState(DEFAULT_PAGE_SIZE);
-  const [viewMode, setViewMode] = useState('day');
+  const [dateRangeFilter, setDateRangeFilter] = useState('today');
+  const [customStartDate, setCustomStartDate] = useState('');
+  const [customEndDate, setCustomEndDate] = useState('');
   const [deletedEntry, setDeletedEntry] = useState(null);
-  const [selectedDate, setSelectedDate] = useState(() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d;
-  });
   const safeItems = useMemo(() => (Array.isArray(items) ? items : []), [items]);
   const canViewFinancials = Boolean(accessProfile?.canViewFinancials);
   const formatMoney = (value) => (canViewFinancials ? `R${Number(value || 0).toFixed(2)}` : 'Restricted');
@@ -65,24 +69,50 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
     return new Date(dateStr);
   };
 
+  const dateRangeBounds = useMemo(() => {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    if (dateRangeFilter === 'all') {
+      return null;
+    }
+
+    if (dateRangeFilter === 'yesterday') {
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      return { start: yesterday, end: today };
+    }
+
+    if (dateRangeFilter === 'week') {
+      return { start: getWeekStart(today), end: tomorrow };
+    }
+
+    if (dateRangeFilter === 'month') {
+      return { start: new Date(today.getFullYear(), today.getMonth(), 1), end: tomorrow };
+    }
+
+    if (dateRangeFilter === 'custom') {
+      const start = customStartDate ? new Date(`${customStartDate}T00:00:00`) : null;
+      const end = customEndDate ? new Date(`${customEndDate}T23:59:59`) : null;
+      return { start, end };
+    }
+
+    return { start: today, end: tomorrow };
+  }, [customEndDate, customStartDate, dateRangeFilter]);
+
   const dateFilteredItems = useMemo(() => visibleItems.filter((item) => {
-    if (viewMode === 'all') return true;
+    const bounds = dateRangeBounds;
+
+    if (!bounds) return true;
 
     const itemDate = parseDate(item?.date);
-    itemDate.setHours(0, 0, 0, 0);
 
-    if (viewMode === 'day') {
-      const sel = new Date(selectedDate);
-      sel.setHours(0, 0, 0, 0);
-      return itemDate.getTime() === sel.getTime();
-    }
-
-    if (viewMode === 'month') {
-      return itemDate.getMonth() === selectedDate.getMonth() && itemDate.getFullYear() === selectedDate.getFullYear();
-    }
-
+    if (bounds.start && itemDate < bounds.start) return false;
+    if (bounds.end && itemDate > bounds.end) return false;
     return true;
-  }), [selectedDate, viewMode, visibleItems]);
+  }), [dateRangeBounds, visibleItems]);
 
   const searchValue = searchTerm.trim().toLowerCase();
   const getItemWasteClassification = (item) => item?.wasteClassification || DEFAULT_WASTE_CLASSIFICATION;
@@ -135,12 +165,12 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
 
   useEffect(() => {
     setVisibleLimit(DEFAULT_PAGE_SIZE);
-  }, [activeFilter, classificationFilter, costReviewFilter, entryStatusFilter, searchValue, selectedDate, sortMode, syncFilter, viewMode]);
+  }, [activeFilter, classificationFilter, costReviewFilter, dateRangeFilter, entryStatusFilter, searchValue, sortMode, syncFilter]);
 
   const totalCost = dateFilteredItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
   const totalCount = dateFilteredItems.length;
   const filteredCost = filteredItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
-  const hasActiveFilters = activeFilter !== 'All' || classificationFilter !== 'All' || syncFilter !== 'All' || costReviewFilter !== 'All' || Boolean(searchValue);
+  const hasActiveFilters = activeFilter !== 'All' || classificationFilter !== 'All' || syncFilter !== 'All' || costReviewFilter !== 'All' || dateRangeFilter !== 'all' || Boolean(searchValue);
   const categoryFilters = [
     { value: 'All', label: 'All' },
     ...WASTE_CATEGORY_OPTIONS,
@@ -303,6 +333,9 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
     setClassificationFilter('All');
     setSyncFilter('All');
     setCostReviewFilter('All');
+    setDateRangeFilter('all');
+    setCustomStartDate('');
+    setCustomEndDate('');
     setSearchTerm('');
   };
 
@@ -311,17 +344,10 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
       <div className="section-header">
         <div>
           <p className="eyebrow">Waste log</p>
-          <h2 className="title">Logged Items</h2>
-          <p className="subtitle">Review entries by date range and category.</p>
+          <h2 className="title">Waste Log</h2>
+          <p className="subtitle">Review today, old entries, and manager-only void history.</p>
         </div>
       </div>
-
-      <DateNavigator
-        selectedDate={selectedDate}
-        onDateChange={setSelectedDate}
-        viewMode={viewMode}
-        onViewModeChange={setViewMode}
-      />
 
       <div className="toolbar">
         <input
@@ -331,6 +357,32 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
           placeholder="Search item, staff, reason, note, or ingredient"
           className="input"
         />
+        <select value={dateRangeFilter} onChange={(e) => setDateRangeFilter(e.target.value)} className="select">
+          <option value="today">Today</option>
+          <option value="yesterday">Yesterday</option>
+          <option value="week">This week</option>
+          <option value="month">This month</option>
+          <option value="custom">Custom range</option>
+          <option value="all">All time</option>
+        </select>
+        {dateRangeFilter === 'custom' && (
+          <>
+            <input
+              type="date"
+              value={customStartDate}
+              onChange={(event) => setCustomStartDate(event.target.value)}
+              className="input"
+              aria-label="Waste log start date"
+            />
+            <input
+              type="date"
+              value={customEndDate}
+              onChange={(event) => setCustomEndDate(event.target.value)}
+              className="input"
+              aria-label="Waste log end date"
+            />
+          </>
+        )}
         <select value={sortMode} onChange={(e) => setSortMode(e.target.value)} className="select">
           <option value="newest">Newest first</option>
           <option value="highestCost">Highest cost</option>

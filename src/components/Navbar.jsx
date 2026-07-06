@@ -3,7 +3,8 @@ const navItems = [
   { key: 'logWaste', label: 'Log Waste', shortLabel: 'Log', marker: '+' },
   { key: 'invoices', label: 'Invoices', shortLabel: 'Scan', marker: 'I' },
   { key: 'storeRoom', label: 'Stock', shortLabel: 'Stock', marker: 'S' },
-  { key: 'wasteLog', label: 'History', shortLabel: 'More', marker: 'H' },
+  { key: 'wasteLog', label: 'Waste Log', shortLabel: 'Waste', marker: 'W' },
+  { key: 'reports', label: 'Reports', shortLabel: 'Reports', marker: 'R' },
   { key: 'settings', label: 'Settings', shortLabel: 'More', marker: 'M' },
 ];
 
@@ -13,6 +14,10 @@ function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, acc
       return accessProfile?.canViewStoreRoom;
     }
 
+    if (item.key === 'reports') {
+      return accessProfile?.canExportData || accessProfile?.canViewFinancials;
+    }
+
     return accessProfile?.canViewFinancials || item.key === 'logWaste' || item.key === 'wasteLog';
   });
   const mobileNavItems = [
@@ -20,6 +25,7 @@ function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, acc
     navItems.find((item) => item.key === 'logWaste'),
     navItems.find((item) => item.key === 'invoices'),
     navItems.find((item) => item.key === 'storeRoom'),
+    navItems.find((item) => item.key === 'reports'),
     navItems.find((item) => item.key === 'settings'),
   ].filter(Boolean).filter((item) => visibleNavItems.some((visibleItem) => visibleItem.key === item.key));
   const canShowHistory = visibleNavItems.some((item) => item.key === 'wasteLog');
