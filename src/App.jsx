@@ -3372,7 +3372,6 @@ function App() {
                 onDeleteEntry={handleDeleteEntry}
                 onRestoreEntry={handleRestoreEntry}
                 accessProfile={accessProfile}
-                activeStaffMember={activeStaffMember}
               />
             )}
 

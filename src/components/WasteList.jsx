@@ -25,7 +25,7 @@ const getWeekStart = (date) => {
   return value;
 };
 
-function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, activeStaffMember }) {
+function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile }) {
   const [activeFilter, setActiveFilter] = useState('All');
   const [classificationFilter, setClassificationFilter] = useState('All');
   const [searchTerm, setSearchTerm] = useState('');
@@ -52,12 +52,9 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile, active
 
     return getActiveWasteEntries(safeItems);
   }, [accessProfile?.canDeleteEntries, entryStatusFilter, safeItems]);
-  const visibleItems = useMemo(() => (canViewFinancials
-    ? statusScopedItems
-    : getActiveWasteEntries(statusScopedItems).filter((item) => (
-      item?.staffId === activeStaffMember?.id
-      || String(item?.staff || '').trim().toLowerCase() === String(activeStaffMember?.name || '').trim().toLowerCase()
-    ))), [activeStaffMember?.id, activeStaffMember?.name, canViewFinancials, statusScopedItems]);
+  const visibleItems = useMemo(() => (
+    canViewFinancials ? statusScopedItems : getActiveWasteEntries(statusScopedItems)
+  ), [canViewFinancials, statusScopedItems]);
 
   const parseDate = (dateStr) => {
     if (!dateStr) return new Date(0);

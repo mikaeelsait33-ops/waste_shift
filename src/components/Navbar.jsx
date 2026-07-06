@@ -21,18 +21,13 @@ function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, acc
     return accessProfile?.canViewFinancials || item.key === 'logWaste' || item.key === 'wasteLog';
   });
   const mobileNavItems = [
-    navItems.find((item) => item.key === 'dashboard'),
     navItems.find((item) => item.key === 'logWaste'),
+    navItems.find((item) => item.key === 'wasteLog'),
+    navItems.find((item) => item.key === 'dashboard'),
     navItems.find((item) => item.key === 'invoices'),
     navItems.find((item) => item.key === 'storeRoom'),
-    navItems.find((item) => item.key === 'reports'),
     navItems.find((item) => item.key === 'settings'),
   ].filter(Boolean).filter((item) => visibleNavItems.some((visibleItem) => visibleItem.key === item.key));
-  const canShowHistory = visibleNavItems.some((item) => item.key === 'wasteLog');
-
-  if (canShowHistory && !mobileNavItems.some((item) => item.key === 'settings')) {
-    mobileNavItems.push(navItems.find((item) => item.key === 'wasteLog'));
-  }
 
   return (
     <>
@@ -46,13 +41,23 @@ function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, acc
             </div>
           </div>
 
-          <button
-            type="button"
-            className="quick-log-button"
-            onClick={() => onNavigate('logWaste')}
-          >
-            + Log Waste
-          </button>
+          <div className="quick-nav-actions">
+            <button
+              type="button"
+              className="quick-log-button"
+              onClick={() => onNavigate('logWaste')}
+            >
+              + Log Waste
+            </button>
+            <button
+              type="button"
+              className="quick-log-button quick-log-button--secondary"
+              onClick={() => onNavigate('wasteLog')}
+            >
+              Waste Log
+              {wasteCount > 0 && <span className="nav-count">{wasteCount}</span>}
+            </button>
+          </div>
         </div>
 
         <div className={`operator-chip${accessProfile?.hasOperator ? '' : ' is-muted'}`}>
