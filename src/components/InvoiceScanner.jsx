@@ -6,7 +6,6 @@ import {
   calculateVatValues,
   createInvoiceKey,
   getBaseUnitInfo,
-  getIngredientMatch,
   getLinkedMenuItemsForIngredient,
   normalizeInvoiceUnit,
   roundMoney,
@@ -30,6 +29,14 @@ import {
   getLatestPriceChange,
   normalizeIngredientRecord,
 } from '../utils/ingredientIntelligence';
+import {
+  buildInvoiceIngredientPricing,
+  getPriceChangeFromBaseCost,
+  matchMasterIngredient,
+  normalizeMasterIngredientName,
+  normalizeMasterIngredientRecord,
+  uniqueMasterStrings,
+} from '../utils/masterIngredients';
 import { DEFAULT_PAGE_SIZE, getVisiblePage } from '../utils/listPerformance';
 import { getManagerApiHeaders } from '../utils/apiHeaders';
 
@@ -223,46 +230,73 @@ const createIngredientRows = ({ lineItems, matches, newIngredientDrafts, supplie
   lineItems.map((lineItem) => {
     const match = matches.get(lineItem.id);
     const draft = newIngredientDrafts[lineItem.id];
-    const ingredient = match?.ingredient || null;
+    const ingredient = normalizeMasterIngredientRecord(match?.ingredient || draft || {
+      name: lineItem.itemName,
+      rawName: lineItem.itemName,
+      baseUnit: lineItem.baseUnit || lineItem.unit,
+    });
     const ingredientName = ingredient?.name || draft?.name || lineItem.itemName;
     const ingredientId = ingredient?.id || draft?.id || createInvoiceKey(ingredientName);
-    const previousPrice = Number(ingredient?.lastPriceExVAT || 0);
-    const nextUnitPriceExVAT = Number(lineItem.unitPriceExVAT || lineItem.unitPrice || 0);
+    const pricing = buildInvoiceIngredientPricing(lineItem, {});
+    const previousPrice = Number(ingredient?.lastPriceExVAT || ingredient?.lastInvoicePrice || 0);
+    const previousCostPerBaseUnit = Number(ingredient?.latestCostPerBaseUnit || ingredient?.costPerBaseUnitExVAT || 0);
     const inferredLinks = getLinkedMenuItemsForIngredient(ingredientName, menuItems);
     const linkedMenuItemIds = [
       ...(Array.isArray(ingredient?.linkedMenuItemIds) ? ingredient.linkedMenuItemIds : []),
       ...(Array.isArray(draft?.linkedMenuItemIds) ? draft.linkedMenuItemIds : []),
       ...inferredLinks.map(({ menuItem }) => menuItem.id || menuItem.key).filter(Boolean),
     ].filter((value, index, values) => value && values.indexOf(value) === index);
-    const changePercent = previousPrice > 0
-      ? roundMoney(((nextUnitPriceExVAT - previousPrice) / previousPrice) * 100)
-      : 0;
+    const changePercent = getPriceChangeFromBaseCost(previousCostPerBaseUnit, pricing.costPerBaseUnit);
+    const needsReview = Boolean(
+      match?.needsReview
+      || lineItem.needsReview
+      || !pricing.canConvert
+      || (previousCostPerBaseUnit > 0 && Math.abs(changePercent) >= 50)
+    );
+    const normalizedRawName = normalizeMasterIngredientName(lineItem.itemName);
 
     return {
       lineItemId: lineItem.id,
       ingredientId,
+      matchedIngredientId: ingredientId,
       ingredientName,
+      canonicalName: ingredient?.canonicalName || ingredientName,
+      rawName: lineItem.itemName,
+      normalizedRawName,
+      aliases: uniqueMasterStrings([
+        ingredient?.aliases,
+        lineItem.itemName,
+        normalizedRawName,
+      ]),
       category: ingredient?.category || draft?.category || 'Other',
-      unit: lineItem.baseUnit || lineItem.unit || ingredient?.unit || 'each',
+      unit: lineItem.unit || ingredient?.unit || 'each',
       priceUnit: lineItem.unit || ingredient?.unit || 'each',
+      quantity: lineItem.quantity,
       invoiceQuantity: lineItem.quantity,
       invoiceUnit: lineItem.unit || 'each',
-      baseQuantity: lineItem.baseQuantity,
-      baseUnit: lineItem.baseUnit,
+      convertedQuantity: pricing.convertedQuantity,
+      baseQuantity: pricing.convertedQuantity,
+      baseUnit: pricing.baseUnit,
+      totalPrice: pricing.totalPrice,
       parLevel: Number(draft?.parLevel ?? ingredient?.parLevel ?? 0) || 0,
       reorderPoint: Number(draft?.reorderPoint ?? ingredient?.reorderPoint ?? 0) || 0,
       preferredSupplier: draft?.preferredSupplier || ingredient?.preferredSupplier || supplierName,
       linkedMenuItemIds,
       linkedRecipeNames: inferredLinks.map(({ menuItem }) => menuItem.name).filter(Boolean),
       matchScore: Number(match?.score || 0),
+      matchConfidence: Number(match?.matchConfidence ?? match?.score ?? 0),
+      matchType: match?.matchType || match?.source || 'manual_required',
+      needsReview,
       priceExVAT: lineItem.priceExVAT,
       priceIncVAT: lineItem.priceIncVAT,
       unitPriceExVAT: lineItem.unitPriceExVAT,
       unitPriceIncVAT: lineItem.unitPriceIncVAT,
-      costPerBaseUnitExVAT: lineItem.costPerBaseUnitExVAT,
+      costPerBaseUnit: pricing.costPerBaseUnit,
+      costPerBaseUnitExVAT: pricing.costPerBaseUnit,
       previousPriceExVAT: previousPrice,
+      previousCostPerBaseUnit,
       priceChangePercent: changePercent,
-      priceDirection: previousPrice <= 0 ? 'new' : changePercent > 0 ? 'up' : changePercent < 0 ? 'down' : 'flat',
+      priceDirection: previousCostPerBaseUnit <= 0 ? 'new' : changePercent > 0 ? 'up' : changePercent < 0 ? 'down' : 'flat',
     };
   })
 );
@@ -341,7 +375,7 @@ function InvoiceScanner({
     const lookup = new Map();
 
     lineItems.forEach((lineItem) => {
-      lookup.set(lineItem.id, getIngredientMatch(lineItem.itemName, workspace.ingredients));
+      lookup.set(lineItem.id, matchMasterIngredient(lineItem.itemName, workspace.ingredients));
     });
 
     return lookup;
@@ -353,7 +387,7 @@ function InvoiceScanner({
       const manualLink = manualIngredientLinks[lineItem.id];
 
       if (manualLink === '__new__') {
-        lookup.set(lineItem.id, { ingredient: null, score: 0, source: 'manual-new' });
+        lookup.set(lineItem.id, { ingredient: null, score: 0, matchConfidence: 0, matchType: 'manual_new', source: 'manual-new', needsReview: false });
         return;
       }
 
@@ -361,7 +395,7 @@ function InvoiceScanner({
         const ingredient = workspace.ingredients.find((item) => item.id === manualLink);
 
         lookup.set(lineItem.id, ingredient
-          ? { ingredient, score: 1, source: 'manual' }
+          ? { ingredient, score: 1, matchConfidence: 1, matchType: 'manual', source: 'manual', needsReview: false }
           : autoMatches.get(lineItem.id) || { ingredient: null, score: 0 });
         return;
       }
@@ -672,8 +706,8 @@ function InvoiceScanner({
   }, [filteredStockMovements]);
   const ingredientSummary = useMemo(() => ({
     total: workspace.ingredients.length,
-    priced: workspace.ingredients.filter((ingredient) => Number(ingredient.lastPriceExVAT || ingredient.latestCost || 0) > 0).length,
-    missingCost: workspace.ingredients.filter((ingredient) => Number(ingredient.lastPriceExVAT || ingredient.latestCost || 0) <= 0).length,
+    priced: workspace.ingredients.filter((ingredient) => Number(ingredient.latestCostPerBaseUnit || ingredient.costPerBaseUnitExVAT || ingredient.lastPriceExVAT || ingredient.latestCost || 0) > 0).length,
+    missingCost: workspace.ingredients.filter((ingredient) => Number(ingredient.latestCostPerBaseUnit || ingredient.costPerBaseUnitExVAT || ingredient.lastPriceExVAT || ingredient.latestCost || 0) <= 0).length,
     newThisMonth: workspace.ingredients.filter((ingredient) => {
       const date = ingredient.lastInvoiceDate ? new Date(ingredient.lastInvoiceDate) : null;
       const now = new Date();
@@ -702,8 +736,8 @@ function InvoiceScanner({
   const priceJumpCount = useMemo(() => (
     lineItems.filter((lineItem) => {
       const match = matches.get(lineItem.id);
-      const previousPrice = Number(match?.ingredient?.lastPriceExVAT || 0);
-      const nextPrice = Number(lineItem.unitPriceExVAT || lineItem.unitPrice || 0);
+      const previousPrice = Number(match?.ingredient?.latestCostPerBaseUnit || match?.ingredient?.costPerBaseUnitExVAT || 0);
+      const nextPrice = buildInvoiceIngredientPricing(lineItem).costPerBaseUnit;
 
       return match?.ingredient && previousPrice > 0 && ((nextPrice - previousPrice) / previousPrice) * 100 > 10;
     }).length
@@ -851,6 +885,23 @@ function InvoiceScanner({
     });
     setConfirmedInvoice(null);
     setStockUpdates([]);
+  };
+
+  const confirmSuggestedIngredientMatch = (lineItem) => {
+    const match = autoMatches.get(lineItem.id);
+
+    if (!match?.ingredient?.id) {
+      setMessage('Choose or create an ingredient before confirming this line.');
+      return;
+    }
+
+    setManualIngredientLinks((currentLinks) => ({
+      ...currentLinks,
+      [lineItem.id]: match.ingredient.id,
+    }));
+    setConfirmedInvoice(null);
+    setStockUpdates([]);
+    setMessage(`${lineItem.itemName} will be saved as an alias for ${match.ingredient.name || match.ingredient.canonicalName}.`);
   };
 
   const clearParsedLines = () => {
@@ -1148,6 +1199,7 @@ function InvoiceScanner({
 
   const openNewIngredientDrawer = (lineItem) => {
     const existingDraft = newIngredientDrafts[lineItem.id];
+    const pricing = buildInvoiceIngredientPricing(lineItem);
 
     setNewIngredientDrafts((currentDrafts) => ({
       ...currentDrafts,
@@ -1156,6 +1208,9 @@ function InvoiceScanner({
         name: existingDraft?.name || lineItem.itemName,
         category: existingDraft?.category || 'Other',
         unit: existingDraft?.unit || lineItem.unit || lineItem.baseUnit || 'each',
+        baseUnit: existingDraft?.baseUnit || pricing.baseUnit || lineItem.baseUnit || lineItem.unit || 'each',
+        latestCostPerBaseUnit: existingDraft?.latestCostPerBaseUnit || pricing.costPerBaseUnit || 0,
+        aliases: existingDraft?.aliases || uniqueMasterStrings([lineItem.itemName, normalizeMasterIngredientName(lineItem.itemName)]),
         parLevel: existingDraft?.parLevel || '',
         reorderPoint: existingDraft?.reorderPoint || '',
         preferredSupplier: existingDraft?.preferredSupplier || supplierName,
@@ -1464,8 +1519,8 @@ function InvoiceScanner({
 
   const renderPriceBadge = (lineItem) => {
     const match = matches.get(lineItem.id);
-    const previousPrice = Number(match?.ingredient?.lastPriceExVAT || 0);
-    const nextPrice = Number(lineItem.unitPriceExVAT || lineItem.unitPrice || 0);
+    const previousPrice = Number(match?.ingredient?.latestCostPerBaseUnit || match?.ingredient?.costPerBaseUnitExVAT || 0);
+    const nextPrice = buildInvoiceIngredientPricing(lineItem).costPerBaseUnit;
 
     if (!match?.ingredient || previousPrice <= 0) {
       return <span className="badge is-blue">New</span>;
@@ -1893,6 +1948,7 @@ function InvoiceScanner({
                   </div>
                   {visibleLinePage.records.map((lineItem) => {
                     const match = matches.get(lineItem.id);
+                    const linePricing = buildInvoiceIngredientPricing(lineItem);
                     const priceHistory = match?.ingredient?.priceHistory || [];
                     const sparklineData = [
                       ...priceHistory.map((history) => ({ price: Number(history.priceExVAT || 0) })),
@@ -1966,8 +2022,21 @@ function InvoiceScanner({
                           {match?.ingredient ? (
                             <>
                               <span className="badge is-green">{match.ingredient.name}</span>
+                              <span className={match.needsReview ? 'badge is-yellow' : 'badge'}>
+                                {Math.round(Number(match.matchConfidence ?? match.score ?? 0) * 100)}% {String(match.matchType || 'match').replace(/_/g, ' ')}
+                              </span>
+                              {match.needsReview && <span className="badge is-yellow">Review</span>}
                               {match.source === 'manual' && <span className="badge is-blue">Manual link</span>}
+                              {!manualIngredientLinks[lineItem.id] && match.needsReview && (
+                                <button type="button" className="ghost-button compact-action" onClick={() => confirmSuggestedIngredientMatch(lineItem)}>
+                                  Confirm match
+                                </button>
+                              )}
                               {renderPriceBadge(lineItem)}
+                              <span className="small-text">
+                                {linePricing.convertedQuantity} {linePricing.baseUnit} at {formatUnitMoney(linePricing.costPerBaseUnit)} / {linePricing.baseUnit}
+                              </span>
+                              {!linePricing.canConvert && <span className="badge is-yellow">Package count needed</span>}
                               {sparklineData.length > 1 && (
                                 <div className="invoice-sparkline">
                                   <ResponsiveContainer width="100%" height={34}>
@@ -2232,7 +2301,7 @@ function InvoiceScanner({
               ) : visibleIngredientPage.records.map((ingredient) => {
                 const normalizedIngredient = normalizeIngredientRecord(ingredient);
                 const priceChange = getLatestPriceChange(ingredient);
-                const catalogRecord = itemPriceCatalog?.[createItemPriceKey(ingredient.name)];
+                const catalogRecord = itemPriceCatalog?.[ingredient.id] || itemPriceCatalog?.[createItemPriceKey(ingredient.name)];
                 const priceHistory = Array.isArray(ingredient.priceHistory) ? ingredient.priceHistory : [];
                 const filteredPriceHistory = priceHistory
                   .filter((history) => (
@@ -2244,7 +2313,7 @@ function InvoiceScanner({
                 const historyChartData = filteredPriceHistory
                   .map((history) => ({
                     date: history.date || history.createdAt || '',
-                    price: Number(history.priceExVAT ?? history.price ?? 0),
+                    price: Number(history.costPerBaseUnit ?? history.costPerBaseUnitExVAT ?? history.priceExVAT ?? history.price ?? 0),
                   }))
                   .filter((history) => Number.isFinite(history.price) && history.price > 0);
 
@@ -2260,9 +2329,9 @@ function InvoiceScanner({
                       <span className="badge is-blue">
                         {formatMoney(ingredient.lastPriceExVAT)} / {ingredient.lastUnit || ingredient.unit || 'each'} ex
                       </span>
-                      {Number(ingredient.costPerBaseUnitExVAT || 0) > 0 && (
+                      {Number(ingredient.latestCostPerBaseUnit || ingredient.costPerBaseUnitExVAT || 0) > 0 && (
                         <span className="badge">
-                          {formatUnitMoney(ingredient.costPerBaseUnitExVAT)} / {ingredient.baseUnit}
+                          {formatUnitMoney(ingredient.latestCostPerBaseUnit || ingredient.costPerBaseUnitExVAT)} / {ingredient.baseUnit}
                         </span>
                       )}
                       {catalogRecord && (
@@ -2271,7 +2340,7 @@ function InvoiceScanner({
                         </span>
                       )}
                       <span className="badge">{historyCount} price{historyCount === 1 ? '' : 's'}</span>
-                      {Number(normalizedIngredient?.latestCost || 0) <= 0 && <span className="badge is-red">Missing cost</span>}
+                      {Number(normalizedIngredient?.latestCostPerBaseUnit || normalizedIngredient?.latestCost || 0) <= 0 && <span className="badge is-red">Missing cost</span>}
                       {priceChange.significant && (
                         <span className={priceChange.direction === 'up' ? 'badge is-red' : 'badge is-green'}>
                           {priceChange.direction === 'up' ? '+' : ''}{formatPercent(priceChange.changePercent)}
@@ -2294,7 +2363,10 @@ function InvoiceScanner({
                           {filteredPriceHistory.slice().reverse().map((history) => (
                             <div key={history.id || `${history.invoiceId}-${history.date}-${history.priceExVAT}`} className="ingredient-history-row">
                               <span>{history.date || 'No date'}</span>
-                              <strong>{formatMoney(history.priceExVAT ?? history.price)}</strong>
+                              <strong>
+                                {formatUnitMoney(history.costPerBaseUnit ?? history.costPerBaseUnitExVAT ?? history.priceExVAT ?? history.price)}
+                                {history.baseUnit ? ` / ${history.baseUnit}` : ''}
+                              </strong>
                               <span>{history.supplier || history.supplierName || 'Unknown supplier'}</span>
                               <span>{history.unit || history.priceUnit || ingredient.lastUnit || ingredient.unit || 'each'}</span>
                             </div>

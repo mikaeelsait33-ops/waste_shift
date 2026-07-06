@@ -185,8 +185,14 @@ const recalculateRecipesFromPriceCatalog = (recipeMap, itemPriceCatalog, updated
     const nextIngredients = ingredients.map((ingredient) => {
       const calculatedCost = calculateRecipeIngredientCost({ ingredient, itemPriceCatalog });
       const ingredientKey = createItemPriceKey(ingredient?.name);
+      const linkedIngredientKey = String(ingredient?.ingredientId || ingredient?.priceCatalogKey || '').trim();
       const affectedByInvoice = calculatedCost.source === 'catalog'
-        && (updatedKeySet.has(calculatedCost.priceCatalogKey) || updatedKeySet.has(ingredientKey));
+        && (
+          updatedKeySet.has(calculatedCost.priceCatalogKey)
+          || updatedKeySet.has(calculatedCost.ingredientId)
+          || updatedKeySet.has(linkedIngredientKey)
+          || updatedKeySet.has(ingredientKey)
+        );
 
       if (!affectedByInvoice) {
         return { ...ingredient };
@@ -198,6 +204,7 @@ const recalculateRecipesFromPriceCatalog = (recipeMap, itemPriceCatalog, updated
         ...ingredient,
         cost: nextCost,
         costSource: 'catalog',
+        ingredientId: calculatedCost.ingredientId || linkedIngredientKey,
         priceCatalogKey: calculatedCost.priceCatalogKey,
         pricePerUnit: calculatedCost.pricePerUnit,
         priceUnit: calculatedCost.priceUnit,
@@ -423,6 +430,8 @@ const createRecipeMapFromFirestoreMenuItems = (firestoreMenuItems) => (
       ingredients: (Array.isArray(item.components) ? item.components : []).map((component, index) => {
         const normalizedIngredient = normalizeRecipeIngredient({
           ...component,
+          ingredientId: component.ingredientId || component.priceCatalogKey || '',
+          priceCatalogKey: component.priceCatalogKey || component.ingredientId || '',
           quantity: component.quantity || component.quantityLabel || '',
           unit: component.unit || component.quantityUnit || '',
           cost: roundCurrency(component.cost),
@@ -435,6 +444,9 @@ const createRecipeMapFromFirestoreMenuItems = (firestoreMenuItems) => (
           cost: roundCurrency(component.cost),
           costPerBaseUnit: component.costPerBaseUnit ?? null,
           baseUnit: component.baseUnit || '',
+          priceCatalogKey: component.priceCatalogKey || component.ingredientId || '',
+          ingredientId: component.ingredientId || component.priceCatalogKey || '',
+          displayName: component.displayName || normalizedIngredient.displayName || normalizedIngredient.name,
         };
       }),
     };
@@ -2119,7 +2131,9 @@ function App() {
       changedRecipes.forEach(([key, recipe]) => {
         const components = (Array.isArray(recipe.ingredients) ? recipe.ingredients : []).map((ingredient, index) => ({
           key: ingredient.componentKey || createMenuItemKey(`${ingredient.name || 'ingredient'}-${index + 1}`),
+          ingredientId: ingredient.ingredientId || ingredient.priceCatalogKey || '',
           name: ingredient.name,
+          displayName: ingredient.displayName || ingredient.name,
           quantity: ingredient.quantity || '',
           quantityValue: ingredient.quantityValue ?? null,
           unit: ingredient.unit || '',
@@ -2462,13 +2476,16 @@ function App() {
     await Promise.all(safeItems.map(async (item) => {
       const components = item.ingredients.map((ingredient, index) => ({
         key: createMenuItemKey(`${ingredient.name}-${index}`),
+        ingredientId: ingredient.ingredientId || ingredient.priceCatalogKey || '',
         name: ingredient.name,
+        displayName: ingredient.displayName || ingredient.name,
         quantity: ingredient.quantity || '',
         quantityValue: ingredient.quantityValue ?? null,
         unit: ingredient.unit || '',
         cost: Number(ingredient.cost) || 0,
         costPerBaseUnit: ingredient.costPerBaseUnit ?? null,
         baseUnit: ingredient.baseUnit || '',
+        priceCatalogKey: ingredient.priceCatalogKey || ingredient.ingredientId || '',
       }));
       const totalCost = roundCurrency(components.reduce((sum, component) => sum + component.cost, 0));
 
@@ -2668,13 +2685,16 @@ function App() {
     const components = buildRecipeIngredientBreakdown(recipeObject, 1, itemPriceCatalog)
       .map((ingredient) => ({
         key: ingredient.componentKey,
+        ingredientId: ingredient.ingredientId || ingredient.priceCatalogKey || '',
         name: ingredient.name,
+        displayName: ingredient.displayName || ingredient.name,
         quantity: ingredient.quantity || '',
         quantityValue: ingredient.quantityValue ?? null,
         unit: ingredient.unit || '',
         cost: Number(ingredient.cost) || 0,
         costPerBaseUnit: ingredient.costPerBaseUnit ?? null,
         baseUnit: ingredient.baseUnit || '',
+        priceCatalogKey: ingredient.priceCatalogKey || ingredient.ingredientId || '',
       }));
     const totalCost = components.reduce((sum, component) => sum + component.cost, 0);
 

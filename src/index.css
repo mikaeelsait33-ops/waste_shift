@@ -1081,7 +1081,7 @@ button:disabled {
 
 .recipe-ingredient-grid {
   display: grid;
-  grid-template-columns: minmax(180px, 1.4fr) minmax(110px, 0.8fr) minmax(110px, 0.8fr) minmax(150px, 1fr) 32px;
+  grid-template-columns: minmax(170px, 1.2fr) minmax(170px, 1.2fr) minmax(100px, 0.7fr) minmax(105px, 0.7fr) minmax(140px, 0.9fr) 32px;
   gap: 10px;
   align-items: center;
 }

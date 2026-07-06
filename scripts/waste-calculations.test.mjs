@@ -234,6 +234,7 @@ assert.deepEqual(
     cost: 14.95,
     baseCost: 14.95,
     source: 'catalog',
+    ingredientId: 'tomatoes',
     priceCatalogKey: 'tomatoes',
     pricePerUnit: 29.9,
     priceUnit: 'kg',

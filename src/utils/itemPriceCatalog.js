@@ -203,6 +203,9 @@ export const normalizeRecipeIngredient = (ingredient, fallbackCategory = 'Other'
   const parsed = parseRecipeIngredientText(ingredient);
 
   return {
+    ...(ingredient?.ingredientId ? { ingredientId: String(ingredient.ingredientId).trim() } : {}),
+    ...(ingredient?.priceCatalogKey ? { priceCatalogKey: String(ingredient.priceCatalogKey).trim() } : {}),
+    displayName: String(ingredient?.displayName || parsed.name || '').trim(),
     name: parsed.name,
     quantity: parsed.quantity,
     ...(parsed.quantityValue !== null ? { quantityValue: parsed.quantityValue } : {}),
@@ -219,6 +222,7 @@ export const sanitizeItemPriceRecord = (record, fallbackKey = '') => {
 
   const name = String(record.name || '').trim();
   const key = String(record.key || fallbackKey || createItemPriceKey(name)).trim();
+  const ingredientId = String(record.ingredientId || record.matchedIngredientId || record.id || key).trim();
   const unit = normalizeItemPriceUnit(record.unit || record.priceUnit || 'each');
   const price = parsePrice(record.price ?? record.pricePerUnit ?? record.cost ?? record.latestCost ?? record.lastPriceExVAT ?? record.costPerBaseUnitExVAT);
   const baseUnit = normalizeItemPriceUnit(record.baseUnit || getBaseUnitForPriceUnit(unit));
@@ -236,7 +240,10 @@ export const sanitizeItemPriceRecord = (record, fallbackKey = '') => {
 
   return {
     key,
+    ingredientId,
     name,
+    canonicalName: String(record.canonicalName || name).trim(),
+    aliases: Array.isArray(record.aliases) ? record.aliases.map((alias) => String(alias || '').trim()).filter(Boolean) : [],
     category: String(record.category || 'Other').trim() || 'Other',
     price: roundCurrency(price),
     unit,
@@ -275,7 +282,25 @@ export const sanitizeItemPriceCatalog = (catalog) => {
 
 export const findItemPriceRecord = (catalog, itemName) => {
   const cleanCatalog = catalog && typeof catalog === 'object' && !Array.isArray(catalog) ? catalog : {};
-  return cleanCatalog[createItemPriceKey(itemName)] || null;
+  const directKey = String(itemName || '').trim();
+  const normalizedKey = createItemPriceKey(itemName);
+
+  if (cleanCatalog[directKey]) return cleanCatalog[directKey];
+  if (cleanCatalog[normalizedKey]) return cleanCatalog[normalizedKey];
+
+  return Object.values(cleanCatalog).find((record) => {
+    if (!record) return false;
+    const recordKeys = [
+      record.key,
+      record.ingredientId,
+      record.id,
+      record.name,
+      record.canonicalName,
+      ...(Array.isArray(record.aliases) ? record.aliases : []),
+    ].map(createItemPriceKey).filter(Boolean);
+
+    return recordKeys.includes(normalizedKey);
+  }) || null;
 };
 
 export const calculateItemPriceCost = ({
@@ -328,19 +353,19 @@ export const createItemPriceCatalogFromInvoice = ({
 
   return rows.reduce((catalog, row) => {
     const lineItem = items.find((item) => item.id === row?.lineItemId);
-    const name = String(row?.ingredientName || lineItem?.itemName || '').trim();
+    const name = String(row?.ingredientName || row?.canonicalName || lineItem?.itemName || '').trim();
     const unit = normalizeItemPriceUnit(row?.priceUnit || lineItem?.unit || row?.unit || 'each');
     const invoiceQuantity = Number(row?.invoiceQuantity ?? lineItem?.quantity ?? 1);
-    const linePriceExVAT = Number(row?.priceExVAT ?? lineItem?.priceExVAT ?? lineItem?.lineTotal ?? 0);
+    const linePriceExVAT = Number(row?.totalPrice ?? row?.priceExVAT ?? lineItem?.priceExVAT ?? lineItem?.lineTotal ?? 0);
     const unitPrice = Number(row?.unitPriceExVAT ?? lineItem?.unitPriceExVAT ?? lineItem?.unitPrice ?? (invoiceQuantity > 0 ? linePriceExVAT / invoiceQuantity : 0));
     const baseUnit = normalizeItemPriceUnit(row?.baseUnit || lineItem?.baseUnit || getBaseUnitForPriceUnit(unit));
     const costPerBaseUnit = getCostPerBaseUnit({
       price: unitPrice,
       unit,
       baseUnit,
-      costPerBaseUnit: row?.costPerBaseUnitExVAT ?? lineItem?.costPerBaseUnitExVAT,
+      costPerBaseUnit: row?.costPerBaseUnit ?? row?.costPerBaseUnitExVAT ?? lineItem?.costPerBaseUnitExVAT,
     });
-    const key = createItemPriceKey(name);
+    const key = String(row?.ingredientId || row?.matchedIngredientId || '').trim() || createItemPriceKey(name);
 
     if (!name || !key || !UNIT_CONVERSIONS[unit] || !Number.isFinite(unitPrice) || unitPrice <= 0) {
       return catalog;
@@ -348,7 +373,10 @@ export const createItemPriceCatalogFromInvoice = ({
 
     const record = sanitizeItemPriceRecord({
       key,
+      ingredientId: key,
       name,
+      canonicalName: row?.canonicalName || name,
+      aliases: row?.aliases,
       category: row?.category || 'Other',
       price: unitPrice,
       unit,
@@ -375,7 +403,10 @@ export const createItemPriceCatalogFromInvoice = ({
 export const calculateRecipeIngredientCost = ({ ingredient, itemPriceCatalog, multiplier = 1 }) => {
   const safeMultiplier = Number(multiplier);
   const parsedIngredient = parseRecipeIngredientText(ingredient);
-  const record = findItemPriceRecord(itemPriceCatalog, parsedIngredient.name) || findItemPriceRecord(itemPriceCatalog, ingredient?.name);
+  const record = findItemPriceRecord(itemPriceCatalog, ingredient?.ingredientId)
+    || findItemPriceRecord(itemPriceCatalog, ingredient?.priceCatalogKey)
+    || findItemPriceRecord(itemPriceCatalog, parsedIngredient.name)
+    || findItemPriceRecord(itemPriceCatalog, ingredient?.name);
   const parsedQuantity = parsedIngredient.quantityValue !== null && parsedIngredient.unit
     ? { quantity: parsedIngredient.quantityValue, unit: parsedIngredient.unit }
     : parseIngredientQuantity(ingredient?.quantity);
@@ -392,6 +423,7 @@ export const calculateRecipeIngredientCost = ({ ingredient, itemPriceCatalog, mu
         cost: calculated.cost,
         baseCost: roundCurrency(calculated.cost / safeMultiplier),
         source: 'catalog',
+        ingredientId: record.ingredientId || record.key,
         priceCatalogKey: record.key,
         pricePerUnit: record.price,
         priceUnit: record.unit,

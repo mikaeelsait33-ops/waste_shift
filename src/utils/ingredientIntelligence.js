@@ -1,19 +1,22 @@
 import { createInvoiceKey, roundMoney } from './invoiceParsing.js';
 import { calculateRecipeIngredientCost, createItemPriceKey } from './itemPriceCatalog.js';
 import { getEntryFoodCostLost } from './wasteCalculations.js';
+import { createMasterIngredientId, normalizeMasterIngredientRecord } from './masterIngredients.js';
 
 export const SIGNIFICANT_PRICE_CHANGE_PERCENT = 10;
 
 const toSafeString = (value) => String(value ?? '').trim();
 
-export const createIngredientId = (name) => createInvoiceKey(name);
+export const createIngredientId = (name) => createMasterIngredientId(name) || createInvoiceKey(name);
 
 export const normalizeIngredientRecord = (ingredient = {}) => {
-  const name = toSafeString(ingredient.name || ingredient.ingredientName);
-  const id = toSafeString(ingredient.id) || createIngredientId(name);
+  const masterIngredient = normalizeMasterIngredientRecord(ingredient);
+  const name = toSafeString(masterIngredient?.name || ingredient.name || ingredient.ingredientName);
+  const id = toSafeString(masterIngredient?.id || ingredient.id) || createIngredientId(name);
   const latestCost = roundMoney(ingredient.latestCost ?? ingredient.currentPrice ?? ingredient.lastPriceExVAT ?? ingredient.priceExVAT);
+  const latestCostPerBaseUnit = Number(masterIngredient?.latestCostPerBaseUnit || 0);
   const costUnit = toSafeString(ingredient.costUnit || ingredient.lastUnit || ingredient.unit || ingredient.defaultUnit) || 'each';
-  const defaultUnit = toSafeString(ingredient.defaultUnit || ingredient.unit || ingredient.lastUnit || ingredient.baseUnit) || costUnit;
+  const defaultUnit = toSafeString(ingredient.defaultUnit || ingredient.unit || ingredient.lastUnit || masterIngredient?.baseUnit || ingredient.baseUnit) || costUnit;
   const supplier = toSafeString(ingredient.supplier || ingredient.source || ingredient.preferredSupplier || ingredient.supplierName);
   const active = ingredient.active !== false && !ingredient.isDeleted && !ingredient.deletedAt;
 
@@ -23,8 +26,15 @@ export const normalizeIngredientRecord = (ingredient = {}) => {
 
   return {
     ...ingredient,
+    ...masterIngredient,
     id,
     name,
+    canonicalName: masterIngredient?.canonicalName || name,
+    aliases: masterIngredient?.aliases || [],
+    latestCostPerBaseUnit,
+    lastInvoicePrice: masterIngredient?.lastInvoicePrice || latestCost,
+    lastPurchaseQuantity: masterIngredient?.lastPurchaseQuantity || Number(ingredient.baseQuantity || ingredient.lastQuantity || 0),
+    lastPurchaseUnit: masterIngredient?.lastPurchaseUnit || toSafeString(ingredient.baseUnit || ingredient.lastUnit || ingredient.unit),
     category: toSafeString(ingredient.category) || 'Other',
     defaultUnit,
     latestCost,
@@ -57,12 +67,12 @@ export const findDuplicateIngredient = (ingredients, draft) => {
 
 export const getLatestPriceChange = (ingredient) => {
   const history = (Array.isArray(ingredient?.priceHistory) ? ingredient.priceHistory : [])
-    .filter((entry) => Number(entry?.priceExVAT ?? entry?.price) > 0)
+    .filter((entry) => Number(entry?.costPerBaseUnit ?? entry?.costPerBaseUnitExVAT ?? entry?.priceExVAT ?? entry?.price) > 0)
     .sort((a, b) => new Date(a.date || a.createdAt || 0) - new Date(b.date || b.createdAt || 0));
   const latest = history[history.length - 1];
   const previous = history[history.length - 2];
-  const latestCost = Number(latest?.priceExVAT ?? latest?.price ?? ingredient?.latestCost ?? ingredient?.lastPriceExVAT ?? 0);
-  const previousCost = Number(previous?.priceExVAT ?? previous?.price ?? 0);
+  const latestCost = Number(latest?.costPerBaseUnit ?? latest?.costPerBaseUnitExVAT ?? latest?.priceExVAT ?? latest?.price ?? ingredient?.latestCostPerBaseUnit ?? ingredient?.latestCost ?? ingredient?.lastPriceExVAT ?? 0);
+  const previousCost = Number(previous?.costPerBaseUnit ?? previous?.costPerBaseUnitExVAT ?? previous?.priceExVAT ?? previous?.price ?? 0);
 
   if (!latest || !previous || previousCost <= 0 || latestCost <= 0) {
     return {
@@ -141,7 +151,7 @@ export const buildCostReviewQueue = ({
   (Array.isArray(ingredients) ? ingredients : [])
     .map(normalizeIngredientRecord)
     .filter(Boolean)
-    .filter((ingredient) => ingredient.active && Number(ingredient.latestCost || 0) <= 0)
+    .filter((ingredient) => ingredient.active && Number(ingredient.latestCostPerBaseUnit || ingredient.latestCost || 0) <= 0)
     .forEach((ingredient) => {
       queue.push({
         id: `ingredient_${ingredient.id}`,

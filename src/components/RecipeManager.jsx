@@ -13,6 +13,7 @@ import {
 import MenuImportPanel from './MenuImportPanel';
 
 const createBlankIngredient = () => ({
+  ingredientId: '',
   name: '',
   quantity: '',
   cost: '',
@@ -62,11 +63,17 @@ function RecipeManager({
   const [message, setMessage] = useState('');
   const [ingredients, setIngredients] = useState([createBlankIngredient()]);
   const safeItemPriceCatalog = useMemo(() => sanitizeItemPriceCatalog(itemPriceCatalog), [itemPriceCatalog]);
+  const ingredientPriceOptions = useMemo(() => (
+    Object.values(safeItemPriceCatalog)
+      .filter((record) => record?.key && record?.name)
+      .sort((a, b) => a.name.localeCompare(b.name))
+  ), [safeItemPriceCatalog]);
   const draftIngredientTotal = getIngredientTotal(ingredients, safeItemPriceCatalog);
   const draftMenuPrice = parsePriceValue(recipePrice);
   const draftMargin = draftMenuPrice !== null ? draftMenuPrice - draftIngredientTotal : null;
   const touchedIngredientCount = ingredients.filter((ingredient) => (
-    ingredient.name.trim()
+    ingredient.ingredientId
+    || ingredient.name.trim()
     || ingredient.quantity.trim()
     || String(ingredient.cost ?? '').trim()
   )).length;
@@ -160,7 +167,8 @@ function RecipeManager({
   const compactIngredientRows = () => {
     setIngredients((currentIngredients) => {
       const compactedIngredients = currentIngredients.filter((ingredient) => (
-        ingredient.name.trim()
+        ingredient.ingredientId
+        || ingredient.name.trim()
         || ingredient.quantity.trim()
         || String(ingredient.cost ?? '').trim()
       ));
@@ -173,6 +181,7 @@ function RecipeManager({
     const currentMenuPrice = item.menuPrice ?? item.recipe?.menuPrice;
     const editableIngredients = Array.isArray(item.recipe?.ingredients) && item.recipe.ingredients.length > 0
       ? item.recipe.ingredients.map((ingredient) => ({
+        ingredientId: ingredient?.ingredientId || ingredient?.priceCatalogKey || '',
         name: ingredient?.name || '',
         quantity: ingredient?.quantity || '',
         cost: formatInputPrice(ingredient?.cost),
@@ -197,10 +206,18 @@ function RecipeManager({
     }
 
     const touchedIngredients = ingredients.filter((ingredient) => (
-      ingredient.name.trim()
+      ingredient.ingredientId
+      || ingredient.name.trim()
       || ingredient.quantity.trim()
       || String(ingredient.cost ?? '').trim()
-    ));
+    )).map((ingredient) => {
+      const linkedRecord = ingredient.ingredientId ? safeItemPriceCatalog[ingredient.ingredientId] : null;
+
+      return {
+        ...ingredient,
+        name: ingredient.name.trim() || linkedRecord?.name || '',
+      };
+    });
 
     if (touchedIngredients.some((ingredient) => !ingredient.name.trim())) {
       setMessage('Enter a name for each ingredient row you want to keep.');
@@ -216,7 +233,7 @@ function RecipeManager({
 
     const duplicateIngredientNames = new Set();
     const hasDuplicateIngredients = touchedIngredients.some((ingredient) => {
-      const ingredientName = ingredient.name.trim().toLowerCase();
+      const ingredientName = String(ingredient.ingredientId || ingredient.name).trim().toLowerCase();
 
       if (duplicateIngredientNames.has(ingredientName)) {
         return true;
@@ -234,6 +251,8 @@ function RecipeManager({
     const menuPrice = parsePriceValue(recipePrice);
     const formattedIngredients = touchedIngredients.map((ingredient) => normalizeRecipeIngredient({
       ...ingredient,
+      ingredientId: ingredient.ingredientId,
+      priceCatalogKey: ingredient.ingredientId || ingredient.priceCatalogKey,
       cost: parsePriceValue(ingredient.cost) || 0,
     }, ingredient.category || 'Produce'));
 
@@ -348,7 +367,7 @@ function RecipeManager({
               </div>
             ) : (
               ingredients.map((ingredient, index) => {
-                const catalogPrice = findItemPriceRecord(safeItemPriceCatalog, ingredient.name);
+                const catalogPrice = findItemPriceRecord(safeItemPriceCatalog, ingredient.ingredientId) || findItemPriceRecord(safeItemPriceCatalog, ingredient.name);
                 const resolvedCost = calculateRecipeIngredientCost({ ingredient, itemPriceCatalog: safeItemPriceCatalog });
 
                 return (
@@ -362,6 +381,27 @@ function RecipeManager({
                         className="input"
                         aria-label="Ingredient name"
                       />
+                      <select
+                        value={ingredient.ingredientId || ''}
+                        onChange={(e) => {
+                          const nextIngredientId = e.target.value;
+                          const selectedRecord = safeItemPriceCatalog[nextIngredientId];
+
+                          handleIngredientChange(index, 'ingredientId', nextIngredientId);
+                          if (selectedRecord && !ingredient.name.trim()) {
+                            handleIngredientChange(index, 'name', selectedRecord.name);
+                          }
+                        }}
+                        className="select"
+                        aria-label="Linked raw ingredient"
+                      >
+                        <option value="">Link ingredient</option>
+                        {ingredientPriceOptions.map((record) => (
+                          <option key={record.key} value={record.key}>
+                            {record.name}
+                          </option>
+                        ))}
+                      </select>
                       <input
                         type="text"
                         placeholder="Quantity"

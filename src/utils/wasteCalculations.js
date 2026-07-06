@@ -168,6 +168,7 @@ export const buildRecipeIngredientBreakdown = (recipe, quantity, itemPriceCatalo
       quantity: scaleQuantityLabel(ingredient?.quantity, multiplier),
       cost: resolvedCost.cost,
       costSource: resolvedCost.source,
+      ingredientId: resolvedCost.ingredientId || ingredient?.ingredientId || ingredient?.priceCatalogKey || '',
       priceCatalogKey: resolvedCost.priceCatalogKey,
       pricePerUnit: resolvedCost.pricePerUnit,
       priceUnit: resolvedCost.priceUnit,
@@ -224,6 +225,7 @@ export const calculateMenuWasteFinancials = ({
     allComponents: fullIngredients,
     selectedComponents: selectedIngredients.map((ingredient) => ({
       key: ingredient.componentKey,
+      ingredientId: ingredient.ingredientId || ingredient.priceCatalogKey || '',
       name: ingredient.name,
       cost: Number(ingredient.cost) || 0,
       quantity: ingredient.quantity || '',

@@ -7,6 +7,14 @@ import {
   getLatestPriceChange,
   normalizeIngredientRecord,
 } from '../utils/ingredientIntelligence';
+import {
+  buildInvoiceIngredientPricing,
+  createMasterIngredientId,
+  getPriceChangeFromBaseCost,
+  normalizeMasterIngredientName,
+  normalizeMasterIngredientRecord,
+  uniqueMasterStrings,
+} from '../utils/masterIngredients';
 
 const FIREBASE_CONFIG = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -163,6 +171,13 @@ const normalizeIngredient = (docData) => {
   return {
     ...docData,
     ...normalizedRecord,
+    canonicalName: normalizedRecord.canonicalName || normalizedRecord.name,
+    aliases: uniqueMasterStrings(normalizedRecord.aliases),
+    previousRawNames: uniqueMasterStrings(normalizedRecord.previousRawNames),
+    latestCostPerBaseUnit: sanitizeNumber(normalizedRecord.latestCostPerBaseUnit),
+    lastInvoicePrice: sanitizeNumber(normalizedRecord.lastInvoicePrice),
+    lastPurchaseQuantity: sanitizeNumber(normalizedRecord.lastPurchaseQuantity),
+    lastPurchaseUnit: sanitizeString(normalizedRecord.lastPurchaseUnit || normalizedRecord.baseUnit),
     unit: normalizedRecord.defaultUnit,
     parLevel: sanitizeNumber(docData?.parLevel),
     reorderPoint: sanitizeNumber(docData?.reorderPoint),
@@ -176,9 +191,9 @@ const normalizeIngredient = (docData) => {
     lastLineTotalIncVAT: sanitizeNumber(docData?.lastLineTotalIncVAT),
     lastQuantity: sanitizeNumber(docData?.lastQuantity),
     lastUnit: sanitizeString(docData?.lastUnit || docData?.unit) || 'each',
-    baseUnit: sanitizeString(docData?.baseUnit),
+    baseUnit: sanitizeString(normalizedRecord.baseUnit || docData?.baseUnit),
     baseQuantity: sanitizeNumber(docData?.baseQuantity),
-    costPerBaseUnitExVAT: sanitizeNumber(docData?.costPerBaseUnitExVAT),
+    costPerBaseUnitExVAT: sanitizeNumber(docData?.costPerBaseUnitExVAT ?? normalizedRecord.latestCostPerBaseUnit),
     lastInvoiceDate: sanitizeString(docData?.lastInvoiceDate),
     linkedMenuItemIds: uniqueStrings(docData?.linkedMenuItemIds),
     linkedRecipeNames: uniqueStrings(docData?.linkedRecipeNames),
@@ -293,6 +308,14 @@ const normalizePriceHistory = (docData) => {
     price: sanitizeNumber(docData?.price ?? docData?.priceExVAT),
     priceExVAT: sanitizeNumber(docData?.priceExVAT ?? docData?.price),
     priceIncVAT: sanitizeNumber(docData?.priceIncVAT),
+    purchaseQuantity: sanitizeNumber(docData?.purchaseQuantity ?? docData?.quantity),
+    purchaseUnit: sanitizeString(docData?.purchaseUnit ?? docData?.unit),
+    convertedQuantity: sanitizeNumber(docData?.convertedQuantity ?? docData?.baseQuantity),
+    baseUnit: sanitizeString(docData?.baseUnit),
+    totalPrice: sanitizeNumber(docData?.totalPrice ?? docData?.linePriceExVAT ?? docData?.priceExVAT),
+    costPerBaseUnit: sanitizeNumber(docData?.costPerBaseUnit ?? docData?.costPerBaseUnitExVAT),
+    previousCostPerBaseUnit: sanitizeNumber(docData?.previousCostPerBaseUnit),
+    percentageChange: sanitizeNumber(docData?.percentageChange ?? docData?.priceChangePercent),
     date,
     invoiceId: sanitizeString(docData?.invoiceId),
   };
@@ -410,6 +433,10 @@ const refreshIngredientLatestPrice = async (db, ingredientId, excludedInvoiceId 
       lastLineTotalExVAT: 0,
       lastLineTotalIncVAT: 0,
       costPerBaseUnitExVAT: 0,
+      latestCostPerBaseUnit: 0,
+      lastInvoicePrice: 0,
+      lastPurchaseQuantity: 0,
+      lastPurchaseUnit: '',
       lastInvoiceDate: '',
       updatedAt: serverTimestamp(),
     }, { merge: true });
@@ -432,9 +459,13 @@ const refreshIngredientLatestPrice = async (db, ingredientId, excludedInvoiceId 
     lastLineTotalIncVAT: roundMoney(latestHistory.linePriceIncVAT),
     lastQuantity: sanitizeNumber(latestHistory.quantity),
     lastUnit: sanitizeString(latestHistory.unit) || 'each',
-    baseQuantity: sanitizeNumber(latestHistory.baseQuantity),
+    baseQuantity: sanitizeNumber(latestHistory.convertedQuantity ?? latestHistory.baseQuantity),
     baseUnit: sanitizeString(latestHistory.baseUnit),
-    costPerBaseUnitExVAT: roundUnitPrice(latestHistory.costPerBaseUnitExVAT),
+    costPerBaseUnitExVAT: roundUnitPrice(latestHistory.costPerBaseUnit ?? latestHistory.costPerBaseUnitExVAT),
+    latestCostPerBaseUnit: roundUnitPrice(latestHistory.costPerBaseUnit ?? latestHistory.costPerBaseUnitExVAT),
+    lastInvoicePrice: roundMoney(latestHistory.totalPrice ?? latestHistory.linePriceExVAT),
+    lastPurchaseQuantity: sanitizeNumber(latestHistory.convertedQuantity ?? latestHistory.baseQuantity),
+    lastPurchaseUnit: sanitizeString(latestHistory.baseUnit),
     lastInvoiceDate: latestHistory.date,
     updatedAt: serverTimestamp(),
   }, { merge: true });
@@ -508,8 +539,9 @@ export const saveInvoiceSettings = async ({ vatRate }) => {
 
 export const saveIngredient = async (ingredientDraft) => {
   const db = await getFirestoreDb();
-  const name = sanitizeString(ingredientDraft?.name);
-  const id = sanitizeString(ingredientDraft?.id) || createInvoiceKey(name);
+  const masterDraft = normalizeMasterIngredientRecord(ingredientDraft);
+  const name = sanitizeString(masterDraft?.name || ingredientDraft?.name);
+  const id = sanitizeString(ingredientDraft?.id || masterDraft?.id) || createMasterIngredientId(name) || createInvoiceKey(name);
 
   if (!db || !name || !id) {
     return { ok: false, skipped: true };
@@ -533,12 +565,24 @@ export const saveIngredient = async (ingredientDraft) => {
   const supplierId = sanitizeString(ingredientDraft?.supplierId) || createSupplierId(supplierName);
   const latestCost = sanitizeNumber(ingredientDraft?.latestCost ?? ingredientDraft?.currentPrice ?? ingredientDraft?.lastPriceExVAT);
   const costUnit = sanitizeString(ingredientDraft?.costUnit || ingredientDraft?.unit) || 'each';
+  const latestCostPerBaseUnit = roundUnitPrice(ingredientDraft?.latestCostPerBaseUnit ?? ingredientDraft?.costPerBaseUnit ?? ingredientDraft?.costPerBaseUnitExVAT);
+  const baseUnit = sanitizeString(masterDraft?.baseUnit || ingredientDraft?.baseUnit || ingredientDraft?.unit) || costUnit;
   const payload = {
     id,
+    key: id,
     name,
+    canonicalName: sanitizeString(masterDraft?.canonicalName || name),
+    aliases: uniqueMasterStrings([
+      masterDraft?.aliases,
+      ingredientDraft?.aliases,
+      name,
+      normalizeMasterIngredientName(name),
+    ]),
+    previousRawNames: uniqueMasterStrings(ingredientDraft?.previousRawNames),
+    baseUnit,
     category: sanitizeString(ingredientDraft?.category) || 'Other',
     unit: sanitizeString(ingredientDraft?.unit) || costUnit,
-    defaultUnit: sanitizeString(ingredientDraft?.defaultUnit || ingredientDraft?.unit) || costUnit,
+    defaultUnit: sanitizeString(ingredientDraft?.defaultUnit || ingredientDraft?.unit || baseUnit) || costUnit,
     parLevel: sanitizeNumber(ingredientDraft?.parLevel),
     reorderPoint: sanitizeNumber(ingredientDraft?.reorderPoint),
     preferredSupplier: supplierName,
@@ -550,11 +594,16 @@ export const saveIngredient = async (ingredientDraft) => {
     linkedMenuItemIds: uniqueStrings(ingredientDraft?.linkedMenuItemIds),
     linkedRecipeNames: uniqueStrings(ingredientDraft?.linkedRecipeNames),
     latestCost,
+    latestCostPerBaseUnit,
+    lastInvoicePrice: sanitizeNumber(ingredientDraft?.lastInvoicePrice ?? ingredientDraft?.lastLineTotalExVAT ?? latestCost),
+    lastPurchaseQuantity: sanitizeNumber(ingredientDraft?.lastPurchaseQuantity ?? ingredientDraft?.baseQuantity ?? ingredientDraft?.lastQuantity),
+    lastPurchaseUnit: sanitizeString(ingredientDraft?.lastPurchaseUnit || ingredientDraft?.baseUnit || ingredientDraft?.lastUnit || baseUnit),
     costUnit,
     currentPrice: latestCost,
     currentPriceIncVAT: sanitizeNumber(ingredientDraft?.currentPriceIncVAT ?? ingredientDraft?.lastPriceIncVAT),
     lastPriceExVAT: sanitizeNumber(ingredientDraft?.lastPriceExVAT ?? latestCost),
     lastPriceIncVAT: sanitizeNumber(ingredientDraft?.lastPriceIncVAT),
+    costPerBaseUnitExVAT: latestCostPerBaseUnit,
     updatedAt: serverTimestamp(),
     createdAt: ingredientDraft?.createdAt || serverTimestamp(),
   };
@@ -576,8 +625,9 @@ export const saveIngredient = async (ingredientDraft) => {
 
 export const saveIngredientPriceRecord = async (priceRecord) => {
   const db = await getFirestoreDb();
-  const name = sanitizeString(priceRecord?.name);
-  const id = sanitizeString(priceRecord?.id || priceRecord?.key) || createInvoiceKey(name);
+  const masterRecord = normalizeMasterIngredientRecord(priceRecord);
+  const name = sanitizeString(masterRecord?.name || priceRecord?.name);
+  const id = sanitizeString(priceRecord?.id || priceRecord?.key || masterRecord?.id) || createMasterIngredientId(name) || createInvoiceKey(name);
 
   if (!db || !name || !id) {
     return { ok: false, skipped: true };
@@ -585,7 +635,7 @@ export const saveIngredientPriceRecord = async (priceRecord) => {
 
   const unit = sanitizeString(priceRecord?.unit || priceRecord?.priceUnit) || 'each';
   const latestCost = sanitizeNumber(priceRecord?.price ?? priceRecord?.latestCost ?? priceRecord?.lastPriceExVAT);
-  const baseUnit = sanitizeString(priceRecord?.baseUnit);
+  const baseUnit = sanitizeString(masterRecord?.baseUnit || priceRecord?.baseUnit);
   const costPerBaseUnitExVAT = sanitizeNumber(priceRecord?.costPerBaseUnit);
 
   await ensureFirebaseAuth();
@@ -594,12 +644,24 @@ export const saveIngredientPriceRecord = async (priceRecord) => {
     id,
     key: id,
     name,
+    canonicalName: sanitizeString(masterRecord?.canonicalName || name),
+    aliases: uniqueMasterStrings([
+      masterRecord?.aliases,
+      priceRecord?.aliases,
+      name,
+      normalizeMasterIngredientName(name),
+    ]),
+    previousRawNames: uniqueMasterStrings(priceRecord?.previousRawNames),
     category: sanitizeString(priceRecord?.category) || 'Other',
     unit,
     defaultUnit: baseUnit || unit,
     active: true,
     source: sanitizeString(priceRecord?.source) || 'Manual ingredient price',
     latestCost,
+    latestCostPerBaseUnit: roundUnitPrice(costPerBaseUnitExVAT),
+    lastInvoicePrice: sanitizeNumber(priceRecord?.lastInvoicePrice ?? latestCost),
+    lastPurchaseQuantity: sanitizeNumber(priceRecord?.lastPurchaseQuantity ?? 1),
+    lastPurchaseUnit: baseUnit || unit,
     costUnit: unit,
     currentPrice: latestCost,
     lastPriceExVAT: latestCost,
@@ -757,38 +819,70 @@ export const saveConfirmedInvoice = async ({
     .filter((row) => row?.ingredientId && row?.ingredientName)
     .map(async (row) => {
       const ingredientId = sanitizeString(row.ingredientId);
+      const pricing = buildInvoiceIngredientPricing({}, row);
+      const previousCostPerBaseUnit = sanitizeNumber(row.previousCostPerBaseUnit ?? row.previousCostPerBaseUnitExVAT ?? row.previousCostPerBaseUnitCost);
+      const costPerBaseUnit = roundUnitPrice(row.costPerBaseUnit ?? row.costPerBaseUnitExVAT ?? pricing.costPerBaseUnit);
+      const priceChangePercent = getPriceChangeFromBaseCost(previousCostPerBaseUnit, costPerBaseUnit) || sanitizeNumber(row.priceChangePercent);
+      const canonicalName = sanitizeString(row.canonicalName || row.ingredientName);
+      const rowAliases = uniqueMasterStrings([
+        row.aliases,
+        row.rawName,
+        row.normalizedRawName,
+        row.ingredientName,
+        canonicalName,
+      ]);
       const historyId = `${safeInvoiceDate}-${safeInvoiceId}-${row.lineItemId || ingredientId}`.replace(/[^a-z0-9_-]/gi, '_');
       const historyPayload = {
         ingredientId,
+        rawName: sanitizeString(row.rawName || row.ingredientName),
+        matchedIngredientId: sanitizeString(row.matchedIngredientId || ingredientId),
+        canonicalName,
         supplierId,
         supplier: safeSupplierName,
         date: safeInvoiceDate,
         previousCost: roundMoney(row.previousPriceExVAT),
         newCost: roundMoney(row.unitPriceExVAT ?? row.priceExVAT),
+        previousCostPerBaseUnit: roundUnitPrice(previousCostPerBaseUnit),
+        costPerBaseUnit,
+        percentageChange: roundMoney(priceChangePercent),
         changedAt: safeInvoiceDate,
         changedBy: 'Invoice review',
-        significantChange: Math.abs(Number(row.priceChangePercent || 0)) >= 10,
-        priceChangePercent: roundMoney(row.priceChangePercent),
+        significantChange: Math.abs(Number(priceChangePercent || 0)) >= 10,
+        priceChangePercent: roundMoney(priceChangePercent),
         price: roundMoney(row.unitPriceExVAT ?? row.priceExVAT),
         priceExVAT: roundMoney(row.unitPriceExVAT ?? row.priceExVAT),
         priceIncVAT: roundMoney(row.unitPriceIncVAT ?? row.priceIncVAT),
-        linePriceExVAT: roundMoney(row.priceExVAT),
+        linePriceExVAT: roundMoney(row.totalPrice ?? row.priceExVAT),
         linePriceIncVAT: roundMoney(row.priceIncVAT),
         quantity: sanitizeNumber(row.invoiceQuantity),
         unit: sanitizeString(row.invoiceUnit || row.priceUnit || row.unit) || 'each',
-        baseQuantity: sanitizeNumber(row.baseQuantity),
-        baseUnit: sanitizeString(row.baseUnit),
-        costPerBaseUnitExVAT: roundUnitPrice(row.costPerBaseUnitExVAT),
+        purchaseQuantity: sanitizeNumber(row.quantity ?? row.invoiceQuantity),
+        purchaseUnit: sanitizeString(row.unit || row.invoiceUnit || row.priceUnit) || 'each',
+        convertedQuantity: sanitizeNumber(row.convertedQuantity ?? row.baseQuantity ?? pricing.convertedQuantity),
+        baseQuantity: sanitizeNumber(row.convertedQuantity ?? row.baseQuantity ?? pricing.convertedQuantity),
+        baseUnit: sanitizeString(row.baseUnit || pricing.baseUnit),
+        totalPrice: roundMoney(row.totalPrice ?? row.priceExVAT),
+        costPerBaseUnitExVAT: costPerBaseUnit,
+        matchConfidence: sanitizeNumber(row.matchConfidence ?? row.matchScore),
+        matchType: sanitizeString(row.matchType),
+        needsReview: Boolean(row.needsReview),
         invoiceId: safeInvoiceId,
         createdAt: serverTimestamp(),
       };
 
       await setDoc(doc(db, 'ingredients', ingredientId), {
         id: ingredientId,
+        key: ingredientId,
         name: sanitizeString(row.ingredientName),
+        canonicalName,
+        aliases: rowAliases,
+        previousRawNames: uniqueMasterStrings([
+          row.previousRawNames,
+          row.rawName,
+        ]),
         category: sanitizeString(row.category) || 'Other',
         unit: sanitizeString(row.priceUnit || row.invoiceUnit || row.unit) || 'each',
-        defaultUnit: sanitizeString(row.priceUnit || row.invoiceUnit || row.unit) || 'each',
+        defaultUnit: sanitizeString(row.baseUnit || pricing.baseUnit || row.priceUnit || row.invoiceUnit || row.unit) || 'each',
         preferredSupplier: safeSupplierName,
         supplier: safeSupplierName,
         source: safeSupplierName,
@@ -798,18 +892,22 @@ export const saveConfirmedInvoice = async ({
         parLevel: sanitizeNumber(row.parLevel),
         reorderPoint: sanitizeNumber(row.reorderPoint),
         latestCost: roundMoney(row.unitPriceExVAT ?? row.priceExVAT),
+        latestCostPerBaseUnit: costPerBaseUnit,
+        lastInvoicePrice: roundMoney(row.totalPrice ?? row.priceExVAT),
+        lastPurchaseQuantity: sanitizeNumber(row.convertedQuantity ?? row.baseQuantity ?? pricing.convertedQuantity),
+        lastPurchaseUnit: sanitizeString(row.baseUnit || pricing.baseUnit),
         costUnit: sanitizeString(row.invoiceUnit || row.priceUnit || row.unit) || 'each',
         currentPrice: roundMoney(row.unitPriceExVAT ?? row.priceExVAT),
         currentPriceIncVAT: roundMoney(row.unitPriceIncVAT ?? row.priceIncVAT),
         lastPriceExVAT: roundMoney(row.unitPriceExVAT ?? row.priceExVAT),
         lastPriceIncVAT: roundMoney(row.unitPriceIncVAT ?? row.priceIncVAT),
-        lastLineTotalExVAT: roundMoney(row.priceExVAT),
+        lastLineTotalExVAT: roundMoney(row.totalPrice ?? row.priceExVAT),
         lastLineTotalIncVAT: roundMoney(row.priceIncVAT),
         lastQuantity: sanitizeNumber(row.invoiceQuantity),
         lastUnit: sanitizeString(row.invoiceUnit || row.priceUnit || row.unit) || 'each',
-        baseQuantity: sanitizeNumber(row.baseQuantity),
-        baseUnit: sanitizeString(row.baseUnit),
-        costPerBaseUnitExVAT: roundUnitPrice(row.costPerBaseUnitExVAT),
+        baseQuantity: sanitizeNumber(row.convertedQuantity ?? row.baseQuantity ?? pricing.convertedQuantity),
+        baseUnit: sanitizeString(row.baseUnit || pricing.baseUnit),
+        costPerBaseUnitExVAT: costPerBaseUnit,
         linkedMenuItemIds: uniqueStrings(row.linkedMenuItemIds),
         linkedRecipeNames: uniqueStrings(row.linkedRecipeNames),
         lastInvoiceDate: safeInvoiceDate,
