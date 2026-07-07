@@ -882,6 +882,7 @@ function Settings({
             onRemoveCustomMenuItem={onRemoveCustomMenuItem}
             onRestoreMenuItem={onRestoreMenuItem}
             onImportMenuItems={onImportMenuItems}
+            onCreateCatalogItem={onSaveItemPrice}
             activeStaffMember={activeStaffMember}
           />
         </>

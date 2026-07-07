@@ -52,6 +52,14 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /recipes/{recipeId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && request.resource.data.name is string
+        && request.resource.data.ingredients is list;
+      allow delete: if false;
+    }
+
     match /wasteEntries/{entryId} {
       allow read: if signedIn();
       allow create, update: if signedIn()
@@ -92,7 +100,7 @@ service cloud.firestore {
     }
 
     match /priceHistory/{historyId} {
-      allow read: if signedIn();
+  allow read: if signedIn();
       allow create, update: if signedIn()
         && request.resource.data.ingredientId is string
         && request.resource.data.supplierId is string
@@ -152,3 +160,4 @@ service cloud.firestore {
     }
   }
 }
+    

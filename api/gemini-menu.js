@@ -12,34 +12,34 @@ const ALLOWED_MIME_TYPES = new Set([
 const RESPONSE_SCHEMA = {
   type: 'OBJECT',
   properties: {
-    items: {
+    dishes: {
       type: 'ARRAY',
       items: {
         type: 'OBJECT',
         properties: {
           name: { type: 'STRING' },
           category: { type: 'STRING' },
-          sellingPrice: { type: 'NUMBER' },
-          description: { type: 'STRING' },
-          portion: { type: 'STRING' },
-          components: {
+          ingredients: {
             type: 'ARRAY',
             items: {
               type: 'OBJECT',
               properties: {
                 name: { type: 'STRING' },
-                cost: { type: 'NUMBER' },
+                quantity: { type: 'NUMBER' },
+                unit: { type: 'STRING' },
               },
-              required: ['name'],
+              required: ['name', 'quantity', 'unit'],
             },
           },
+          instructions: { type: 'STRING' },
+          sellingPrice: { type: 'NUMBER' },
           confidence: { type: 'NUMBER' },
           warnings: {
             type: 'ARRAY',
             items: { type: 'STRING' },
           },
         },
-        required: ['name', 'confidence'],
+        required: ['name', 'category', 'ingredients'],
       },
     },
     warnings: {
@@ -47,7 +47,7 @@ const RESPONSE_SCHEMA = {
       items: { type: 'STRING' },
     },
   },
-  required: ['items'],
+  required: ['dishes'],
 };
 
 export const config = {
@@ -111,8 +111,13 @@ const normalizePrice = (value) => {
   return Number.isFinite(number) && number >= 0 ? Math.round(number * 100) / 100 : null;
 };
 
-export const normalizeGeminiMenuPayload = (payload) => ({
-  items: (Array.isArray(payload?.items) ? payload.items : [])
+export const normalizeGeminiMenuPayload = (payload) => {
+  const rawDishes = Array.isArray(payload?.dishes)
+    ? payload.dishes
+    : Array.isArray(payload?.items)
+      ? payload.items
+      : [];
+  const dishes = rawDishes
     .map((item) => {
       const name = String(item?.name || '').trim();
 
@@ -124,14 +129,16 @@ export const normalizeGeminiMenuPayload = (payload) => ({
         name,
         category: String(item?.category || '').trim(),
         sellingPrice: normalizePrice(item?.sellingPrice),
-        description: String(item?.description || '').trim(),
-        portion: String(item?.portion || '').trim(),
-        components: (Array.isArray(item?.components) ? item.components : [])
-          .map((component) => ({
-            name: String(component?.name || '').trim(),
-            cost: normalizePrice(component?.cost) || 0,
+        instructions: String(item?.instructions || item?.description || '').trim(),
+        ingredients: (Array.isArray(item?.ingredients) ? item.ingredients : Array.isArray(item?.components) ? item.components : [])
+          .map((ingredient) => ({
+            name: String(ingredient?.name || ingredient?.ingredientName || '').trim(),
+            quantity: Number.isFinite(Number(ingredient?.quantity)) && Number(ingredient.quantity) > 0
+              ? Number(ingredient.quantity)
+              : null,
+            unit: String(ingredient?.unit || '').trim(),
           }))
-          .filter((component) => component.name),
+          .filter((ingredient) => ingredient.name),
         confidence: Math.max(0, Math.min(1, Number(item?.confidence) || 0)),
         warnings: Array.isArray(item?.warnings)
           ? item.warnings.map((warning) => String(warning || '').trim()).filter(Boolean)
@@ -139,18 +146,39 @@ export const normalizeGeminiMenuPayload = (payload) => ({
         source: 'gemini',
       };
     })
-    .filter(Boolean),
-  warnings: Array.isArray(payload?.warnings)
+    .filter(Boolean);
+
+  return {
+    dishes,
+    items: dishes.map((dish) => ({
+      name: dish.name,
+      category: dish.category,
+      sellingPrice: dish.sellingPrice,
+      description: dish.instructions,
+      components: dish.ingredients.map((ingredient) => ({
+        name: ingredient.name,
+        quantity: ingredient.quantity,
+        unit: ingredient.unit,
+      })),
+      confidence: dish.confidence,
+      warnings: dish.warnings,
+      source: dish.source,
+    })),
+    warnings: Array.isArray(payload?.warnings)
     ? payload.warnings.map((warning) => String(warning || '').trim()).filter(Boolean)
     : [],
-});
+  };
+};
 
 const createGeminiParts = ({ text, file }) => {
   const parts = [{
-    text: `Extract restaurant menu items for WasteShift.
-Return JSON only. Use ZAR prices when visible.
-Fields per item: name, category, sellingPrice, description, portion, components, confidence, warnings.
-Do not invent prices or ingredients. If unclear, use warnings and lower confidence.
+    text: `Extract restaurant recipes from this restaurant menu for WasteShift.
+Return strict JSON only. The top-level shape must be {"dishes":[...],"warnings":[]}.
+Each dish must include: name, category, ingredients, optional instructions, optional sellingPrice, confidence, warnings.
+Each ingredient must include: name, quantity, unit.
+Use units like g, kg, ml, l, each, doz, slice, bun, bottle, packet where visible.
+If the menu does not give exact recipe quantities, infer conservative prep quantities only when a normal kitchen portion is obvious; otherwise set quantity to 1, unit to "each", and add a warning for human review.
+Do not invent selling prices. Do not include markdown.
 Menu text:
 ${String(text || '').slice(0, 20000)}`,
   }];

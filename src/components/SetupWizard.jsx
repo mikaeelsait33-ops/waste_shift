@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import MenuImportPanel from './MenuImportPanel';
+import MenuImport from './MenuImport';
 import { createRecordId } from '../utils/ids';
 import { createMenuItemKey, parseMenuPrice } from '../utils/menuImport';
 import { createRandomPin, validatePin } from '../utils/pinAuth';
@@ -209,8 +209,10 @@ function SetupWizard({
         category: item.category,
         sellingPrice: item.sellingPrice,
         description: item.description,
+        instructions: item.instructions,
         portion: item.portion,
-        components: item.components,
+        components: item.components || item.ingredients || [],
+        ingredients: item.ingredients || item.components || [],
         source: item.source,
       });
     });
@@ -458,9 +460,10 @@ function SetupWizard({
               <input className="input" type="number" min="0" step="0.01" value={menuDraft.sellingPrice} onChange={(event) => setMenuDraft({ ...menuDraft, sellingPrice: event.target.value })} placeholder="Selling price" />
             </div>
             <button type="button" className="ghost-button" onClick={addManualMenuDraft}>Add menu item</button>
-            <MenuImportPanel
+            <MenuImport
               compact
               existingMenuItems={existingMenuItems}
+              itemPriceCatalog={{}}
               onSaveApprovedItems={saveImportedMenuItems}
             />
             {progress.menuItems.length > 0 && (
@@ -515,4 +518,3 @@ function SetupWizard({
 }
 
 export default SetupWizard;
-

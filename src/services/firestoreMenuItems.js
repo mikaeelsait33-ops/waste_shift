@@ -442,6 +442,34 @@ export const saveFirestoreMenuItem = async ({
   return { ok: true };
 };
 
+export const saveFirestoreRecipe = async ({ key, name, category = '', menuPrice = null, ingredients = [], instructions = '' }) => {
+  const db = await getFirestoreDb();
+  const safeName = String(name || '').trim();
+  const safeKey = key || createItemPriceKey(safeName);
+
+  if (!db || !safeKey || !safeName) {
+    return { ok: false, skipped: true };
+  }
+
+  const safeIngredients = (Array.isArray(ingredients) ? ingredients : [])
+    .map(sanitizeComponent)
+    .filter(Boolean);
+
+  await ensureFirebaseAuth();
+  const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
+  await setDoc(doc(db, 'recipes', safeKey), removeUndefinedValues({
+    key: safeKey,
+    name: safeName,
+    category: toSafeString(category),
+    ...(menuPrice !== null && menuPrice !== undefined ? { menuPrice: roundCurrency(Number(menuPrice) || 0) } : {}),
+    ingredients: safeIngredients,
+    instructions: toSafeString(instructions),
+    updatedAt: serverTimestamp(),
+  }), { merge: true });
+
+  return { ok: true };
+};
+
 export const archiveFirestoreMenuItem = async (key, archivedBy = 'WasteShift user') => {
   const db = await getFirestoreDb();
   const safeKey = toSafeString(key);

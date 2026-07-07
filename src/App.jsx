@@ -41,6 +41,7 @@ import {
   restoreFirestoreMenuItem,
   saveFirestoreDatabaseSnapshot,
   saveFirestoreMenuItem,
+  saveFirestoreRecipe,
   saveFirestoreWasteEntry,
 } from './services/firestoreMenuItems';
 import { deleteIngredient, loadInvoiceDashboardStats, saveIngredientPriceRecord } from './services/invoiceFirestore';
@@ -1730,7 +1731,7 @@ function App() {
     const permission = requirePermission(accessProfile, 'canManageStaff', 'remove staff');
     if (!permission.ok) {
       alert(permission.message);
-      return;
+      return { ok: false, message: permission.message };
     }
 
     const staffMember = staffList.find((member) => member.id === staffId);
@@ -2000,7 +2001,7 @@ function App() {
 
     if (!cleanedRecord) {
       alert('Enter an ingredient name, price, and unit.');
-      return;
+      return { ok: false, message: 'Enter an ingredient name, price, and unit.' };
     }
 
     const nextCatalog = {
@@ -2070,6 +2071,8 @@ function App() {
       }),
       ...prevLog,
     ].slice(0, 500));
+
+    return { ok: true, record: cleanedRecord, message: `${cleanedRecord.name} saved to the ingredient catalog.` };
   };
 
   const handleDeleteItemPrice = (itemPriceKey) => {
@@ -2484,12 +2487,15 @@ function App() {
       .map((item) => {
         const name = String(item?.name || '').trim();
         const key = item?.key || createMenuItemKey(name);
-        const menuPrice = parsePriceValue(item?.sellingPrice ?? item?.menuPrice ?? item?.price);
-        const ingredients = (Array.isArray(item?.components) ? item.components : [])
+        const rawMenuPrice = item?.sellingPrice ?? item?.menuPrice ?? item?.price;
+        const menuPrice = rawMenuPrice === null || rawMenuPrice === undefined || rawMenuPrice === ''
+          ? null
+          : parsePriceValue(rawMenuPrice);
+        const ingredients = (Array.isArray(item?.components) ? item.components : Array.isArray(item?.ingredients) ? item.ingredients : [])
           .map((component) => normalizeRecipeIngredient(component, item?.category || 'Other'))
           .filter((component) => component.name);
 
-        if (!name || !key || menuPrice === null) {
+        if (!name || !key) {
           return null;
         }
 
@@ -2499,6 +2505,7 @@ function App() {
           menuPrice,
           category: String(item?.category || '').trim(),
           description: String(item?.description || '').trim(),
+          instructions: String(item?.instructions || '').trim(),
           portion: String(item?.portion || '').trim(),
           ingredients,
         };
@@ -2519,6 +2526,7 @@ function App() {
           menuPrice: item.menuPrice,
           category: item.category,
           description: item.description,
+          instructions: item.instructions,
           portion: item.portion,
           ingredients: item.ingredients,
         };
@@ -2557,13 +2565,21 @@ function App() {
       }));
       const totalCost = roundCurrency(components.reduce((sum, component) => sum + component.cost, 0));
 
-      await saveFirestoreMenuItem({
-        key: item.key,
-        name: item.name,
-        menuPrice: item.menuPrice,
-        totalCost,
-        components,
-      });
+        await saveFirestoreMenuItem({
+          key: item.key,
+          name: item.name,
+          menuPrice: item.menuPrice,
+          totalCost,
+          components,
+        });
+        await saveFirestoreRecipe({
+          key: item.key,
+          name: item.name,
+          category: item.category,
+          menuPrice: item.menuPrice,
+          ingredients: components,
+          instructions: item.instructions,
+        });
 
       setFirestoreMenuItems(prevItems => {
         const nextItem = {
