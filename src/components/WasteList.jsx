@@ -443,22 +443,19 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile }) {
         </div>
       )}
 
-      {viewMode !== 'all' && (
-        <div className="budget-panel" style={{ marginBottom: '14px' }}>
-          <div className="budget-row">
-            <span className="small-text">
-              <strong>{visiblePage.visibleCount}</strong> of <strong>{hasActiveFilters ? filteredItems.length : totalCount}</strong> item{(hasActiveFilters ? filteredItems.length : totalCount) !== 1 ? 's' : ''} shown
-            </span>
-            <span className="price">{formatMoney(hasActiveFilters ? filteredCost : totalCost)}</span>
-          </div>
-          {hasActiveFilters && (
-            <div className="small-text">
-              Scope total: {totalCount} item{totalCount !== 1 ? 's' : ''} worth {formatMoney(totalCost)}
-            </div>
-          )}
+      <div className="budget-panel" style={{ marginBottom: '14px' }}>
+        <div className="budget-row">
+          <span className="small-text">
+            <strong>{visiblePage.visibleCount}</strong> of <strong>{hasActiveFilters ? filteredItems.length : totalCount}</strong> item{(hasActiveFilters ? filteredItems.length : totalCount) !== 1 ? 's' : ''} shown
+          </span>
+          <span className="price">{formatMoney(hasActiveFilters ? filteredCost : totalCost)}</span>
         </div>
-      )}
-
+        {hasActiveFilters && (
+          <div className="small-text">
+            Scope total: {totalCount} item{totalCount !== 1 ? 's' : ''} worth {formatMoney(totalCost)}
+          </div>
+        )}
+      </div>
       <div className="filter-row" aria-label="Waste category filter">
         {categoryFilters.map((categoryOption) => (
           <button
@@ -478,11 +475,17 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile }) {
           <p style={{ margin: 0 }}>
             {searchValue
               ? 'No items match your search.'
-              : viewMode === 'all'
+              : dateRangeFilter === 'all'
               ? entryStatusFilter === 'voided' ? 'No voided entries found under this scope.' : 'No items found under this scope.'
-              : viewMode === 'day'
-                ? 'No waste was logged on this day.'
-                : 'No waste was logged this month.'}
+              : dateRangeFilter === 'today'
+                ? 'No waste was logged today.'
+                : dateRangeFilter === 'yesterday'
+                  ? 'No waste was logged yesterday.'
+                  : dateRangeFilter === 'week'
+                    ? 'No waste was logged this week.'
+                    : dateRangeFilter === 'month'
+                      ? 'No waste was logged this month.'
+                      : 'No waste was logged in this custom range.'}
           </p>
           {hasActiveFilters && (
             <button type="button" onClick={clearFilters} className="ghost-button compact-action">

@@ -8,6 +8,7 @@ const testFiles = [
   'scripts/foundation.test.mjs',
   'scripts/setup-workflow.test.mjs',
   'scripts/shift-workflow.test.mjs',
+  'scripts/waste-log.test.mjs',
   'scripts/ingredient-intelligence.test.mjs',
   'scripts/master-ingredients.test.mjs',
   'scripts/menu-recipe-import.test.mjs',
