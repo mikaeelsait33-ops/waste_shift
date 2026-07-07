@@ -34,7 +34,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile }) {
   const [costReviewFilter, setCostReviewFilter] = useState('All');
   const [entryStatusFilter, setEntryStatusFilter] = useState('active');
   const [visibleLimit, setVisibleLimit] = useState(DEFAULT_PAGE_SIZE);
-  const [dateRangeFilter, setDateRangeFilter] = useState('today');
+  const [dateRangeFilter, setDateRangeFilter] = useState('all');
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
   const [deletedEntry, setDeletedEntry] = useState(null);
@@ -342,7 +342,7 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile }) {
         <div>
           <p className="eyebrow">Waste log</p>
           <h2 className="title">Waste Log</h2>
-          <p className="subtitle">Review today, old entries, and manager-only void history.</p>
+          <p className="subtitle">Review all active entries first, then narrow by day, week, month, status, or search.</p>
         </div>
       </div>
 
@@ -355,12 +355,12 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile }) {
           className="input"
         />
         <select value={dateRangeFilter} onChange={(e) => setDateRangeFilter(e.target.value)} className="select">
+          <option value="all">All time</option>
           <option value="today">Today</option>
           <option value="yesterday">Yesterday</option>
           <option value="week">This week</option>
           <option value="month">This month</option>
           <option value="custom">Custom range</option>
-          <option value="all">All time</option>
         </select>
         {dateRangeFilter === 'custom' && (
           <>

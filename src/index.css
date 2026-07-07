@@ -2036,6 +2036,10 @@ textarea.input {
   margin-bottom: 2px;
 }
 
+.grouped-page-controls {
+  margin-bottom: 14px;
+}
+
 .settings-page-header {
   margin-bottom: 0;
   padding-top: 2px;

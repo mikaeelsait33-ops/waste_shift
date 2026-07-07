@@ -99,6 +99,8 @@ const createSessionStaffFallback = (session) => {
 
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const InvoiceScanner = lazy(() => import('./components/InvoiceScanner'));
+const ItemPriceManager = lazy(() => import('./components/ItemPriceManager'));
+const RecipeManager = lazy(() => import('./components/RecipeManager'));
 const Reports = lazy(() => import('./components/Reports'));
 const Settings = lazy(() => import('./components/Settings'));
 const SetupWizard = lazy(() => import('./components/SetupWizard'));
@@ -609,6 +611,8 @@ const mergeStaffMembers = (baseStaffMembers, customStaffMembers) => {
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [inventoryView, setInventoryView] = useState('invoices');
+  const [menuPricingView, setMenuPricingView] = useState('recipes');
   const [serverSyncEnabled, setServerSyncEnabled] = useState(false);
   const [serverLoadComplete, setServerLoadComplete] = useState(false);
   const [serverSync, setServerSync] = useState({
@@ -3349,7 +3353,7 @@ function App() {
         onLogout={handleLogout}
       />
 
-      <main className={`app-page${activeTab === 'dashboard' || activeTab === 'storeRoom' || activeTab === 'invoices' || activeTab === 'wasteLog' || activeTab === 'reports' || activeTab === 'settings' ? ' app-page--wide' : ''}`}>
+      <main className={`app-page${['dashboard', 'inventory', 'storeRoom', 'invoices', 'menuPricing', 'wasteLog', 'reports', 'settings'].includes(activeTab) ? ' app-page--wide' : ''}`}>
         <div key={activeTab} className="page-transition">
           <ErrorBoundary key={activeTab}>
             <Suspense fallback={<PageFallback label="Loading screen" />}>
@@ -3389,6 +3393,114 @@ function App() {
                 onRestoreEntry={handleRestoreEntry}
                 accessProfile={accessProfile}
               />
+            )}
+
+            {activeTab === 'inventory' && (
+              <>
+                <div className="settings-controls grouped-page-controls">
+                  <div className="section-header settings-page-header">
+                    <div>
+                      <p className="eyebrow">Inventory</p>
+                      <h2 className="title">Invoices & Stock</h2>
+                      <p className="subtitle">Scan supplier invoices, update ingredient prices, and manage store room stock from one place.</p>
+                    </div>
+                  </div>
+                  <div className="segmented-control settings-tabs" aria-label="Inventory sections">
+                    <button
+                      type="button"
+                      onClick={() => setInventoryView('invoices')}
+                      className={`segment-button${inventoryView === 'invoices' ? ' is-active' : ''}`}
+                    >
+                      Invoices
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setInventoryView('stock')}
+                      className={`segment-button${inventoryView === 'stock' ? ' is-active' : ''}`}
+                    >
+                      Stock
+                    </button>
+                  </div>
+                </div>
+
+                {inventoryView === 'invoices' ? (
+                  <InvoiceScanner
+                    accessProfile={accessProfile}
+                    recipes={effectiveRecipes}
+                    menuItems={menuItems}
+                    itemPriceCatalog={itemPriceCatalog}
+                    inventoryMovements={inventoryMovements}
+                    onInvoiceSaved={refreshInvoiceDashboardStats}
+                    onInvoicePricesUpdated={handleInvoicePricesUpdated}
+                    onIngredientDeleted={handleInvoiceIngredientDeleted}
+                  />
+                ) : (
+                  <StoreRoom
+                    storeRoomItems={storeRoomItems}
+                    storeRoomMovements={storeRoomMovements}
+                    itemPriceCatalog={itemPriceCatalog}
+                    accessProfile={accessProfile}
+                    onSaveStoreRoomItem={handleSaveStoreRoomItem}
+                    onRecordStoreRoomMovement={handleRecordStoreRoomMovement}
+                    onDeleteStoreRoomItem={handleDeleteStoreRoomItem}
+                  />
+                )}
+              </>
+            )}
+
+            {activeTab === 'menuPricing' && (
+              <>
+                <div className="settings-controls grouped-page-controls">
+                  <div className="section-header settings-page-header">
+                    <div>
+                      <p className="eyebrow">Menu & Pricing</p>
+                      <h2 className="title">Recipes & Ingredients</h2>
+                      <p className="subtitle">Keep sellable dishes separate from raw ingredient prices and invoice-updated costs.</p>
+                    </div>
+                  </div>
+                  <div className="segmented-control settings-tabs" aria-label="Menu and pricing sections">
+                    <button
+                      type="button"
+                      onClick={() => setMenuPricingView('recipes')}
+                      className={`segment-button${menuPricingView === 'recipes' ? ' is-active' : ''}`}
+                    >
+                      Recipes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMenuPricingView('ingredients')}
+                      className={`segment-button${menuPricingView === 'ingredients' ? ' is-active' : ''}`}
+                    >
+                      Ingredients
+                    </button>
+                  </div>
+                </div>
+
+                {menuPricingView === 'recipes' ? (
+                  <RecipeManager
+                    recipes={effectiveRecipes}
+                    menuItems={menuItems}
+                    customMenuItems={customMenuItems}
+                    itemPriceCatalog={itemPriceCatalog}
+                    accessProfile={accessProfile}
+                    onAddRecipe={handleAddNewRecipe}
+                    onClearRecipes={handleClearRecipes}
+                    onSaveMenuItem={handleUpsertMenuItem}
+                    onRemoveCustomMenuItem={handleDeleteCustomMenuItem}
+                    onRestoreMenuItem={handleRestoreMenuItem}
+                    onImportMenuItems={saveApprovedMenuItems}
+                    onCreateCatalogItem={handleSaveItemPrice}
+                    activeStaffMember={activeStaffMember}
+                  />
+                ) : (
+                  <ItemPriceManager
+                    itemPriceCatalog={itemPriceCatalog}
+                    accessProfile={accessProfile}
+                    onSaveItemPrice={handleSaveItemPrice}
+                    onDeleteItemPrice={handleDeleteItemPrice}
+                  />
+                )}
+              </>
             )}
 
             {activeTab === 'storeRoom' && (

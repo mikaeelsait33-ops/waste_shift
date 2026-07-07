@@ -1,21 +1,20 @@
 const navItems = [
   { key: 'dashboard', label: 'Dashboard', shortLabel: 'Home', marker: 'D' },
   { key: 'logWaste', label: 'Log Waste', shortLabel: 'Log', marker: '+' },
-  { key: 'invoices', label: 'Invoices', shortLabel: 'Scan', marker: 'I' },
-  { key: 'storeRoom', label: 'Stock', shortLabel: 'Stock', marker: 'S' },
   { key: 'wasteLog', label: 'Waste Log', shortLabel: 'Waste', marker: 'W' },
-  { key: 'reports', label: 'Reports', shortLabel: 'Reports', marker: 'R' },
-  { key: 'settings', label: 'Settings', shortLabel: 'More', marker: 'M' },
+  { key: 'inventory', label: 'Inventory', shortLabel: 'Stock', marker: 'I' },
+  { key: 'menuPricing', label: 'Menu & Pricing', shortLabel: 'Menu', marker: 'M' },
+  { key: 'settings', label: 'Settings', shortLabel: 'More', marker: 'S' },
 ];
 
 function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, accessProfile, onLogout }) {
   const visibleNavItems = navItems.filter((item) => {
-    if (item.key === 'storeRoom' || item.key === 'invoices') {
+    if (item.key === 'inventory') {
       return accessProfile?.canViewStoreRoom;
     }
 
-    if (item.key === 'reports') {
-      return accessProfile?.canExportData || accessProfile?.canViewFinancials;
+    if (item.key === 'menuPricing') {
+      return accessProfile?.canManageMenu || accessProfile?.canViewFinancials;
     }
 
     return accessProfile?.canViewFinancials || item.key === 'logWaste' || item.key === 'wasteLog';
@@ -24,10 +23,15 @@ function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, acc
     navItems.find((item) => item.key === 'logWaste'),
     navItems.find((item) => item.key === 'wasteLog'),
     navItems.find((item) => item.key === 'dashboard'),
-    navItems.find((item) => item.key === 'invoices'),
-    navItems.find((item) => item.key === 'storeRoom'),
+    navItems.find((item) => item.key === 'inventory'),
+    navItems.find((item) => item.key === 'menuPricing'),
     navItems.find((item) => item.key === 'settings'),
   ].filter(Boolean).filter((item) => visibleNavItems.some((visibleItem) => visibleItem.key === item.key));
+  const activeGroups = {
+    inventory: ['inventory', 'invoices', 'storeRoom'],
+    menuPricing: ['menuPricing', 'ingredients', 'items'],
+  };
+  const itemIsActive = (item) => (activeGroups[item.key] || [item.key]).includes(activePage);
 
   return (
     <>
@@ -49,14 +53,6 @@ function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, acc
             >
               + Log Waste
             </button>
-            <button
-              type="button"
-              className="quick-log-button quick-log-button--secondary"
-              onClick={() => onNavigate('wasteLog')}
-            >
-              Waste Log
-              {wasteCount > 0 && <span className="nav-count">{wasteCount}</span>}
-            </button>
           </div>
         </div>
 
@@ -68,7 +64,7 @@ function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, acc
 
         <div className="nav-links" aria-label="Primary navigation">
           {visibleNavItems.map((item) => {
-            const isActive = activePage === item.key;
+            const isActive = itemIsActive(item);
 
             return (
               <button
@@ -99,7 +95,7 @@ function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, acc
 
       <nav className="bottom-nav" aria-label="Mobile navigation">
         {mobileNavItems.map((item) => {
-          const isActive = activePage === item.key;
+          const isActive = itemIsActive(item);
 
           return (
             <button
