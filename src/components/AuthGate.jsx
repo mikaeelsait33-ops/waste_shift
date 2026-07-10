@@ -115,7 +115,7 @@ function AuthGate({
                     ? 'Create the first manager profile and secure management PIN for this restaurant.'
                     : mode === 'management'
                     ? 'Enter your name and the management PIN to create or open a manager account.'
-                    : 'Choose a manager-added staff profile and enter the personal code issued in Settings.'}
+                    : 'Choose a manager-added staff profile and enter the 5 digit PIN issued in Settings.'}
                 </p>
               </div>
 
@@ -184,14 +184,14 @@ function AuthGate({
 
                 {staffLoginOptions.length === 0 && (
                   <div className="muted-box" style={{ marginBottom: 0 }}>
-                    No staff codes have been issued yet. A manager must add staff in Settings and share their code.
+                    No staff PINs have been issued yet. A manager must add staff in Settings and share their PIN.
                   </div>
                 )}
               </>
             )}
 
             <div className="field">
-              <label htmlFor="login-pin">{!authIsConfigured || mode === 'management' ? 'Management PIN' : 'Personal staff code'}</label>
+              <label htmlFor="login-pin">{!authIsConfigured || mode === 'management' ? 'Management PIN' : '5 digit staff PIN'}</label>
               <input
                 id="login-pin"
                 type="password"
@@ -199,7 +199,7 @@ function AuthGate({
                 autoComplete="current-password"
                 value={pin}
                 onChange={(event) => setPin(event.target.value)}
-                placeholder={!authIsConfigured || mode === 'management' ? 'Enter PIN' : 'Enter staff code'}
+                placeholder={!authIsConfigured || mode === 'management' ? 'Enter PIN' : 'Enter 5 digit PIN'}
                 className="input"
               />
             </div>

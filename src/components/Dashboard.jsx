@@ -7,6 +7,7 @@ import {
   getEntryFoodCostLost,
   getEntryGrossProfitLost,
   getEntryPotentialRevenueLost,
+  getRecipeIngredientTotal,
   getWasteClassificationMeta,
 } from '../utils/wasteCalculations';
 import {
@@ -29,7 +30,17 @@ const getMetricRows = (metricsObj, totalValue) => (
     }))
 );
 
-function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceStats, onNavigate }) {
+function Dashboard({
+  items,
+  budget,
+  settings,
+  staffList,
+  accessProfile,
+  invoiceStats,
+  menuItems,
+  recipes,
+  onNavigate,
+}) {
   const [timeframe, setTimeframe] = useState('week');
   const [dashboardView, setDashboardView] = useState('today');
   const [sectionDate, setSectionDate] = useState(() => {
@@ -38,10 +49,14 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
     return date;
   });
 
-  const safeItems = getActiveWasteEntries(items);
+  const safeItems = useMemo(() => getActiveWasteEntries(items), [items]);
   const canViewFinancials = Boolean(accessProfile?.canViewFinancials);
   const formatMoney = (value) => (canViewFinancials ? `R${Number(value || 0).toFixed(2)}` : 'Restricted');
   const invoiceDashboard = invoiceStats || {};
+  const safeMenuItems = useMemo(() => (Array.isArray(menuItems) ? menuItems : []), [menuItems]);
+  const safeRecipes = useMemo(() => (
+    recipes && typeof recipes === 'object' ? recipes : {}
+  ), [recipes]);
   const getItemWasteClassification = (item) => item?.wasteClassification || DEFAULT_WASTE_CLASSIFICATION;
   const metricValueClass = (isDanger = false) => (
     `metric-value${canViewFinancials && isDanger ? ' is-danger' : ''}`
@@ -145,6 +160,12 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
   });
   const todayShiftSummary = createTodayShiftSummary(safeItems, today);
   const todayLoss = todayItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0);
+  const dailyWasteStatus = todayLoss < 150
+    ? { key: 'good', label: 'Good', detail: 'Below R150' }
+    : todayLoss <= 250
+      ? { key: 'warning', label: 'Watch', detail: 'R150-R250' }
+      : { key: 'danger', label: 'High', detail: 'Over R250' };
+  const dailyWasteValueClass = `metric-value${canViewFinancials ? ` is-${dailyWasteStatus.key}` : ''}`;
   const weekStart = new Date(today);
   weekStart.setDate(weekStart.getDate() - 7);
   const weekItems = safeItems.filter((item) => parseDate(item?.date) >= weekStart);
@@ -263,6 +284,48 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
   const operationalLoss = classificationMetrics[getWasteClassificationMeta('operational').label] || 0;
   const topReasonShare = totalFinancialLoss > 0 && topReason ? Math.round((topReason[1] / totalFinancialLoss) * 100) : 0;
   const topItemShare = totalFinancialLoss > 0 && topItem ? Math.round((topItem[1] / totalFinancialLoss) * 100) : 0;
+  const topWasteRows = limitDashboardRows(getMetricRows(itemMetrics, totalFinancialLoss), 3);
+  const invoiceSpendThisWeek = Number(invoiceDashboard.totalSpendThisWeekExVAT ?? invoiceDashboard.totalSpendThisWeek ?? 0) || 0;
+  const invoiceSpendThisMonth = Number(invoiceDashboard.totalSpendThisMonthExVAT ?? invoiceDashboard.totalSpendThisMonth ?? 0) || 0;
+  const invoiceSpendTrendLabel = invoiceSpendThisWeek > 0
+    ? `${formatMoney(invoiceSpendThisWeek)} this week`
+    : invoiceSpendThisMonth > 0
+      ? `${formatMoney(invoiceSpendThisMonth)} this month`
+      : 'No invoice spend yet';
+  const invoiceSpendTrendDetail = Number(invoiceDashboard.priceIncreasesThisMonth?.length || 0) > 0
+    ? `${invoiceDashboard.priceIncreasesThisMonth.length} price increase${invoiceDashboard.priceIncreasesThisMonth.length === 1 ? '' : 's'}`
+    : invoiceDashboard.lastInvoice?.supplier
+      ? `Last: ${invoiceDashboard.lastInvoice.supplier}`
+      : 'Scan invoices to build trend';
+  const worstMarginItems = useMemo(() => (
+    safeMenuItems
+      .map((menuItem) => {
+        const key = menuItem?.key || '';
+        const recipe = safeRecipes[key];
+        const ingredients = Array.isArray(recipe?.ingredients) ? recipe.ingredients : [];
+        const sellingPrice = Number(menuItem?.menuPrice ?? recipe?.menuPrice);
+        const ingredientCost = getRecipeIngredientTotal(ingredients);
+
+        if (!key || !Number.isFinite(sellingPrice) || sellingPrice <= 0 || ingredientCost <= 0) {
+          return null;
+        }
+
+        return {
+          key,
+          name: menuItem.name || recipe?.name || key,
+          sellingPrice,
+          ingredientCost,
+          margin: sellingPrice - ingredientCost,
+          foodCostPercentage: (ingredientCost / sellingPrice) * 100,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => (
+        b.foodCostPercentage - a.foodCostPercentage
+        || a.margin - b.margin
+      ))
+      .slice(0, 3)
+  ), [safeMenuItems, safeRecipes]);
 
   const timeframeLabel = timeframe === 'all' ? 'All Time' : timeframe === 'day' ? 'Today' : `This ${timeframe}`;
   const attentionItems = [
@@ -363,6 +426,55 @@ function Dashboard({ items, budget, settings, staffList, accessProfile, invoiceS
                 </div>
               </div>
             )}
+
+            <div className="dashboard-command-grid" aria-label="Kitchen dashboard summary">
+              <div className={`metric-card metric-card--status is-${dailyWasteStatus.key}`}>
+                <span className={dailyWasteValueClass}>{formatMoney(todayLoss)}</span>
+                <span className="metric-label">Daily waste cost</span>
+                <div className="import-summary-grid">
+                  <span className={`badge is-${dailyWasteStatus.key === 'danger' ? 'red' : dailyWasteStatus.key === 'good' ? 'green' : 'yellow'}`}>
+                    {dailyWasteStatus.label}
+                  </span>
+                  <span className="badge">{dailyWasteStatus.detail}</span>
+                </div>
+              </div>
+
+              <div className="metric-card">
+                <span className="metric-value">{invoiceSpendTrendLabel}</span>
+                <span className="metric-label">Invoice spend trend</span>
+                <div className="small-text">{invoiceSpendTrendDetail}</div>
+              </div>
+
+              <div className="metric-card">
+                <span className="metric-value">{topWasteRows[0]?.label || 'No waste yet'}</span>
+                <span className="metric-label">Top waste items</span>
+                <div className="dashboard-mini-list">
+                  {topWasteRows.length === 0 ? (
+                    <span className="small-text">Log waste to rank items.</span>
+                  ) : topWasteRows.map((row) => (
+                    <div key={row.label} className="dashboard-mini-row">
+                      <span>{row.label}</span>
+                      <strong>{formatMoney(row.value)}</strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="metric-card">
+                <span className="metric-value">{worstMarginItems[0]?.name || 'No recipes'}</span>
+                <span className="metric-label">Worst cost margin</span>
+                <div className="dashboard-mini-list">
+                  {worstMarginItems.length === 0 ? (
+                    <span className="small-text">Add recipe costs to rank margins.</span>
+                  ) : worstMarginItems.map((item) => (
+                    <div key={item.key} className="dashboard-mini-row">
+                      <span>{item.name}</span>
+                      <strong>{item.foodCostPercentage.toFixed(1)}%</strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
 
             <div className="metrics-grid dashboard-action-grid">
               <div className="metric-card">

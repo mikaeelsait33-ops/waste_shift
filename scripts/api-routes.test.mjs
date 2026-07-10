@@ -43,6 +43,15 @@ const importAdminResetHandler = async () => (
   (await import(`../api/admin-reset.js?case=${importCounter++}`)).default
 );
 
+const databaseHelpers = await import(`../api/database.js?case=${importCounter++}`);
+
+assert.equal(databaseHelpers.normalizeDatabaseId('restaurant one!'), 'restaurant_one_');
+assert.equal(databaseHelpers.createDatabaseFolderPrefix('tenant_a'), 'wasteshift/databases/tenant_a/');
+assert.notEqual(
+  databaseHelpers.createDatabaseFolderPrefix('tenant_a'),
+  databaseHelpers.createDatabaseFolderPrefix('tenant_b'),
+);
+
 delete process.env.VERCEL_ENV;
 delete process.env.WASTESHIFT_MANAGER_API_SECRET;
 const databaseOpenHandler = await importDatabaseHandler();
@@ -91,6 +100,7 @@ response = await callHandler(adminResetProductionMissingSecretHandler, {
 });
 assert.equal(response.statusCode, 503);
 assert.equal(response.body.code, 'manager_api_secret_not_configured');
+assert.equal(response.headers['cache-control'], 'no-store');
 
 const databaseProductionSyncOnlyHandler = await importDatabaseHandler({ syncSecret: 'safe-test-secret' });
 
@@ -130,6 +140,14 @@ response = await callHandler(databaseProtectedHandler, {
   body: JSON.stringify({ data: { wasteItems: 'bad' } }),
 });
 assert.equal(response.statusCode, 400);
+
+response = await callHandler(databaseProtectedHandler, {
+  method: 'GET',
+  headers: { 'x-wasteshift-sync-secret': 'safe-test-secret' },
+});
+assert.equal(response.statusCode, 400);
+assert.equal(response.body.code, 'database_id_required');
+assert.equal(response.headers['cache-control'], 'no-store');
 
 delete process.env.WASTESHIFT_SYNC_SECRET;
 process.env.WASTESHIFT_MANAGER_API_SECRET = 'manager-api-secret';
@@ -226,6 +244,21 @@ assert.equal(response.statusCode, 503);
 assert.equal(response.body.code, 'manager_api_secret_not_configured');
 
 delete process.env.VERCEL_ENV;
+
+delete process.env.WASTESHIFT_MANAGER_API_SECRET;
+process.env.WASTESHIFT_SYNC_SECRET = 'safe-test-secret';
+process.env.GEMINI_API_KEY = 'test-key';
+
+response = await callHandler(menuHandler, {
+  method: 'POST',
+  headers: { 'x-wasteshift-sync-secret': 'safe-test-secret' },
+  body: JSON.stringify({ text: '' }),
+});
+assert.equal(response.statusCode, 400);
+assert.notEqual(response.body.code, 'manager_api_secret_required');
+
+delete process.env.WASTESHIFT_SYNC_SECRET;
+delete process.env.GEMINI_API_KEY;
 
 process.env.WASTESHIFT_MANAGER_API_SECRET = 'manager-api-secret';
 delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;

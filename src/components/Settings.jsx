@@ -41,6 +41,10 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
   const [staffSection, setStaffSection] = useState('kitchen');
+  const [staffPin, setStaffPin] = useState('');
+  const [confirmStaffPin, setConfirmStaffPin] = useState('');
+  const [managerPin, setManagerPin] = useState('');
+  const [confirmManagerPin, setConfirmManagerPin] = useState('');
   const [message, setMessage] = useState('');
   const [staffSearch, setStaffSearch] = useState('');
   const safeStaffList = useMemo(() => (Array.isArray(staffList) ? staffList : []), [staffList]);
@@ -59,6 +63,7 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
     ));
   }, [safeStaffList, staffSearchValue]);
   const customStaffCount = safeStaffList.filter((member) => !member.isCsvSeed).length;
+  const isManagerDraft = staffSection === 'management' || inferStaffSection(role) === 'management';
   const sectionCounts = STAFF_SECTIONS.map((section) => ({
     ...section,
     count: safeStaffList.filter((member) => (
@@ -79,11 +84,11 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
     const result = await onResetStaffCode?.(member.id);
 
     if (!result?.ok) {
-      setMessage(result?.message || 'Could not reset this staff code.');
+      setMessage(result?.message || 'Could not reset this staff PIN.');
       return;
     }
 
-    setMessage(`New code for ${result.staffName}: ${result.generatedStaffCode}. Share it once with that staff member.`);
+    setMessage(result.message || `New staff PIN set for ${result.staffName}.`);
   };
 
   const handleSubmit = async (event) => {
@@ -102,7 +107,35 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
       return;
     }
 
-    const result = await onAddStaff({ name: trimmedName, role: trimmedRole, staffSection });
+    if (isManagerDraft) {
+      if (!/^\d{4,8}$/.test(managerPin)) {
+        setMessage('Enter a 4 to 8 digit manager PIN.');
+        return;
+      }
+
+      if (managerPin !== confirmManagerPin) {
+        setMessage('Manager PINs do not match.');
+        return;
+      }
+    } else {
+      if (!/^\d{5}$/.test(staffPin)) {
+        setMessage('Enter a 5 digit staff PIN.');
+        return;
+      }
+
+      if (staffPin !== confirmStaffPin) {
+        setMessage('Staff PINs do not match.');
+        return;
+      }
+    }
+
+    const result = await onAddStaff({
+      name: trimmedName,
+      role: trimmedRole,
+      staffSection: isManagerDraft ? 'management' : staffSection,
+      managerPin: isManagerDraft ? managerPin : '',
+      staffPin: isManagerDraft ? '' : staffPin,
+    });
 
     if (!result?.ok) {
       setMessage(result?.message || 'Could not add this staff member.');
@@ -112,7 +145,15 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
     setName('');
     setRole('');
     setStaffSection('kitchen');
-    setMessage(`Staff member saved. New code for ${result.staffName}: ${result.generatedStaffCode}. Share it once with that staff member.`);
+    setStaffPin('');
+    setConfirmStaffPin('');
+    setManagerPin('');
+    setConfirmManagerPin('');
+    setMessage(result.message || (
+      result.generatedStaffCode
+        ? `Staff member saved. PIN set for ${result.staffName}.`
+        : `${result.staffName} saved.`
+    ));
   };
 
   return (
@@ -122,7 +163,7 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
           <div>
             <p className="eyebrow">Staff setup</p>
             <h2 className="title">Staff Members</h2>
-            <p className="subtitle">Managers add staff profiles and issue personal codes. Staff cannot create their own accounts.</p>
+            <p className="subtitle">Managers add staff profiles and issue personal 5 digit PINs. Staff cannot create their own accounts.</p>
           </div>
           <span className="badge">{safeStaffList.length} total</span>
         </div>
@@ -178,8 +219,70 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
             </div>
           </div>
 
+          {!isManagerDraft && (
+            <div className="staff-form-grid" style={{ marginTop: 12 }}>
+              <div className="field">
+                <label htmlFor="staff-pin">Staff PIN</label>
+                <input
+                  id="staff-pin"
+                  type="password"
+                  inputMode="numeric"
+                  value={staffPin}
+                  onChange={(event) => setStaffPin(event.target.value)}
+                  className="input"
+                  autoComplete="new-password"
+                  placeholder="5 digits"
+                />
+              </div>
+
+              <div className="field">
+                <label htmlFor="staff-pin-confirm">Confirm staff PIN</label>
+                <input
+                  id="staff-pin-confirm"
+                  type="password"
+                  inputMode="numeric"
+                  value={confirmStaffPin}
+                  onChange={(event) => setConfirmStaffPin(event.target.value)}
+                  className="input"
+                  autoComplete="new-password"
+                  placeholder="5 digits"
+                />
+              </div>
+            </div>
+          )}
+
+          {isManagerDraft && (
+            <div className="staff-form-grid" style={{ marginTop: 12 }}>
+              <div className="field">
+                <label htmlFor="manager-pin">Manager PIN</label>
+                <input
+                  id="manager-pin"
+                  type="password"
+                  inputMode="numeric"
+                  value={managerPin}
+                  onChange={(event) => setManagerPin(event.target.value)}
+                  className="input"
+                  autoComplete="new-password"
+                />
+              </div>
+
+              <div className="field">
+                <label htmlFor="manager-pin-confirm">Confirm manager PIN</label>
+                <input
+                  id="manager-pin-confirm"
+                  type="password"
+                  inputMode="numeric"
+                  value={confirmManagerPin}
+                  onChange={(event) => setConfirmManagerPin(event.target.value)}
+                  className="input"
+                  autoComplete="new-password"
+                />
+              </div>
+            </div>
+          )}
+
           <button type="submit" className="primary-button" disabled={!accessProfile?.canManageStaff}>
-            {accessProfile?.canManageStaff ? 'Add staff + generate code' : 'Manager only'}
+            {accessProfile?.canManageStaff ? isManagerDraft ? 'Add manager account' : 'Add staff with PIN' : 'Manager only'}
           </button>
         </form>
 
@@ -238,8 +341,10 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
                   {section.label}
                 </span>
                 {member.isCsvSeed && <span className="badge">CSV</span>}
-                <span className={`badge${member.staffCode ? ' is-green' : ' is-yellow'}`}>
-                  {member.staffCode ? 'Code issued' : 'No code'}
+                <span className={`badge${section.key === 'management' ? member.managerPin ? ' is-green' : ' is-yellow' : member.staffCode ? ' is-green' : ' is-yellow'}`}>
+                  {section.key === 'management'
+                    ? member.managerPin ? 'Manager PIN set' : 'No manager PIN'
+                    : member.staffCode ? 'PIN set' : 'No PIN'}
                 </span>
               </div>
               <div className="manager-row">
@@ -250,7 +355,7 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
                     className="ghost-button compact-action"
                     disabled={!accessProfile?.canManageStaff}
                   >
-                    Reset code
+                    Reset PIN
                   </button>
                 )}
                 <button
@@ -338,7 +443,7 @@ function SecurityPanel({
           <div>
             <p className="eyebrow">Access control</p>
             <h2 className="title">Security & Safety</h2>
-            <p className="subtitle">Review the active session, staff codes, and management PIN.</p>
+            <p className="subtitle">Review the active session, staff PINs, and manager account PINs.</p>
           </div>
           <span className={`badge${accessProfile?.canManageServerSync ? ' is-green' : ''}`}>
             {accessProfile?.roleLabel || 'Unassigned'}
@@ -349,7 +454,7 @@ function SecurityPanel({
           <div>
             <h3 className="breakdown-title">Local role safety</h3>
             <p className="small-text" style={{ margin: 0 }}>
-              Staff use personal generated codes. Management PIN unlocks reports, settings, exports, backup restore, and protected actions.
+              Staff use manager-created 5 digit PINs. Each manager uses their own manager PIN for reports, settings, exports, backup restore, and protected actions.
             </p>
           </div>
         </div>
@@ -373,17 +478,17 @@ function SecurityPanel({
             </button>
           </div>
           <div className="import-summary-grid">
-            <span className="badge is-green">Staff codes per account</span>
-            <span className={`badge${authSettings?.managementPin ? ' is-green' : ' is-red'}`}>Management PIN {authSettings?.managementPin ? 'set' : 'missing'}</span>
+            <span className="badge is-green">Staff PINs per account</span>
+            <span className={`badge${activeStaffMember?.managerPin ? ' is-green' : ' is-yellow'}`}>Active manager PIN {activeStaffMember?.managerPin ? 'set' : 'not set'}</span>
             {authSettings?.updatedAt && <span className="badge">Updated {new Date(authSettings.updatedAt).toLocaleString()}</span>}
           </div>
         </div>
 
         <form onSubmit={handlePinSubmit} className="budget-panel">
-          <h3 className="breakdown-title">Change management PIN</h3>
+          <h3 className="breakdown-title">Change your manager PIN</h3>
           <div className="field-grid">
             <div className="field">
-              <label htmlFor="change-management-pin">New management PIN</label>
+              <label htmlFor="change-management-pin">New manager PIN</label>
               <input
                 id="change-management-pin"
                 type="password"
@@ -398,7 +503,7 @@ function SecurityPanel({
             </div>
 
             <div className="field">
-              <label htmlFor="confirm-management-pin">Confirm management PIN</label>
+              <label htmlFor="confirm-management-pin">Confirm manager PIN</label>
               <input
                 id="confirm-management-pin"
                 type="password"
@@ -406,14 +511,14 @@ function SecurityPanel({
                 autoComplete="new-password"
                 value={confirmManagementPin}
                 onChange={(event) => setConfirmManagementPin(event.target.value)}
-                placeholder="Required when changing management PIN"
+                placeholder="Required when changing manager PIN"
                 className="input"
                 disabled={!accessProfile?.canManagePins}
               />
             </div>
           </div>
           <button type="submit" className="primary-button" disabled={!accessProfile?.canManagePins || isSavingPins}>
-            {isSavingPins ? 'Saving...' : accessProfile?.canManagePins ? 'Save management PIN' : 'Management only'}
+            {isSavingPins ? 'Saving...' : accessProfile?.canManagePins ? 'Save manager PIN' : 'Management only'}
           </button>
           {pinMessage && (
             <div className="inline-message" role="status">
@@ -624,7 +729,7 @@ function Settings({
   const dailyValueUsagePercent = dailyValueLimit > 0 ? Math.min(100, (todayLoss / dailyValueLimit) * 100) : 0;
   const dailyEntryUsagePercent = dailyEntryLimit > 0 ? Math.min(100, (todayItems.length / dailyEntryLimit) * 100) : 0;
   const settingsHubCards = [
-    { key: 'staff', title: 'Staff', meta: `${staffList.length} active profiles`, text: 'Add staff profiles and issue fast PIN codes.' },
+    { key: 'staff', title: 'Staff', meta: `${staffList.length} active profiles`, text: 'Add staff profiles and issue fast 5 digit PINs.' },
     { key: 'security', title: 'Security', meta: accessProfile?.roleLabel || 'Access', text: 'Update manager PINs and check the current operator.' },
     { key: 'limits', title: 'Limits', meta: `Today ${todayItems.length} entries`, text: 'Set daily and monthly waste guardrails.' },
     { key: 'database', title: 'Database & Backup', meta: firebaseSync?.status || 'Sync', text: 'Review Firebase, backup, restore, and server sync status.' },

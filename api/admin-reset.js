@@ -31,6 +31,15 @@ const parseBody = (request) => {
   return JSON.parse(request.body);
 };
 
+const sendJson = (response, status, body) => {
+  response.setHeader('cache-control', 'no-store');
+  response.setHeader('content-security-policy', "default-src 'none'; frame-ancestors 'none'");
+  response.setHeader('referrer-policy', 'no-referrer');
+  response.setHeader('x-content-type-options', 'nosniff');
+  response.setHeader('x-robots-tag', 'noindex, nofollow');
+  response.status(status).json(body);
+};
+
 const getAdminCredential = () => {
   const serviceAccountJson = String(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').trim();
 
@@ -103,13 +112,15 @@ export default async function handler(request, response) {
   response.setHeader('content-type', 'application/json');
 
   if (request.method !== 'POST') {
-    return response.status(405).json({ ok: false, message: 'Method not allowed.' });
+    sendJson(response, 405, { ok: false, message: 'Method not allowed.' });
+    return;
   }
 
   const authorization = authorizeManagerApiRequest(request);
 
   if (!authorization.ok) {
-    return response.status(authorization.status).json(authorization.body);
+    sendJson(response, authorization.status, authorization.body);
+    return;
   }
 
   let body;
@@ -117,11 +128,13 @@ export default async function handler(request, response) {
   try {
     body = parseBody(request);
   } catch {
-    return response.status(400).json({ ok: false, message: 'Invalid reset request body.' });
+    sendJson(response, 400, { ok: false, message: 'Invalid reset request body.' });
+    return;
   }
 
   if (body?.confirmation !== 'RESET') {
-    return response.status(400).json({ ok: false, message: 'Type RESET to confirm.' });
+    sendJson(response, 400, { ok: false, message: 'Type RESET to confirm.' });
+    return;
   }
 
   const db = getAdminDb();
@@ -129,11 +142,12 @@ export default async function handler(request, response) {
   if (!db) {
     const message = 'Server reset is not configured. Add Firebase Admin credentials and manager secret.';
 
-    return response.status(apiIsProductionRuntime() ? 503 : 501).json({
+    sendJson(response, apiIsProductionRuntime() ? 503 : 501, {
       ok: false,
       code: 'firebase_admin_not_configured',
       message,
     });
+    return;
   }
 
   const deletedCounts = {};
@@ -164,7 +178,7 @@ export default async function handler(request, response) {
       updatedAt: new Date().toISOString(),
     }, { merge: false });
 
-    return response.status(errors.length > 0 ? 207 : 200).json({
+    sendJson(response, errors.length > 0 ? 207 : 200, {
       ok: errors.length === 0,
       deletedCounts,
       skippedCollections: [],
@@ -173,12 +187,14 @@ export default async function handler(request, response) {
         ? 'Reset partially completed. Review deletedCounts and errors.'
         : 'Restaurant data reset. Complete setup again.',
     });
+    return;
   } catch (error) {
-    return response.status(500).json({
+    sendJson(response, 500, {
       ok: false,
       deletedCounts,
       errors,
       message: error?.message || 'Reset failed.',
     });
+    return;
   }
 }

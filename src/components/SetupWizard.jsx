@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import MenuImport from './MenuImport';
 import { createRecordId } from '../utils/ids';
 import { createMenuItemKey, parseMenuPrice } from '../utils/menuImport';
-import { createRandomPin, validatePin } from '../utils/pinAuth';
+import { validatePin } from '../utils/pinAuth';
 import { STAFF_SECTIONS } from '../utils/staffSections';
 
 const SETUP_PROGRESS_KEY = 'wasteShiftSetupProgress';
@@ -46,7 +46,7 @@ const createBlankStaffDraft = () => ({
   name: '',
   role: '',
   staffSection: 'kitchen',
-  code: createRandomPin(6),
+  code: '',
   active: true,
 });
 
@@ -129,7 +129,8 @@ function SetupWizard({
     const duplicate = progress.staffMembers.some((member) => (
       member.name.trim().toLowerCase() === trimmedName.toLowerCase()
     ));
-    const codeError = validatePin(staffDraft.code);
+    const duplicateCode = progress.staffMembers.some((member) => member.code === staffDraft.code);
+    const codeError = /^\d{5}$/.test(staffDraft.code) ? '' : 'Use a unique 5 digit staff PIN.';
 
     if (!trimmedName) {
       setMessage('Enter the staff member name.');
@@ -138,6 +139,11 @@ function SetupWizard({
 
     if (duplicate) {
       setMessage('That staff member is already in the setup list.');
+      return;
+    }
+
+    if (duplicateCode) {
+      setMessage('That staff PIN is already in the setup list.');
       return;
     }
 
@@ -158,7 +164,7 @@ function SetupWizard({
       ],
     });
     setStaffDraft(createBlankStaffDraft());
-    setMessage(`Staff added. Code for ${trimmedName}: ${staffDraft.code}`);
+    setMessage(`Staff added. PIN set for ${trimmedName}.`);
   };
 
   const addManualMenuDraft = () => {
@@ -419,7 +425,7 @@ function SetupWizard({
           <div className="auth-form">
             <div>
               <p className="eyebrow">Staff setup</p>
-              <h2 className="title">Add Staff Codes</h2>
+              <h2 className="title">Add Staff PINs</h2>
               <p className="subtitle">Optional. Staff can also be added later in Settings.</p>
             </div>
             <div className="field-grid">
@@ -429,9 +435,8 @@ function SetupWizard({
                 {STAFF_SECTIONS.map((section) => (
                   <option key={section.key} value={section.key}>{section.label}</option>
                 ))}
-                <option value="management">Management</option>
               </select>
-              <input className="input" value={staffDraft.code} onChange={(event) => setStaffDraft({ ...staffDraft, code: event.target.value })} placeholder="4-8 digit code" />
+              <input className="input" value={staffDraft.code} onChange={(event) => setStaffDraft({ ...staffDraft, code: event.target.value })} placeholder="5 digit PIN" inputMode="numeric" />
             </div>
             <button type="button" className="ghost-button" onClick={addStaffDraft}>Add staff</button>
             {progress.staffMembers.length > 0 && (
@@ -439,7 +444,7 @@ function SetupWizard({
                 {progress.staffMembers.map((member) => (
                   <div key={member.id} className="ingredient-card item-row">
                     <span>{member.name} <span className="badge">{member.role}</span></span>
-                    <span className="badge is-green">Code {member.code}</span>
+                    <span className="badge is-green">PIN set</span>
                   </div>
                 ))}
               </div>

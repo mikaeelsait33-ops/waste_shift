@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { get, list, put } from '@vercel/blob';
 import { authorizeSyncApiRequest } from './_auth.js';
 
-const LEGACY_DATABASE_PATH = 'wasteshift/database.json';
 const DATABASE_FOLDER = 'wasteshift/databases/';
 const DATABASE_NAME = 'WasteShift Server Database';
 const DATABASE_VERSION = 1;
@@ -22,6 +21,19 @@ const getHeaderValue = (request, headerName) => {
 
   return Array.isArray(headerValue) ? headerValue[0] : headerValue;
 };
+
+export const normalizeDatabaseId = (value) => (
+  String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .slice(0, 80)
+);
+
+const getRequestDatabaseId = (request, body = null) => normalizeDatabaseId(
+  getHeaderValue(request, 'x-wasteshift-database-id')
+  || request.query?.databaseId
+  || body?.databaseId
+);
 
 const requestBodyIsTooLarge = (request) => {
   const contentLength = Number(getHeaderValue(request, 'content-length') || 0);
@@ -85,11 +97,17 @@ const validateDatabaseData = (data) => {
   return '';
 };
 
-const createSnapshotPath = (updatedAt) => {
+export const createDatabaseFolderPrefix = (databaseId) => {
+  const safeDatabaseId = normalizeDatabaseId(databaseId);
+
+  return safeDatabaseId ? `${DATABASE_FOLDER}${safeDatabaseId}/` : DATABASE_FOLDER;
+};
+
+const createSnapshotPath = (databaseId, updatedAt) => {
   const timestamp = updatedAt.replace(/[:.]/g, '-');
   const id = randomUUID();
 
-  return `${DATABASE_FOLDER}${timestamp}-${id}.json`;
+  return `${createDatabaseFolderPrefix(databaseId)}${timestamp}-${id}.json`;
 };
 
 const readSnapshotBlob = async (pathname) => {
@@ -103,8 +121,8 @@ const readSnapshotBlob = async (pathname) => {
   return JSON.parse(text);
 };
 
-const readDatabase = async () => {
-  const { blobs } = await list({ prefix: DATABASE_FOLDER, limit: 1000 });
+const readDatabase = async (databaseId) => {
+  const { blobs } = await list({ prefix: createDatabaseFolderPrefix(databaseId), limit: 1000 });
   const latestBlob = [...blobs]
     .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime())
     .find((blob) => blob.pathname.endsWith('.json'));
@@ -113,15 +131,16 @@ const readDatabase = async () => {
     return readSnapshotBlob(latestBlob.pathname);
   }
 
-  return readSnapshotBlob(LEGACY_DATABASE_PATH);
+  return null;
 };
 
-const writeDatabase = async (data) => {
+const writeDatabase = async (data, databaseId) => {
   const updatedAt = new Date().toISOString();
-  const pathname = createSnapshotPath(updatedAt);
+  const pathname = createSnapshotPath(databaseId, updatedAt);
   const snapshot = {
     name: DATABASE_NAME,
     version: DATABASE_VERSION,
+    databaseId,
     updatedAt,
     data,
   };
@@ -151,8 +170,19 @@ export default async function handler(request, response) {
   }
 
   if (request.method === 'GET') {
+    const databaseId = getRequestDatabaseId(request);
+
+    if (!databaseId) {
+      sendJson(response, 400, {
+        ok: false,
+        code: 'database_id_required',
+        message: 'Database scope is required. Refresh the app so this device can create its private database id.',
+      });
+      return;
+    }
+
     try {
-      const snapshot = await readDatabase();
+      const snapshot = await readDatabase(databaseId);
       sendJson(response, 200, { ok: true, exists: Boolean(snapshot), snapshot });
       return;
     } catch (error) {
@@ -184,8 +214,19 @@ export default async function handler(request, response) {
       return;
     }
 
+    const databaseId = getRequestDatabaseId(request, body);
+
+    if (!databaseId) {
+      sendJson(response, 400, {
+        ok: false,
+        code: 'database_id_required',
+        message: 'Database scope is required. Refresh the app so this device can create its private database id.',
+      });
+      return;
+    }
+
     try {
-      const saved = await writeDatabase(data);
+      const saved = await writeDatabase(data, databaseId);
       sendJson(response, 200, {
         ok: true,
         updatedAt: saved.snapshot.updatedAt,

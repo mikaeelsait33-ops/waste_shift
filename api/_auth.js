@@ -16,6 +16,13 @@ export const getConfiguredSyncSecret = () => String(
   || ''
 ).trim();
 
+const getConfiguredManagerApiSecrets = () => (
+  [...new Set([
+    getConfiguredManagerSecret(),
+    getConfiguredSyncSecret(),
+  ].filter(Boolean))]
+);
+
 export const getHeaderValue = (request, headerName) => {
   const headerValue = request.headers?.[headerName] ?? request.headers?.[headerName.toLowerCase()];
 
@@ -46,12 +53,12 @@ export const getManagerApiSecret = (request) => (
   || getBearerToken(request)
 );
 
-export const managerApiProtectionIsConfigured = () => Boolean(getConfiguredManagerSecret());
+export const managerApiProtectionIsConfigured = () => getConfiguredManagerApiSecrets().length > 0;
 
 export const authorizeManagerApiRequest = (request) => {
-  const managerSecret = getConfiguredManagerSecret();
+  const managerSecrets = getConfiguredManagerApiSecrets();
 
-  if (!managerSecret) {
+  if (managerSecrets.length === 0) {
     if (!apiIsProductionRuntime()) {
       return { ok: true, mode: 'local-open' };
     }
@@ -81,7 +88,7 @@ export const authorizeManagerApiRequest = (request) => {
     };
   }
 
-  if (!safeSecretEquals(providedSecret, managerSecret)) {
+  if (!managerSecrets.some((managerSecret) => safeSecretEquals(providedSecret, managerSecret))) {
     return {
       ok: false,
       status: 403,

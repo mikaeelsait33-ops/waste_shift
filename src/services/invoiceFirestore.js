@@ -15,6 +15,7 @@ import {
   normalizeMasterIngredientRecord,
   uniqueMasterStrings,
 } from '../utils/masterIngredients';
+import { getClientDatabaseId } from '../utils/clientDatabaseId';
 
 const FIREBASE_CONFIG = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -33,7 +34,7 @@ const hasFirebaseConfig = Boolean(
 
 let firebaseAppInstance = null;
 let firestoreInstance = null;
-let anonymousAuthPromise = null;
+let authPersistencePromise = null;
 let firestoreApiPromise = null;
 let firebaseAuthPromise = null;
 
@@ -67,7 +68,9 @@ const getFirestoreApi = async () => {
 const getFirebaseAuthApi = async () => {
   if (!firebaseAuthPromise) {
     firebaseAuthPromise = import('firebase/auth').then((auth) => ({
+      browserSessionPersistence: auth.browserSessionPersistence,
       getAuth: auth.getAuth,
+      setPersistence: auth.setPersistence,
       signInAnonymously: auth.signInAnonymously,
     }));
   }
@@ -97,24 +100,30 @@ const ensureFirebaseAuth = async () => {
     return null;
   }
 
-  if (anonymousAuthPromise) {
-    return anonymousAuthPromise;
+  await getFirestoreDb();
+  const {
+    browserSessionPersistence,
+    getAuth,
+    setPersistence,
+    signInAnonymously,
+  } = await getFirebaseAuthApi();
+  const auth = getAuth(firebaseAppInstance);
+
+  if (!authPersistencePromise) {
+    authPersistencePromise = setPersistence(auth, browserSessionPersistence)
+      .catch((error) => {
+        console.warn('Could not set Firebase session persistence.', error);
+      });
   }
 
-  anonymousAuthPromise = (async () => {
-    await getFirestoreDb();
-    const { getAuth, signInAnonymously } = await getFirebaseAuthApi();
-    const auth = getAuth(firebaseAppInstance);
+  await authPersistencePromise;
 
-    if (auth.currentUser) {
-      return auth.currentUser;
-    }
+  if (auth.currentUser) {
+    return auth.currentUser;
+  }
 
-    const credential = await signInAnonymously(auth);
-    return credential.user;
-  })();
-
-  return anonymousAuthPromise;
+  const credential = await signInAnonymously(auth);
+  return credential.user;
 };
 
 const sanitizeString = (value) => String(value ?? '').trim();
@@ -132,6 +141,10 @@ const uniqueStrings = (values) => (
     .filter(Boolean))]
 );
 
+const getActiveDatabaseId = () => getClientDatabaseId() || 'local';
+
+const scopeDocId = (id) => `${getActiveDatabaseId()}__${sanitizeString(id)}`;
+
 const readCollection = async (collectionName, options = {}) => {
   const db = await getFirestoreDb();
 
@@ -140,25 +153,29 @@ const readCollection = async (collectionName, options = {}) => {
   }
 
   await ensureFirebaseAuth();
-  const { collection, getDocs, limit, orderBy, query } = await getFirestoreApi();
-  const constraints = [];
-
-  if (options.orderByField) {
-    constraints.push(orderBy(options.orderByField, options.direction || 'desc'));
-  }
-
-  if (options.limitCount) {
-    constraints.push(limit(Math.max(1, Number(options.limitCount) || 1)));
-  }
-
+  const { collection, getDocs, query, where } = await getFirestoreApi();
   const collectionRef = collection(db, collectionName);
-  const snapshot = constraints.length > 0
-    ? await getDocs(query(collectionRef, ...constraints))
-    : await getDocs(collectionRef);
-  return snapshot.docs.map((docSnapshot) => ({
+  const snapshot = await getDocs(query(
+    collectionRef,
+    where('databaseId', '==', getActiveDatabaseId()),
+  ));
+  const records = snapshot.docs.map((docSnapshot) => ({
     id: docSnapshot.id,
     ...docSnapshot.data(),
   }));
+
+  if (options.orderByField) {
+    const direction = options.direction === 'asc' ? 1 : -1;
+    records.sort((a, b) => (
+      String(a[options.orderByField] || '').localeCompare(String(b[options.orderByField] || '')) * direction
+    ));
+  }
+
+  if (options.limitCount) {
+    return records.slice(0, Math.max(1, Number(options.limitCount) || 1));
+  }
+
+  return records;
 };
 
 const normalizeIngredient = (docData) => {
@@ -280,12 +297,13 @@ const withPriceHistory = async (ingredient) => {
 
   await ensureFirebaseAuth();
   const { collection, getDocs } = await getFirestoreApi();
-  const snapshot = await getDocs(collection(db, 'ingredients', ingredient.id, 'priceHistory'));
+  const snapshot = await getDocs(collection(db, 'ingredients', scopeDocId(ingredient.id), 'priceHistory'));
   const priceHistory = snapshot.docs
     .map((docSnapshot) => ({
       id: docSnapshot.id,
       ...docSnapshot.data(),
     }))
+    .filter((history) => history.databaseId === getActiveDatabaseId())
     .sort((a, b) => new Date(a.date || 0).getTime() - new Date(b.date || 0).getTime());
 
   return { ...ingredient, priceHistory };
@@ -357,8 +375,11 @@ const mergeTopLevelPriceHistory = (ingredients, priceHistoryDocs) => {
 };
 
 const getTopLevelPriceHistoryDocs = async (db) => {
-  const { collection, getDocs } = await getFirestoreApi();
-  const snapshot = await getDocs(collection(db, 'priceHistory')).catch(() => ({ docs: [] }));
+  const { collection, getDocs, query, where } = await getFirestoreApi();
+  const snapshot = await getDocs(query(
+    collection(db, 'priceHistory'),
+    where('databaseId', '==', getActiveDatabaseId()),
+  )).catch(() => ({ docs: [] }));
 
   return snapshot.docs.map((docSnapshot) => ({
     docSnapshot,
@@ -369,13 +390,13 @@ const getTopLevelPriceHistoryDocs = async (db) => {
 
 const getIngredientPriceHistoryDocs = async (db, ingredientId) => {
   const { collection, getDocs } = await getFirestoreApi();
-  const snapshot = await getDocs(collection(db, 'ingredients', ingredientId, 'priceHistory')).catch(() => ({ docs: [] }));
+  const snapshot = await getDocs(collection(db, 'ingredients', scopeDocId(ingredientId), 'priceHistory')).catch(() => ({ docs: [] }));
 
   return snapshot.docs.map((docSnapshot) => ({
     docSnapshot,
     id: docSnapshot.id,
     ...docSnapshot.data(),
-  }));
+  })).filter((history) => history.databaseId === getActiveDatabaseId());
 };
 
 const getLatestIngredientHistory = async (db, ingredientId, excludedInvoiceId = '') => {
@@ -413,10 +434,14 @@ const refreshIngredientLatestPrice = async (db, ingredientId, excludedInvoiceId 
   }
 
   const { doc, getDoc, serverTimestamp, setDoc } = await getFirestoreApi();
-  const ingredientRef = doc(db, 'ingredients', safeIngredientId);
+  const ingredientRef = doc(db, 'ingredients', scopeDocId(safeIngredientId));
   const ingredientSnapshot = await getDoc(ingredientRef).catch(() => null);
 
   if (!ingredientSnapshot?.exists?.()) {
+    return;
+  }
+
+  if (ingredientSnapshot.data()?.databaseId !== getActiveDatabaseId()) {
     return;
   }
 
@@ -495,7 +520,7 @@ export const loadInvoiceWorkspaceData = async () => {
   ]);
   const db = await getFirestoreDb();
   const { doc, getDoc } = await getFirestoreApi();
-  const settingsSnapshot = await getDoc(doc(db, 'settings', 'invoiceConfig'));
+  const settingsSnapshot = await getDoc(doc(db, 'settings', scopeDocId('invoiceConfig')));
   const ingredientsWithSubHistory = await Promise.all(
     ingredientDocs
       .map(normalizeIngredient)
@@ -529,7 +554,8 @@ export const saveInvoiceSettings = async ({ vatRate }) => {
 
   await ensureFirebaseAuth();
   const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
-  await setDoc(doc(db, 'settings', 'invoiceConfig'), {
+  await setDoc(doc(db, 'settings', scopeDocId('invoiceConfig')), {
+    databaseId: getActiveDatabaseId(),
     vatRate: sanitizeNumber(vatRate, 0.15),
     updatedAt: serverTimestamp(),
   }, { merge: true });
@@ -568,6 +594,7 @@ export const saveIngredient = async (ingredientDraft) => {
   const latestCostPerBaseUnit = roundUnitPrice(ingredientDraft?.latestCostPerBaseUnit ?? ingredientDraft?.costPerBaseUnit ?? ingredientDraft?.costPerBaseUnitExVAT);
   const baseUnit = sanitizeString(masterDraft?.baseUnit || ingredientDraft?.baseUnit || ingredientDraft?.unit) || costUnit;
   const payload = {
+    databaseId: getActiveDatabaseId(),
     id,
     key: id,
     name,
@@ -608,9 +635,10 @@ export const saveIngredient = async (ingredientDraft) => {
     createdAt: ingredientDraft?.createdAt || serverTimestamp(),
   };
 
-  await setDoc(doc(db, 'ingredients', id), payload, { merge: true });
+  await setDoc(doc(db, 'ingredients', scopeDocId(id)), payload, { merge: true });
   if (supplierName) {
-    await setDoc(doc(db, 'suppliers', supplierId), {
+    await setDoc(doc(db, 'suppliers', scopeDocId(supplierId)), {
+      databaseId: getActiveDatabaseId(),
       id: supplierId,
       name: supplierName,
       contactInfo: sanitizeString(ingredientDraft?.supplierContactInfo),
@@ -641,6 +669,7 @@ export const saveIngredientPriceRecord = async (priceRecord) => {
   await ensureFirebaseAuth();
   const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
   const payload = {
+    databaseId: getActiveDatabaseId(),
     id,
     key: id,
     name,
@@ -671,7 +700,7 @@ export const saveIngredientPriceRecord = async (priceRecord) => {
     createdAt: priceRecord?.createdAt || serverTimestamp(),
   };
 
-  await setDoc(doc(db, 'ingredients', id), payload, { merge: true });
+  await setDoc(doc(db, 'ingredients', scopeDocId(id)), payload, { merge: true });
 
   return { ok: true, ingredient: payload };
 };
@@ -686,11 +715,16 @@ export const deleteIngredient = async (ingredientId) => {
 
   await ensureFirebaseAuth();
   const { collection, deleteDoc, doc, getDoc, getDocs, serverTimestamp, setDoc } = await getFirestoreApi();
-  const ingredientRef = doc(db, 'ingredients', id);
+  const ingredientRef = doc(db, 'ingredients', scopeDocId(id));
   const ingredientSnapshot = await getDoc(ingredientRef);
   const ingredient = ingredientSnapshot.data() || {};
 
+  if (ingredientSnapshot.exists() && ingredient.databaseId !== getActiveDatabaseId()) {
+    return { ok: false, skipped: true };
+  }
+
   await setDoc(ingredientRef, {
+    databaseId: getActiveDatabaseId(),
     id,
     name: sanitizeString(ingredient.name || ingredient.ingredientName) || id,
     category: sanitizeString(ingredient.category) || 'Other',
@@ -700,11 +734,13 @@ export const deleteIngredient = async (ingredientId) => {
     updatedAt: serverTimestamp(),
   }, { merge: true });
 
-  const historySnapshot = await getDocs(collection(db, 'ingredients', id, 'priceHistory')).catch(() => ({ docs: [] }));
+  const historySnapshot = await getDocs(collection(db, 'ingredients', scopeDocId(id), 'priceHistory')).catch(() => ({ docs: [] }));
 
-  await Promise.all(historySnapshot.docs.map((docSnapshot) => deleteDoc(docSnapshot.ref).catch(() => {})));
+  await Promise.all(historySnapshot.docs
+    .filter((docSnapshot) => docSnapshot.data()?.databaseId === getActiveDatabaseId())
+    .map((docSnapshot) => deleteDoc(docSnapshot.ref).catch(() => {})));
   await Promise.all([
-    deleteDoc(doc(db, 'stockLevels', id)).catch(() => {}),
+    deleteDoc(doc(db, 'stockLevels', scopeDocId(id))).catch(() => {}),
     deleteDoc(ingredientRef).catch(() => {}),
   ]);
 
@@ -750,10 +786,11 @@ export const saveConfirmedInvoice = async ({
 
   await ensureFirebaseAuth();
   const { doc, getDoc, increment, serverTimestamp, setDoc } = await getFirestoreApi();
-  const supplierRef = doc(db, 'suppliers', supplierId);
+  const supplierRef = doc(db, 'suppliers', scopeDocId(supplierId));
   const supplierSnapshot = await getDoc(supplierRef).catch(() => null);
 
-  await setDoc(doc(db, 'invoices', safeInvoiceId), {
+  await setDoc(doc(db, 'invoices', scopeDocId(safeInvoiceId)), {
+    databaseId: getActiveDatabaseId(),
     id: safeInvoiceId,
     invoiceDate: safeInvoiceDate,
     receivedDate: safeReceivedDate,
@@ -804,6 +841,7 @@ export const saveConfirmedInvoice = async ({
   }, { merge: true });
 
   await setDoc(supplierRef, {
+    databaseId: getActiveDatabaseId(),
     id: supplierId,
     name: safeSupplierName,
     contactInfo: sanitizeString(supplierSnapshot?.data()?.contactInfo),
@@ -833,6 +871,7 @@ export const saveConfirmedInvoice = async ({
       ]);
       const historyId = `${safeInvoiceDate}-${safeInvoiceId}-${row.lineItemId || ingredientId}`.replace(/[^a-z0-9_-]/gi, '_');
       const historyPayload = {
+        databaseId: getActiveDatabaseId(),
         ingredientId,
         rawName: sanitizeString(row.rawName || row.ingredientName),
         matchedIngredientId: sanitizeString(row.matchedIngredientId || ingredientId),
@@ -870,7 +909,8 @@ export const saveConfirmedInvoice = async ({
         createdAt: serverTimestamp(),
       };
 
-      await setDoc(doc(db, 'ingredients', ingredientId), {
+      await setDoc(doc(db, 'ingredients', scopeDocId(ingredientId)), {
+        databaseId: getActiveDatabaseId(),
         id: ingredientId,
         key: ingredientId,
         name: sanitizeString(row.ingredientName),
@@ -915,8 +955,8 @@ export const saveConfirmedInvoice = async ({
       }, { merge: true });
 
       await Promise.all([
-        setDoc(doc(db, 'ingredients', ingredientId, 'priceHistory', historyId), historyPayload, { merge: true }),
-        setDoc(doc(db, 'priceHistory', `${ingredientId}-${historyId}`), {
+        setDoc(doc(db, 'ingredients', scopeDocId(ingredientId), 'priceHistory', historyId), historyPayload, { merge: true }),
+        setDoc(doc(db, 'priceHistory', scopeDocId(`${ingredientId}-${historyId}`)), {
           id: `${ingredientId}-${historyId}`,
           ...historyPayload,
         }, { merge: true }),
@@ -936,7 +976,7 @@ export const softDeleteInvoice = async (invoiceId, { deletedBy = '' } = {}) => {
 
   await ensureFirebaseAuth();
   const { collection, deleteDoc, doc, getDoc, getDocs, increment, serverTimestamp, setDoc, updateDoc } = await getFirestoreApi();
-  const invoiceRef = doc(db, 'invoices', safeInvoiceId);
+  const invoiceRef = doc(db, 'invoices', scopeDocId(safeInvoiceId));
   const invoiceSnapshot = await getDoc(invoiceRef);
 
   if (!invoiceSnapshot.exists()) {
@@ -945,12 +985,18 @@ export const softDeleteInvoice = async (invoiceId, { deletedBy = '' } = {}) => {
 
   const invoice = invoiceSnapshot.data() || {};
 
+  if (invoice.databaseId !== getActiveDatabaseId()) {
+    return { ok: false, skipped: true };
+  }
+
   if (String(invoice.status || '').toLowerCase() === 'deleted') {
     return { ok: true, invoiceId: safeInvoiceId, alreadyDeleted: true };
   }
 
   const topLevelHistorySnapshot = await getDocs(collection(db, 'priceHistory')).catch(() => ({ docs: [] }));
   const topLevelDocsToDelete = topLevelHistorySnapshot.docs.filter((docSnapshot) => (
+    docSnapshot.data()?.databaseId === getActiveDatabaseId()
+    &&
     sanitizeString(docSnapshot.data()?.invoiceId) === safeInvoiceId
   ));
   const ingredientIds = uniqueStrings([
@@ -962,8 +1008,10 @@ export const softDeleteInvoice = async (invoiceId, { deletedBy = '' } = {}) => {
   await Promise.all(topLevelDocsToDelete.map((docSnapshot) => deleteDoc(docSnapshot.ref)));
 
   await Promise.all(ingredientIds.map(async (ingredientId) => {
-    const historySnapshot = await getDocs(collection(db, 'ingredients', ingredientId, 'priceHistory')).catch(() => ({ docs: [] }));
+    const historySnapshot = await getDocs(collection(db, 'ingredients', scopeDocId(ingredientId), 'priceHistory')).catch(() => ({ docs: [] }));
     const nestedDocsToDelete = historySnapshot.docs.filter((docSnapshot) => (
+      docSnapshot.data()?.databaseId === getActiveDatabaseId()
+      &&
       sanitizeString(docSnapshot.data()?.invoiceId) === safeInvoiceId
     ));
 
@@ -985,7 +1033,8 @@ export const softDeleteInvoice = async (invoiceId, { deletedBy = '' } = {}) => {
   const supplierId = sanitizeString(invoice.supplierId);
 
   if (supplierId) {
-    await setDoc(doc(db, 'suppliers', supplierId), {
+    await setDoc(doc(db, 'suppliers', scopeDocId(supplierId)), {
+      databaseId: getActiveDatabaseId(),
       totalSpend: increment(-roundMoney(invoice.totalExVAT)),
       updatedAt: serverTimestamp(),
     }, { merge: true }).catch(() => {});
@@ -1014,9 +1063,13 @@ export const updateStockFromInvoice = async ({
 
   await ensureFirebaseAuth();
   const { doc, getDoc, serverTimestamp, setDoc, updateDoc } = await getFirestoreApi();
-  const invoiceRef = doc(db, 'invoices', invoiceId);
+  const invoiceRef = doc(db, 'invoices', scopeDocId(invoiceId));
   const invoiceSnapshot = await getDoc(invoiceRef);
   const invoiceData = invoiceSnapshot.data() || {};
+
+  if (invoiceSnapshot.exists() && invoiceData.databaseId !== getActiveDatabaseId()) {
+    return { ok: false, skipped: true, updates: [], stockMovementIds: [] };
+  }
   const currentPostingStatus = sanitizeString(invoiceData.stockPostingStatus);
 
   if (['posted', 'historical_posted'].includes(currentPostingStatus)) {
@@ -1041,7 +1094,7 @@ export const updateStockFromInvoice = async ({
       continue;
     }
 
-    const stockRef = doc(db, 'stockLevels', ingredientId);
+    const stockRef = doc(db, 'stockLevels', scopeDocId(ingredientId));
     const stockSnapshot = await getDoc(stockRef);
     const currentQty = sanitizeNumber(stockSnapshot.data()?.currentQty);
     const incomingQty = sanitizeNumber(lineItem.baseQuantity || lineItem.quantity, 0);
@@ -1081,6 +1134,7 @@ export const updateStockFromInvoice = async ({
 
     await Promise.all([
       setDoc(stockRef, {
+        databaseId: getActiveDatabaseId(),
         ingredientId,
         currentQty: nextQty,
         unit: lineItem.baseUnit || lineItem.unit || row.unit || 'each',
@@ -1091,7 +1145,10 @@ export const updateStockFromInvoice = async ({
         parLevel,
         reorderPoint,
       }, { merge: true }),
-      setDoc(doc(db, 'stockMovements', movementId), movementRecord, { merge: true }),
+      setDoc(doc(db, 'stockMovements', scopeDocId(movementId)), {
+        databaseId: getActiveDatabaseId(),
+        ...movementRecord,
+      }, { merge: true }),
     ]);
 
     updates.push({

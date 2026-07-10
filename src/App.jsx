@@ -19,7 +19,6 @@ import {
   DEFAULT_AUTH_SETTINGS,
   authPinsAreConfigured,
   createPinRecord,
-  createRandomPin,
   sanitizeAuthSettings,
   sanitizePinRecord,
   verifyPin,
@@ -53,12 +52,14 @@ import {
   saveRestaurantProfile,
 } from './services/restaurantFirestore';
 import { saveCurrentUserStaffProfile } from './services/firebaseAccess';
+import { saveManagerAccount } from './services/managerAccounts';
 import {
   createEmptyRestaurantData,
   getRestaurantResetStorageKeys,
   validateRestaurantResetConfirmation,
 } from './utils/restaurantReset';
 import { getActiveWasteEntries } from './utils/wasteSync';
+import { getClientDatabaseHeaders } from './utils/clientDatabaseId';
 
 const DEFAULT_RECIPES = {};
 const DEFAULT_RECIPE_SEED_VERSION = 'fresh-restaurant-empty-v1';
@@ -326,6 +327,7 @@ const sanitizeMenuItems = (items) => {
       return {
         key,
         name,
+        category: String(item?.category || '').trim(),
         menuPrice: parsePriceValue(item?.menuPrice ?? item?.price),
       };
     })
@@ -413,6 +415,7 @@ const mergeMenuItems = (baseMenuItems, customMenuItems, recipes) => {
     return attachRecipeInfo({
       ...baseItem,
       menuPrice: customItem.menuPrice,
+      category: customItem.category || baseItem.category || '',
     }, recipes);
   });
   const customOnlyItems = activeCustomItems
@@ -434,6 +437,7 @@ const createRecipeMapFromFirestoreMenuItems = (firestoreMenuItems) => (
 
     acc[key] = {
       name,
+      category: String(item?.category || '').trim(),
       ...(item.menuPrice !== null && item.menuPrice !== undefined ? { menuPrice: item.menuPrice } : {}),
       totalCost: item.totalCost || 0,
       firestoreId: item.firestoreId || key,
@@ -491,6 +495,7 @@ const sanitizeStaffMembers = (members) => {
         role,
         staffSection: inferStaffSection(member?.staffSection || member?.section || role),
         staffCode: sanitizePinRecord(member?.staffCode),
+        managerPin: sanitizePinRecord(member?.managerPin),
         removed: Boolean(member?.removed),
         removedAt: String(member?.removedAt || ''),
         isCsvSeed: false,
@@ -954,6 +959,7 @@ function App() {
       return {
         key,
         name: item.name,
+        category: item.category || recipe?.category || '',
         menuPrice: item.menuPrice,
         totalCost: item.totalCost,
         ingredientCount: Array.isArray(recipe?.ingredients) ? recipe.ingredients.length : 0,
@@ -1000,6 +1006,14 @@ function App() {
   ), [activeStaffId, authSession, staffList]);
   const accessProfile = useMemo(() => getAccessProfile(activeStaffMember), [activeStaffMember]);
   const activeWasteItems = useMemo(() => getActiveWasteEntries(wasteItems), [wasteItems]);
+  const activeManagerAccounts = useMemo(() => staffList.filter((member) => (
+    !member.removed
+    && (member.staffSection === 'management' || inferRoleKey(member.role) === 'manager' || inferRoleKey(member.role) === 'owner')
+  )), [staffList]);
+  const managerAuthIsConfigured = useMemo(() => (
+    activeManagerAccounts.some((member) => sanitizePinRecord(member.managerPin))
+    || authPinsAreConfigured(authSettings)
+  ), [activeManagerAccounts, authSettings]);
 
   useEffect(() => {
     refreshInvoiceDashboardStats();
@@ -1008,10 +1022,10 @@ function App() {
   const getSyncHeaders = useCallback((extraHeaders = {}) => {
     const trimmedAccessKey = syncAccessKey.trim();
 
-    return {
+    return getClientDatabaseHeaders({
       ...extraHeaders,
       ...(trimmedAccessKey ? { 'x-wasteshift-sync-secret': trimmedAccessKey } : {}),
-    };
+    });
   }, [syncAccessKey]);
 
   const buildDatabaseData = useCallback(() => ({
@@ -1448,14 +1462,44 @@ function App() {
         nextAuthSettings.staffPin = await createPinRecord(trimmedStaffPin);
       }
 
+      let updatedManager = null;
+
       if (trimmedManagementPin) {
-        nextAuthSettings.managementPin = await createPinRecord(trimmedManagementPin);
+        const activeManager = staffList.find((member) => (
+          member.id === activeStaffId
+          && (member.staffSection === 'management' || inferRoleKey(member.role) === 'manager' || inferRoleKey(member.role) === 'owner')
+        ));
+
+        if (!activeManager) {
+          return { ok: false, message: 'Log in as a manager before changing a manager PIN.' };
+        }
+
+        updatedManager = {
+          ...activeManager,
+          managerPin: await createPinRecord(trimmedManagementPin),
+          staffSection: 'management',
+          role: activeManager.role || 'Manager',
+          isCsvSeed: false,
+        };
+
+        setCustomStaffList(prevStaffList => {
+          const existingIndex = prevStaffList.findIndex((member) => member.id === updatedManager.id);
+
+          if (existingIndex === -1) {
+            return [...prevStaffList, updatedManager];
+          }
+
+          return prevStaffList.map((member, index) => (
+            index === existingIndex ? { ...member, ...updatedManager } : member
+          ));
+        });
+
+        saveManagerAccount(updatedManager).catch((error) => {
+          console.warn('Could not save manager account to Firestore.', error);
+        });
       }
 
-      if (!nextAuthSettings.managementPin) {
-        return { ok: false, message: 'Create a management PIN.' };
-      }
-
+      nextAuthSettings.managementPin = null;
       nextAuthSettings.updatedAt = new Date().toISOString();
       nextAuthSettings.pinPresetVersion = pinPresetVersion;
       setAuthSettings(sanitizeAuthSettings(nextAuthSettings));
@@ -1465,8 +1509,8 @@ function App() {
           user: activeStaffMember?.name || 'System',
           relatedItem: 'Access settings',
           afterValue: {
-            staffCodesEnabled: true,
-            managementPinConfigured: Boolean(nextAuthSettings.managementPin),
+            staffPinsEnabled: true,
+            managerAccountUpdated: Boolean(updatedManager),
           },
         }),
         ...prevLog,
@@ -1476,13 +1520,13 @@ function App() {
     } catch (error) {
       return { ok: false, message: error?.message || 'Could not save PIN settings.' };
     }
-  }, [activeStaffMember?.name, authSettings]);
+  }, [activeStaffId, activeStaffMember?.name, authSettings, staffList]);
 
   useEffect(() => {
     setIsPreparingAuth(false);
   }, []);
 
-  const upsertLoginAccount = useCallback(({ mode, name, staffSection, staffCode }) => {
+  const upsertLoginAccount = useCallback(({ mode, name, staffSection, staffCode, managerPin }) => {
     const trimmedName = String(name || '').trim();
     const accountId = createStaffMemberId(trimmedName);
     const existingMember = staffList.find((member) => member.id === accountId);
@@ -1492,6 +1536,7 @@ function App() {
         name: trimmedName,
         role: 'Manager',
         staffSection: 'management',
+        managerPin: managerPin || existingMember?.managerPin || null,
         removed: false,
         removedAt: '',
         isCsvSeed: false,
@@ -1520,6 +1565,7 @@ function App() {
             ...member,
             ...nextMember,
             staffCode: nextMember.staffCode || member.staffCode || existingMember?.staffCode || null,
+            managerPin: nextMember.managerPin || member.managerPin || existingMember?.managerPin || null,
           }
           : member
       ));
@@ -1536,18 +1582,21 @@ function App() {
       return { ok: false, message: 'Enter the first manager name.' };
     }
 
-    const pinResult = await handleSavePinSettings({
-      managementPin: trimmedManagementPin,
-      pinPresetVersion: 'manager-created-v1',
-    });
+    let managerPinRecord;
 
-    if (!pinResult?.ok) {
-      return pinResult;
+    try {
+      managerPinRecord = await createPinRecord(trimmedManagementPin);
+    } catch (error) {
+      return { ok: false, message: error?.message || 'Could not create manager PIN.' };
     }
 
     const managerMember = upsertLoginAccount({
       mode: 'management',
       name: trimmedName,
+      managerPin: managerPinRecord,
+    });
+    await saveManagerAccount(managerMember).catch((error) => {
+      console.warn('Could not save manager account to Firestore.', error);
     });
     await saveCurrentUserStaffProfile({
       displayName: managerMember.name,
@@ -1573,13 +1622,13 @@ function App() {
         action: 'First manager setup',
         user: managerMember.name,
         relatedItem: 'Access settings',
-        afterValue: { staffId: managerMember.id, managementPinConfigured: true },
+        afterValue: { staffId: managerMember.id, managerAccountCreated: true },
       }),
       ...prevLog,
     ].slice(0, 500));
 
     return { ok: true, message: 'Manager access created.' };
-  }, [handleSavePinSettings, upsertLoginAccount]);
+  }, [upsertLoginAccount]);
 
   const handleLogin = useCallback(async ({ mode, name, staffSection, pin }) => {
     const trimmedName = String(name || '').trim();
@@ -1599,26 +1648,46 @@ function App() {
       }
 
       if (!existingStaffCode) {
-        return { ok: false, message: 'This staff member does not have a code yet. Ask a manager to reset or issue one.' };
+        return { ok: false, message: 'This staff member does not have a PIN yet. Ask a manager to reset or issue one.' };
       }
 
-      if (!String(pin || '').trim()) {
-        return { ok: false, message: 'Enter your personal staff code.' };
+      if (!/^\d{5}$/.test(String(pin || '').trim())) {
+        return { ok: false, message: 'Enter your 5 digit staff PIN.' };
       }
 
       const staffCodeMatches = await verifyPin(pin, existingStaffCode);
 
       if (!staffCodeMatches) {
-        return { ok: false, message: 'Incorrect staff code.' };
+        return { ok: false, message: 'Incorrect staff PIN.' };
       }
 
       authenticatedStaffMember = existingMember;
     } else {
-      const pinMatches = await verifyPin(pin, authSettings.managementPin);
+      const accountId = createStaffMemberId(trimmedName);
+      const existingManager = staffList.find((member) => (
+        member.id === accountId
+        && !member.removed
+        && (member.staffSection === 'management' || inferRoleKey(member.role) === 'manager' || inferRoleKey(member.role) === 'owner')
+      ));
+      const managerPinRecord = sanitizePinRecord(existingManager?.managerPin);
+      const pinMatches = managerPinRecord
+        ? await verifyPin(pin, managerPinRecord)
+        : await verifyPin(pin, authSettings.managementPin);
 
       if (!pinMatches) {
-        return { ok: false, message: 'Incorrect management PIN.' };
+        return {
+          ok: false,
+          message: existingManager
+            ? 'Incorrect manager PIN.'
+            : 'Manager account not found. Ask an owner or manager to add this manager in Settings > Staff.',
+        };
       }
+
+      authenticatedStaffMember = existingManager || upsertLoginAccount({
+        mode,
+        name: trimmedName,
+        managerPin: authSettings.managementPin,
+      });
     }
 
     const staffMember = authenticatedStaffMember || upsertLoginAccount({
@@ -1685,13 +1754,33 @@ function App() {
       return { ok: false, message: permission.message };
     }
 
-    const generatedStaffCode = createRandomPin(6);
-    const staffCodeRecord = await createPinRecord(generatedStaffCode);
+    const nextStaffSection = inferStaffSection(newStaffMember.staffSection || newStaffMember.role);
+    const isManagerAccount = nextStaffSection === 'management' || inferRoleKey(newStaffMember.role) === 'manager' || inferRoleKey(newStaffMember.role) === 'owner';
+    const chosenStaffPin = String(newStaffMember.staffPin || '').trim();
+
+    if (!isManagerAccount && !/^\d{5}$/.test(chosenStaffPin)) {
+      return { ok: false, message: 'Enter a 5 digit staff PIN.' };
+    }
+
+    if (!isManagerAccount) {
+      for (const member of staffList.filter((staffMember) => !staffMember.removed && staffMember.id !== createStaffMemberId(newStaffMember.name))) {
+        const existingStaffCode = sanitizePinRecord(member.staffCode);
+
+        if (existingStaffCode && await verifyPin(chosenStaffPin, existingStaffCode)) {
+          return { ok: false, message: 'That staff PIN is already in use. Choose another 5 digit PIN.' };
+        }
+      }
+    }
+
+    const generatedStaffCode = isManagerAccount ? '' : chosenStaffPin;
+    const staffCodeRecord = generatedStaffCode ? await createPinRecord(generatedStaffCode) : null;
+    const managerPinRecord = isManagerAccount ? await createPinRecord(newStaffMember.managerPin) : null;
     const nextStaffMember = {
       ...newStaffMember,
       id: createStaffMemberId(newStaffMember.name),
-      staffSection: inferStaffSection(newStaffMember.staffSection || newStaffMember.role),
+      staffSection: nextStaffSection,
       staffCode: staffCodeRecord,
+      managerPin: managerPinRecord,
       removed: false,
       removedAt: '',
       isCsvSeed: false,
@@ -1717,17 +1806,26 @@ function App() {
         afterValue: {
           staffId: nextStaffMember.id,
           role: nextStaffMember.role,
-          staffCodeGenerated: true,
+          customStaffPinSet: Boolean(staffCodeRecord),
+          managerAccountCreated: Boolean(managerPinRecord),
         },
       }),
       ...prevLog,
     ].slice(0, 500));
 
+    if (isManagerAccount) {
+      saveManagerAccount(nextStaffMember).catch((error) => {
+        console.warn('Could not save manager account to Firestore.', error);
+      });
+    }
+
     return {
       ok: true,
       staffName: nextStaffMember.name,
       generatedStaffCode,
-      message: `Staff member added. Code for ${nextStaffMember.name}: ${generatedStaffCode}`,
+      message: isManagerAccount
+        ? `Manager account added for ${nextStaffMember.name}.`
+        : `Staff member added. PIN set for ${nextStaffMember.name}.`,
     };
   };
 
@@ -1767,6 +1865,16 @@ function App() {
       setCustomStaffList(prevStaffList => prevStaffList.filter((member) => member.id !== staffId));
     }
 
+    if (staffMember.staffSection === 'management' || inferRoleKey(staffMember.role) === 'manager' || inferRoleKey(staffMember.role) === 'owner') {
+      saveManagerAccount({
+        ...staffMember,
+        removed: true,
+        removedAt: new Date().toISOString(),
+      }).catch((error) => {
+        console.warn('Could not mark manager account inactive in Firestore.', error);
+      });
+    }
+
     if (activeStaffId === staffId) {
       setActiveStaffId('');
     }
@@ -1788,7 +1896,7 @@ function App() {
   };
 
   const handleResetStaffCode = async (staffId) => {
-    const permission = requirePermission(accessProfile, 'canManageStaff', 'reset staff codes');
+    const permission = requirePermission(accessProfile, 'canManageStaff', 'reset staff PINs');
     if (!permission.ok) {
       return { ok: false, message: permission.message };
     }
@@ -1799,8 +1907,26 @@ function App() {
       return { ok: false, message: 'Staff member not found.' };
     }
 
-    const generatedStaffCode = createRandomPin(6);
-    const staffCodeRecord = await createPinRecord(generatedStaffCode);
+    const chosenStaffPin = String(window.prompt(`Enter a new 5 digit PIN for ${staffMember.name}.`, '') || '').trim();
+
+    if (!chosenStaffPin) {
+      return { ok: false, message: 'PIN reset cancelled.' };
+    }
+
+    if (!/^\d{5}$/.test(chosenStaffPin)) {
+      return { ok: false, message: 'Enter a 5 digit staff PIN.' };
+    }
+
+    for (const member of staffList.filter((existingMember) => !existingMember.removed && existingMember.id !== staffId)) {
+      const existingStaffCode = sanitizePinRecord(member.staffCode);
+
+      if (existingStaffCode && await verifyPin(chosenStaffPin, existingStaffCode)) {
+        return { ok: false, message: 'That staff PIN is already in use. Choose another 5 digit PIN.' };
+      }
+    }
+
+    const generatedStaffCode = chosenStaffPin;
+    const staffCodeRecord = await createPinRecord(chosenStaffPin);
 
     setCustomStaffList(prevStaffList => {
       const existingIndex = prevStaffList.findIndex((member) => member.id === staffId);
@@ -1821,10 +1947,10 @@ function App() {
 
     setAuditLog(prevLog => [
       createAuditLogEntry({
-        action: 'Staff code reset',
+        action: 'Staff PIN reset',
         user: activeStaffMember?.name || 'System',
         relatedItem: staffMember.name,
-        afterValue: { staffId, staffCodeGenerated: true },
+        afterValue: { staffId, customStaffPinSet: true },
       }),
       ...prevLog,
     ].slice(0, 500));
@@ -1833,7 +1959,7 @@ function App() {
       ok: true,
       staffName: staffMember.name,
       generatedStaffCode,
-      message: `New staff code for ${staffMember.name}: ${generatedStaffCode}`,
+      message: `New staff PIN set for ${staffMember.name}.`,
     };
   };
 
@@ -2193,6 +2319,7 @@ function App() {
           key,
           firestoreId: key,
           name: recipe?.name || key,
+          category: recipe?.category || '',
           menuPrice: recipe?.menuPrice ?? null,
           totalCost,
           components,
@@ -2546,6 +2673,7 @@ function App() {
         nextItems.set(item.key, {
           key: item.key,
           name: item.name,
+          category: item.category,
           menuPrice: item.menuPrice,
         });
       });
@@ -2572,6 +2700,7 @@ function App() {
         await saveFirestoreMenuItem({
           key: item.key,
           name: item.name,
+          category: item.category,
           menuPrice: item.menuPrice,
           totalCost,
           components,
@@ -2590,6 +2719,7 @@ function App() {
           key: item.key,
           firestoreId: item.key,
           name: item.name,
+          category: item.category,
           menuPrice: item.menuPrice,
           totalCost,
           components,
@@ -2647,24 +2777,21 @@ function App() {
     }
 
     try {
-    const pinResult = await handleSavePinSettings({
-      managementPin: managerPin,
-      pinPresetVersion: 'setup-wizard-v1',
-    });
-
-    if (!pinResult?.ok) {
-      return pinResult;
-    }
+    const managerPinRecord = await createPinRecord(managerPin);
 
     const managerMember = {
       id: createStaffMemberId(managerName),
       name: managerName,
       role: 'Manager',
       staffSection: 'management',
+      managerPin: managerPinRecord,
       removed: false,
       removedAt: '',
       isCsvSeed: false,
     };
+    await saveManagerAccount(managerMember).catch((error) => {
+      console.warn('Could not save setup manager account to Firestore.', error);
+    });
     await saveCurrentUserStaffProfile({
       displayName: managerMember.name,
       role: managerMember.role,
@@ -2680,7 +2807,9 @@ function App() {
             id: createStaffMemberId(member.name),
             name: String(member.name || '').trim(),
             role: String(member.role || 'Team').trim(),
-            staffSection: member.staffSection || inferStaffSection(member.role),
+            staffSection: member.staffSection === 'management'
+              ? 'kitchen'
+              : member.staffSection || inferStaffSection(member.role),
             staffCode: await createPinRecord(member.code),
             removed: member.active === false,
             removedAt: member.active === false ? new Date().toISOString() : '',
@@ -2756,7 +2885,7 @@ function App() {
           : message || 'Could not finish setup.',
       };
     }
-  }, [handleSavePinSettings, saveApprovedMenuItems]);
+  }, [saveApprovedMenuItems]);
 
   const handleAddNewRecipe = (key, recipeObject) => {
     const permission = requirePermission(accessProfile, 'canManageMenu', 'manage menu items and recipes');
@@ -2789,6 +2918,7 @@ function App() {
     saveFirestoreMenuItem({
       key,
       name: recipeObject?.name || key,
+      category: recipeObject?.category || '',
       menuPrice: recipeObject?.menuPrice,
       totalCost,
       components,
@@ -2802,6 +2932,7 @@ function App() {
           key,
           firestoreId: key,
           name: recipeObject?.name || key,
+          category: recipeObject?.category || '',
           menuPrice: recipeObject?.menuPrice ?? null,
           totalCost: roundCurrency(totalCost),
           components,
@@ -2839,7 +2970,7 @@ function App() {
       });
   };
 
-  const handleUpsertMenuItem = ({ key: requestedKey, name, price }) => {
+  const handleUpsertMenuItem = ({ key: requestedKey, name, price, category = '' }) => {
     const permission = requirePermission(accessProfile, 'canManageMenu', 'manage menu items and recipes');
     if (!permission.ok) {
       alert(permission.message);
@@ -2855,10 +2986,24 @@ function App() {
     }
 
     const menuPrice = parsePriceValue(price);
+    const normalizedCategory = String(category || '').trim();
+    const existingFirestoreItem = firestoreMenuItems.find((item) => item.key === key || item.firestoreId === key);
+    const existingRecipe = effectiveRecipes?.[key];
+    const existingComponents = existingFirestoreItem?.components || existingRecipe?.ingredients || [];
+    const totalCost = Number.isFinite(Number(existingFirestoreItem?.totalCost))
+      ? Number(existingFirestoreItem.totalCost)
+      : Number.isFinite(Number(existingRecipe?.totalCost))
+        ? Number(existingRecipe.totalCost)
+        : 0;
+    const nextItem = {
+      key,
+      name: trimmedName,
+      category: normalizedCategory,
+      menuPrice,
+    };
 
     setCustomMenuItems(prevItems => {
       const existingItemIndex = prevItems.findIndex((item) => item.key === key);
-      const nextItem = { key, name: trimmedName, menuPrice };
 
       if (existingItemIndex === -1) {
         return [...prevItems, nextItem];
@@ -2868,6 +3013,57 @@ function App() {
         index === existingItemIndex ? nextItem : item
       ));
     });
+
+    setFirestoreMenuItems(prevItems => {
+      const existingItemIndex = prevItems.findIndex((item) => item.key === key || item.firestoreId === key);
+      const nextFirestoreItem = {
+        ...(existingItemIndex >= 0 ? prevItems[existingItemIndex] : {}),
+        ...nextItem,
+        firestoreId: existingItemIndex >= 0 ? prevItems[existingItemIndex].firestoreId : key,
+        totalCost,
+        components: existingComponents,
+      };
+
+      if (existingItemIndex === -1) {
+        return [...prevItems, nextFirestoreItem].sort((a, b) => a.name.localeCompare(b.name));
+      }
+
+      return prevItems.map((item, index) => (
+        index === existingItemIndex ? nextFirestoreItem : item
+      ));
+    });
+
+    saveFirestoreMenuItem({
+      key,
+      name: trimmedName,
+      category: normalizedCategory,
+      menuPrice,
+      totalCost,
+      components: existingComponents,
+    })
+      .then((result) => {
+        if (result?.skipped) {
+          return;
+        }
+
+        setFirebaseSync(prev => ({
+          ...prev,
+          status: 'synced',
+          message: `${trimmedName} saved to Firebase menu items.`,
+          lastSavedAt: new Date().toISOString(),
+          menuItemCount: firestoreMenuItems.some((item) => item.key === key || item.firestoreId === key)
+            ? prev.menuItemCount
+            : Math.max(prev.menuItemCount, firestoreMenuItems.length + 1),
+        }));
+      })
+      .catch((error) => {
+        console.warn('Could not save menu item to Firestore.', error);
+        setFirebaseSync(prev => ({
+          ...prev,
+          status: 'error',
+          message: `${error?.message || 'Could not save menu item to Firebase.'} Local menu item is still saved.`,
+        }));
+      });
   };
 
   const handleDeleteCustomMenuItem = async (menuItemKey) => {
@@ -2891,6 +3087,7 @@ function App() {
     const archivedRecord = {
       key: menuItemKey,
       name: menuItem.name || menuItemKey,
+      category: menuItem.category || recipes?.[menuItemKey]?.category || '',
       menuPrice: menuItem.menuPrice ?? recipes?.[menuItemKey]?.menuPrice ?? null,
       totalCost: menuItem.totalCost ?? recipes?.[menuItemKey]?.totalCost ?? 0,
       components: menuItem.components || recipes?.[menuItemKey]?.ingredients || [],
@@ -3293,7 +3490,7 @@ function App() {
     applyDatabaseData(databaseData);
   };
 
-  const appIsLocked = !authSession || !authPinsAreConfigured(authSettings);
+  const appIsLocked = !authSession || !managerAuthIsConfigured;
 
   if (restaurantProfileStatus === 'loading') {
     return (
@@ -3334,7 +3531,7 @@ function App() {
     return (
       <AuthGate
         isPreparingAuth={isPreparingAuth}
-        authIsConfigured={authPinsAreConfigured(authSettings)}
+        authIsConfigured={managerAuthIsConfigured}
         staffList={staffList}
         onLogin={handleLogin}
         onInitialManagerSetup={handleInitialManagerSetup}
@@ -3365,6 +3562,8 @@ function App() {
                   staffList={staffList}
                   accessProfile={accessProfile}
                   invoiceStats={invoiceDashboardStats}
+                  menuItems={menuItems}
+                  recipes={effectiveRecipes}
                   onNavigate={setActiveTab}
                 />
               )}

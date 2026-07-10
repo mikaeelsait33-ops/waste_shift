@@ -26,7 +26,7 @@ assert.match(app, /deleteFirestoreMenuItems/);
 assert.match(setupWizard, /Set Up This Restaurant/);
 assert.match(setupWizard, /Manager PINs do not match/);
 assert.match(setupWizard, /Finish setup/);
-assert.match(setupWizard, /MenuImportPanel/);
+assert.match(setupWizard, /MenuImport/);
 
 assert.match(authGate, /Management login/);
 assert.match(authGate, /Staff login/);
@@ -40,6 +40,12 @@ assert.match(wasteForm, /Clear form/);
 
 assert.match(dashboard, /Today At A Glance/);
 assert.match(dashboard, /Invoice & Stock Signals/);
+assert.match(dashboard, /Daily waste cost/);
+assert.match(dashboard, /Below R150/);
+assert.match(dashboard, /Invoice spend trend/);
+assert.match(dashboard, /Top waste items/);
+assert.match(dashboard, /Worst cost margin/);
+assert.match(dashboard, /worstMarginItems/);
 assert.match(wasteList, /Load more entries/);
 assert.match(wasteList, /Needs cost review/);
 assert.match(settings, /Reset restaurant data/);

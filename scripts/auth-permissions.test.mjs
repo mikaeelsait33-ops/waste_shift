@@ -61,12 +61,27 @@ assert.doesNotMatch(generatedId, /\d{13}$/);
 
 const appSource = await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8');
 const firestoreSource = await readFile(new URL('../src/services/firestoreMenuItems.js', import.meta.url), 'utf8');
+const managerAccountsSource = await readFile(new URL('../src/services/managerAccounts.js', import.meta.url), 'utf8');
+const settingsSource = await readFile(new URL('../src/components/Settings.jsx', import.meta.url), 'utf8');
+const setupWizardSource = await readFile(new URL('../src/components/SetupWizard.jsx', import.meta.url), 'utf8');
 const idsSource = await readFile(new URL('../src/utils/ids.js', import.meta.url), 'utf8');
 
 assert.equal(DEFAULT_AUTH_SETTINGS.managementPin, null);
 assert.equal(DEFAULT_AUTH_SETTINGS.staffPin, null);
 assert.equal(/managementPin:\s*['"]\d{4,8}['"]/.test(appSource), false);
 assert.equal(/staffPin:\s*['"]\d{4,8}['"]/.test(appSource), false);
+assert.doesNotMatch(appSource, new RegExp(`19${'05'}`));
+assert.match(appSource, /managerPin/);
+assert.match(appSource, /Enter a 5 digit staff PIN/);
+assert.match(appSource, /That staff PIN is already in use/);
+assert.match(settingsSource, /Add manager account/);
+assert.match(settingsSource, /Staff PIN/);
+assert.match(settingsSource, /5 digit staff PIN/);
+assert.match(setupWizardSource, /Use a unique 5 digit staff PIN/);
+assert.match(setupWizardSource, /PIN set/);
+assert.equal(setupWizardSource.includes('createRandomPin'), false);
+assert.match(managerAccountsSource, /'managers'/);
+assert.match(managerAccountsSource, /managerPin/);
 assert.equal(idsSource.includes('Date.now'), false);
 assert.match(firestoreSource, /photoUrl:\s*''/);
 assert.match(firestoreSource, /hasPhoto:/);

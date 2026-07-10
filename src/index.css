@@ -639,6 +639,34 @@ button:disabled {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
 }
 
+.dashboard-command-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0 14px;
+}
+
+.metric-card--status.is-good {
+  border-color: rgba(53, 208, 127, 0.34);
+  background:
+    linear-gradient(180deg, rgba(53, 208, 127, 0.14), rgba(255, 255, 255, 0.035)),
+    var(--surface-2);
+}
+
+.metric-card--status.is-warning {
+  border-color: rgba(255, 209, 102, 0.36);
+  background:
+    linear-gradient(180deg, rgba(255, 209, 102, 0.14), rgba(255, 255, 255, 0.035)),
+    var(--surface-2);
+}
+
+.metric-card--status.is-danger {
+  border-color: rgba(255, 95, 87, 0.42);
+  background:
+    linear-gradient(180deg, rgba(255, 95, 87, 0.16), rgba(255, 255, 255, 0.035)),
+    var(--surface-2);
+}
+
 .metric-value {
   display: block;
   color: var(--text);
@@ -652,12 +680,46 @@ button:disabled {
   color: var(--danger);
 }
 
+.metric-value.is-good {
+  color: var(--success);
+}
+
+.metric-value.is-warning {
+  color: var(--amber);
+}
+
 .metric-label {
   display: block;
   margin-top: 7px;
   color: var(--muted);
   font-size: 0.78rem;
   font-weight: 650;
+}
+
+.dashboard-mini-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.dashboard-mini-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.dashboard-mini-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-mini-row strong {
+  color: var(--text);
+  font-size: 0.8rem;
 }
 
 .insight-strip {
@@ -926,7 +988,7 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  min-height: 40px;
+  min-height: 48px;
   padding: 9px 11px;
   color: var(--text);
   cursor: pointer;
@@ -1028,6 +1090,12 @@ button:disabled {
 .invoice-textarea {
   min-height: 130px;
   resize: vertical;
+}
+
+.bulk-menu-textarea {
+  min-height: 128px;
+  resize: vertical;
+  line-height: 1.45;
 }
 
 .invoice-primary-action {
@@ -2768,6 +2836,7 @@ textarea.input {
 
   .metrics-grid,
   .insight-strip,
+  .dashboard-command-grid,
   .field-grid,
   .field-grid--three,
   .staff-form-grid,

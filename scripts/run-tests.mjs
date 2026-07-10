@@ -10,6 +10,7 @@ const testFiles = [
   'scripts/shift-workflow.test.mjs',
   'scripts/waste-log.test.mjs',
   'scripts/navigation-groups.test.mjs',
+  'scripts/e2e-smoke.test.mjs',
   'scripts/ingredient-intelligence.test.mjs',
   'scripts/master-ingredients.test.mjs',
   'scripts/menu-recipe-import.test.mjs',
@@ -17,6 +18,7 @@ const testFiles = [
   'scripts/performance.test.mjs',
   'scripts/auth-permissions.test.mjs',
   'scripts/api-routes.test.mjs',
+  'scripts/session-isolation.test.mjs',
   'scripts/large-dataset.test.mjs',
   'scripts/button-audit.mjs',
 ];

@@ -1,7 +1,8 @@
 import { getFirestoreDb, ensureFirebaseAuth } from './firestoreMenuItems';
 import { getManagerApiHeaders } from '../utils/apiHeaders';
+import { getClientDatabaseId } from '../utils/clientDatabaseId';
 
-const RESTAURANT_PROFILE_REF = ['restaurants', 'main'];
+const getRestaurantProfileRef = () => ['restaurants', getClientDatabaseId() || 'local'];
 const getFirestoreApi = async () => {
   const firestore = await import('firebase/firestore');
 
@@ -17,6 +18,7 @@ const getFirestoreApi = async () => {
 };
 
 const toSafeString = (value) => String(value ?? '').trim();
+const scopeDocId = (id) => `${getClientDatabaseId() || 'local'}__${toSafeString(id)}`;
 
 export const createDefaultRestaurantProfile = () => ({
   restaurantName: '',
@@ -53,7 +55,7 @@ export const loadRestaurantProfile = async () => {
 
   await ensureFirebaseAuth();
   const { doc, getDoc } = await getFirestoreApi();
-  const snapshot = await getDoc(doc(db, ...RESTAURANT_PROFILE_REF));
+  const snapshot = await getDoc(doc(db, ...getRestaurantProfileRef()));
 
   if (!snapshot.exists()) {
     return { ok: true, exists: false, profile: createDefaultRestaurantProfile() };
@@ -79,7 +81,8 @@ export const saveRestaurantProfile = async (profile, options = {}) => {
 
   await ensureFirebaseAuth();
   const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
-  await setDoc(doc(db, ...RESTAURANT_PROFILE_REF), {
+  await setDoc(doc(db, ...getRestaurantProfileRef()), {
+    databaseId: getClientDatabaseId() || 'local',
     ...safeProfile,
     setupCompleted,
     setupCompletedAt: setupCompleted ? safeProfile.setupCompletedAt || now : '',
@@ -110,7 +113,8 @@ export const saveMenuImportHistory = async (historyRecord) => {
 
   await ensureFirebaseAuth();
   const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
-  await setDoc(doc(db, 'menuImports', safeId), {
+  await setDoc(doc(db, 'menuImports', scopeDocId(safeId)), {
+    databaseId: getClientDatabaseId() || 'local',
     ...historyRecord,
     createdAtServer: serverTimestamp(),
   }, { merge: true });

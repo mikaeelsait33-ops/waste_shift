@@ -1,5 +1,6 @@
 import { createItemPriceKey, normalizeRecipeIngredient } from '../utils/itemPriceCatalog';
 import { roundCurrency } from '../utils/wasteCalculations';
+import { getClientDatabaseId } from '../utils/clientDatabaseId';
 
 const FIREBASE_CONFIG = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -18,7 +19,7 @@ const hasFirebaseConfig = Boolean(
 
 let firestoreInstance = null;
 let firebaseAppInstance = null;
-let anonymousAuthPromise = null;
+let authPersistencePromise = null;
 let firestoreApiPromise = null;
 let firebaseAuthPromise = null;
 
@@ -51,7 +52,9 @@ const getFirestoreApi = async () => {
 const getFirebaseAuthApi = async () => {
   if (!firebaseAuthPromise) {
     firebaseAuthPromise = import('firebase/auth').then((auth) => ({
+      browserSessionPersistence: auth.browserSessionPersistence,
       getAuth: auth.getAuth,
+      setPersistence: auth.setPersistence,
       signInAnonymously: auth.signInAnonymously,
     }));
   }
@@ -65,6 +68,10 @@ export const getFirestoreRuntimeInfo = () => ({
   configured: hasFirebaseConfig,
   projectId: FIREBASE_CONFIG.projectId || '',
 });
+
+const getActiveDatabaseId = () => getClientDatabaseId() || 'local';
+
+const scopeDocId = (id) => `${getActiveDatabaseId()}__${toSafeString(id)}`;
 
 export const getFirestoreDb = async () => {
   if (!hasFirebaseConfig) {
@@ -86,24 +93,30 @@ export const ensureFirebaseAuth = async () => {
     return null;
   }
 
-  if (anonymousAuthPromise) {
-    return anonymousAuthPromise;
+  await getFirestoreDb();
+  const {
+    browserSessionPersistence,
+    getAuth,
+    setPersistence,
+    signInAnonymously,
+  } = await getFirebaseAuthApi();
+  const auth = getAuth(firebaseAppInstance);
+
+  if (!authPersistencePromise) {
+    authPersistencePromise = setPersistence(auth, browserSessionPersistence)
+      .catch((error) => {
+        console.warn('Could not set Firebase session persistence.', error);
+      });
   }
 
-  anonymousAuthPromise = (async () => {
-    await getFirestoreDb();
-    const { getAuth, signInAnonymously } = await getFirebaseAuthApi();
-    const auth = getAuth(firebaseAppInstance);
+  await authPersistencePromise;
 
-    if (auth.currentUser) {
-      return auth.currentUser;
-    }
+  if (auth.currentUser) {
+    return auth.currentUser;
+  }
 
-    const credential = await signInAnonymously(auth);
-    return credential.user;
-  })();
-
-  return anonymousAuthPromise;
+  const credential = await signInAnonymously(auth);
+  return credential.user;
 };
 
 const sanitizeComponent = (component, index) => {
@@ -300,6 +313,7 @@ export const normalizeFirestoreMenuItem = (docSnapshot) => {
     key,
     firestoreId: docSnapshot.id,
     name,
+    category: toSafeString(data?.category),
     menuPrice,
     totalCost,
     components,
@@ -317,8 +331,11 @@ export const loadFirestoreMenuItems = async () => {
   }
 
   await ensureFirebaseAuth();
-  const { collection, getDocs } = await getFirestoreApi();
-  const snapshot = await getDocs(collection(db, 'menuItems'));
+  const { collection, getDocs, query, where } = await getFirestoreApi();
+  const snapshot = await getDocs(query(
+    collection(db, 'menuItems'),
+    where('databaseId', '==', getActiveDatabaseId()),
+  ));
   return snapshot.docs.map(normalizeFirestoreMenuItem).filter(Boolean);
 };
 
@@ -332,18 +349,19 @@ export const loadFirestoreWasteEntries = async (options = {}) => {
   }
 
   await ensureFirebaseAuth();
-  const { collection, getDocs, limit, orderBy, query, where } = await getFirestoreApi();
+  const { collection, getDocs, query, where } = await getFirestoreApi();
   const since = new Date();
   since.setDate(since.getDate() - daysBack);
-  const constraints = [
-    where('createdAt', '>=', since.toISOString()),
-    orderBy('createdAt', 'desc'),
-    limit(resultLimit),
-  ];
-  const snapshot = await getDocs(query(collection(db, 'wasteEntries'), ...constraints));
+  const snapshot = await getDocs(query(
+    collection(db, 'wasteEntries'),
+    where('databaseId', '==', getActiveDatabaseId()),
+  ));
   return snapshot.docs
     .map(normalizeFirestoreWasteEntry)
     .filter((entry) => entry.name && entry.reason)
+    .filter((entry) => new Date(entry.createdAt || entry.timestamp || 0) >= since)
+    .sort((a, b) => new Date(b.createdAt || b.timestamp || 0).getTime() - new Date(a.createdAt || a.timestamp || 0).getTime())
+    .slice(0, resultLimit)
     .sort((a, b) => new Date(a.createdAt || a.timestamp || 0).getTime() - new Date(b.createdAt || b.timestamp || 0).getTime());
 };
 
@@ -356,7 +374,7 @@ export const loadFirestoreDatabaseSnapshot = async () => {
 
   await ensureFirebaseAuth();
   const { doc, getDoc } = await getFirestoreApi();
-  const snapshot = await getDoc(doc(db, 'appData', 'main'));
+  const snapshot = await getDoc(doc(db, 'appData', scopeDocId('main')));
 
   if (!snapshot.exists()) {
     return { ok: true, exists: false, data: null, updatedAt: '' };
@@ -381,10 +399,12 @@ export const saveFirestoreDatabaseSnapshot = async (databaseData) => {
 
   const safeData = createFirestoreAppDataPayload(databaseData);
   const exportedAt = new Date().toISOString();
+  const databaseId = getActiveDatabaseId();
 
   await ensureFirebaseAuth();
   const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
-  await setDoc(doc(db, 'appData', 'main'), {
+  await setDoc(doc(db, 'appData', scopeDocId('main')), {
+    databaseId,
     data: safeData,
     exportedAt,
     updatedAtClient: exportedAt,
@@ -403,6 +423,7 @@ export const saveFirestoreDatabaseSnapshot = async (databaseData) => {
 export const saveFirestoreMenuItem = async ({
   key,
   name,
+  category = '',
   totalCost,
   menuPrice = null,
   components,
@@ -427,9 +448,11 @@ export const saveFirestoreMenuItem = async ({
 
   await ensureFirebaseAuth();
   const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
-  await setDoc(doc(db, 'menuItems', safeKey), {
+  await setDoc(doc(db, 'menuItems', scopeDocId(safeKey)), {
+    databaseId: getActiveDatabaseId(),
     key: safeKey,
     name: safeName,
+    category: toSafeString(category),
     totalCost: resolvedTotalCost,
     ...(menuPrice !== null && menuPrice !== undefined ? { menuPrice: roundCurrency(Number(menuPrice) || 0) } : {}),
     components: safeComponents,
@@ -457,7 +480,8 @@ export const saveFirestoreRecipe = async ({ key, name, category = '', menuPrice 
 
   await ensureFirebaseAuth();
   const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
-  await setDoc(doc(db, 'recipes', safeKey), removeUndefinedValues({
+  await setDoc(doc(db, 'recipes', scopeDocId(safeKey)), removeUndefinedValues({
+    databaseId: getActiveDatabaseId(),
     key: safeKey,
     name: safeName,
     category: toSafeString(category),
@@ -482,7 +506,8 @@ export const archiveFirestoreMenuItem = async (key, archivedBy = 'WasteShift use
   const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
   const archivedAt = new Date().toISOString();
 
-  await setDoc(doc(db, 'menuItems', safeKey), {
+  await setDoc(doc(db, 'menuItems', scopeDocId(safeKey)), {
+    databaseId: getActiveDatabaseId(),
     key: safeKey,
     archived: true,
     archivedAt,
@@ -504,7 +529,8 @@ export const restoreFirestoreMenuItem = async (key) => {
   await ensureFirebaseAuth();
   const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
 
-  await setDoc(doc(db, 'menuItems', safeKey), {
+  await setDoc(doc(db, 'menuItems', scopeDocId(safeKey)), {
+    databaseId: getActiveDatabaseId(),
     key: safeKey,
     archived: false,
     archivedAt: '',
@@ -523,17 +549,31 @@ export const deleteFirestoreMenuItems = async (itemKeys = []) => {
   }
 
   await ensureFirebaseAuth();
-  const { collection, deleteDoc, doc, getDocs } = await getFirestoreApi();
+  const { collection, deleteDoc, doc, getDoc, getDocs, query, where } = await getFirestoreApi();
   const safeKeys = [...new Set((Array.isArray(itemKeys) ? itemKeys : [])
     .map((key) => String(key || '').trim())
     .filter(Boolean))];
 
   if (safeKeys.length > 0) {
-    await Promise.all(safeKeys.map((key) => deleteDoc(doc(db, 'menuItems', key))));
-    return { ok: true, deletedCount: safeKeys.length };
+    const deleteResults = await Promise.all(safeKeys.map(async (key) => {
+      const docRef = doc(db, 'menuItems', scopeDocId(key));
+      const docSnapshot = await getDoc(docRef).catch(() => null);
+
+      if (!docSnapshot?.exists?.() || docSnapshot.data()?.databaseId !== getActiveDatabaseId()) {
+        return false;
+      }
+
+      await deleteDoc(docRef);
+      return true;
+    }));
+
+    return { ok: true, deletedCount: deleteResults.filter(Boolean).length };
   }
 
-  const snapshot = await getDocs(collection(db, 'menuItems'));
+  const snapshot = await getDocs(query(
+    collection(db, 'menuItems'),
+    where('databaseId', '==', getActiveDatabaseId()),
+  ));
   await Promise.all(snapshot.docs.map((docSnapshot) => deleteDoc(docSnapshot.ref)));
 
   return { ok: true, deletedCount: snapshot.docs.length };
@@ -555,7 +595,8 @@ export const saveFirestoreWasteEntry = async (entry) => {
   }
 
   const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
-  await setDoc(doc(db, 'wasteEntries', safeEntryId), {
+  await setDoc(doc(db, 'wasteEntries', scopeDocId(safeEntryId)), {
+    databaseId: getActiveDatabaseId(),
     ...payload,
     firestoreSavedAt: serverTimestamp(),
   }, { merge: true });

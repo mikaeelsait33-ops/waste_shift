@@ -20,6 +20,17 @@ const createBlankIngredient = () => ({
   category: 'Produce',
 });
 
+const MENU_CATEGORY_OPTIONS = [
+  'Breakfast',
+  'Lunch',
+  'Dinner',
+  'Drinks',
+  'Bakery',
+  'Dessert',
+  'Specials',
+  'Other',
+];
+
 const createRecipeKey = (name) => String(name || '')
   .trim()
   .toLowerCase()
@@ -37,6 +48,43 @@ const parsePriceValue = (value) => {
 const formatInputPrice = (value) => {
   const parsedValue = Number(value);
   return Number.isFinite(parsedValue) ? String(parsedValue) : '';
+};
+
+const normalizeMenuCategory = (category) => {
+  const trimmedCategory = String(category || '').trim();
+  return trimmedCategory || 'Other';
+};
+
+const parseBulkMenuLine = (line) => {
+  const trimmedLine = String(line || '').trim();
+
+  if (!trimmedLine) {
+    return null;
+  }
+
+  const parts = (trimmedLine.includes(',') ? trimmedLine.split(',') : trimmedLine.split(/\s+-\s+/))
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (parts.length >= 2) {
+    return {
+      name: parts[0],
+      price: parsePriceValue(parts[1]),
+      category: normalizeMenuCategory(parts.slice(2).join(' - ')),
+    };
+  }
+
+  const priceMatch = trimmedLine.match(/^(.+?)\s+R?([0-9]+(?:\.[0-9]{1,2})?)\s*$/i);
+
+  if (!priceMatch) {
+    return { name: trimmedLine, price: null, category: 'Other' };
+  }
+
+  return {
+    name: priceMatch[1].trim(),
+    price: parsePriceValue(priceMatch[2]),
+    category: 'Other',
+  };
 };
 
 const getIngredientTotal = (ingredients, itemPriceCatalog) => (
@@ -60,11 +108,15 @@ function RecipeManager({
 }) {
   const [recipeName, setRecipeName] = useState('');
   const [recipePrice, setRecipePrice] = useState('');
+  const [recipeCategory, setRecipeCategory] = useState('Other');
   const [recipeSearch, setRecipeSearch] = useState('');
   const [archiveFilter, setArchiveFilter] = useState('active');
   const [editingKey, setEditingKey] = useState('');
   const [message, setMessage] = useState('');
   const [ingredients, setIngredients] = useState([createBlankIngredient()]);
+  const [ingredientsOpen, setIngredientsOpen] = useState(false);
+  const [bulkAddOpen, setBulkAddOpen] = useState(false);
+  const [bulkMenuText, setBulkMenuText] = useState('');
   const safeItemPriceCatalog = useMemo(() => sanitizeItemPriceCatalog(itemPriceCatalog), [itemPriceCatalog]);
   const ingredientPriceOptions = useMemo(() => (
     Object.values(safeItemPriceCatalog)
@@ -101,6 +153,7 @@ function RecipeManager({
         key: item.key,
         name: item.name,
         menuPrice: item.menuPrice,
+        category: item.category || safeRecipes[item.key]?.category || 'Other',
         recipe: safeRecipes[item.key],
         isMenuItem: true,
         archived: Boolean(item.archived || safeRecipes[item.key]?.archived),
@@ -127,6 +180,7 @@ function RecipeManager({
         key,
         name: recipe?.name || key,
         menuPrice: recipe?.menuPrice ?? null,
+        category: recipe?.category || 'Other',
         recipe,
         isMenuItem: false,
         archived: Boolean(recipe?.archived),
@@ -160,7 +214,9 @@ function RecipeManager({
     setEditingKey('');
     setRecipeName('');
     setRecipePrice('');
+    setRecipeCategory('Other');
     setIngredients([createBlankIngredient()]);
+    setIngredientsOpen(false);
     setMessage('');
   };
 
@@ -210,8 +266,101 @@ function RecipeManager({
     setEditingKey(item.key);
     setRecipeName(item.name || item.recipe?.name || '');
     setRecipePrice(formatInputPrice(currentMenuPrice));
+    setRecipeCategory(normalizeMenuCategory(item.category || item.recipe?.category));
     setIngredients(editableIngredients);
+    setIngredientsOpen(true);
     setMessage(`Editing ${item.name || 'menu item'}.`);
+  };
+
+  const handleDuplicateItem = (item) => {
+    const currentMenuPrice = item.menuPrice ?? item.recipe?.menuPrice;
+    const copiedIngredients = Array.isArray(item.recipe?.ingredients) && item.recipe.ingredients.length > 0
+      ? item.recipe.ingredients.map((ingredient) => ({
+        ingredientId: ingredient?.ingredientId || ingredient?.priceCatalogKey || '',
+        name: ingredient?.name || '',
+        quantity: ingredient?.quantity || '',
+        cost: formatInputPrice(ingredient?.cost),
+        category: ingredient?.category || 'Produce',
+      }))
+      : [createBlankIngredient()];
+
+    setEditingKey('');
+    setRecipeName(`${item.name || item.recipe?.name || 'Menu item'} Copy`);
+    setRecipePrice(formatInputPrice(currentMenuPrice));
+    setRecipeCategory(normalizeMenuCategory(item.category || item.recipe?.category));
+    setIngredients(copiedIngredients);
+    setIngredientsOpen(copiedIngredients.some((ingredient) => ingredient.name || ingredient.ingredientId));
+    setMessage(`Duplicating ${item.name || 'menu item'}.`);
+  };
+
+  const handleBulkAdd = () => {
+    if (!accessProfile?.canManageMenu) {
+      setMessage('Manager authorization is required to add menu items.');
+      return;
+    }
+
+    const parsedRows = bulkMenuText
+      .split(/\r?\n/)
+      .map(parseBulkMenuLine)
+      .filter(Boolean);
+
+    if (parsedRows.length === 0) {
+      setMessage('Paste at least one menu item line.');
+      return;
+    }
+
+    const existingKeys = new Set(catalogEntries.map((item) => item.key));
+    const nextKeys = new Set();
+    const invalidRows = [];
+    const duplicateRows = [];
+    const saveableRows = [];
+
+    parsedRows.forEach((row) => {
+      const key = createRecipeKey(row.name);
+
+      if (!row.name || !key || row.price === null) {
+        invalidRows.push(row.name || 'Untitled row');
+        return;
+      }
+
+      if (existingKeys.has(key) || nextKeys.has(key)) {
+        duplicateRows.push(row.name);
+        return;
+      }
+
+      nextKeys.add(key);
+      saveableRows.push({
+        key,
+        name: row.name,
+        price: row.price,
+        category: row.category,
+      });
+    });
+
+    saveableRows.forEach((row) => {
+      onSaveMenuItem?.(row);
+    });
+
+    const statusParts = [];
+
+    if (saveableRows.length > 0) {
+      statusParts.push(`${saveableRows.length} menu item${saveableRows.length === 1 ? '' : 's'} added.`);
+    }
+
+    if (invalidRows.length > 0) {
+      statusParts.push(`${invalidRows.length} line${invalidRows.length === 1 ? '' : 's'} need a name and price.`);
+    }
+
+    if (duplicateRows.length > 0) {
+      statusParts.push(`${duplicateRows.length} duplicate${duplicateRows.length === 1 ? '' : 's'} skipped.`);
+    }
+
+    if (saveableRows.length > 0) {
+      setBulkMenuText('');
+      setBulkAddOpen(false);
+    }
+
+    setMessage(statusParts.join(' '));
   };
 
   const handleSubmitRecipe = (e) => {
@@ -277,6 +426,7 @@ function RecipeManager({
     if (formattedIngredients.length > 0 || safeRecipes[recipeKey]) {
       onAddRecipe(recipeKey, {
         name: trimmedRecipeName,
+        category: normalizeMenuCategory(recipeCategory),
         ...(menuPrice !== null ? { menuPrice } : {}),
         ingredients: formattedIngredients,
       });
@@ -286,13 +436,16 @@ function RecipeManager({
       key: recipeKey,
       name: trimmedRecipeName,
       price: recipePrice,
+      category: normalizeMenuCategory(recipeCategory),
     });
 
     setMessage(editingKey ? 'Menu item updated.' : 'Menu item saved.');
     setEditingKey('');
     setRecipeName('');
     setRecipePrice('');
+    setRecipeCategory('Other');
     setIngredients([createBlankIngredient()]);
+    setIngredientsOpen(false);
   };
 
   return (
@@ -312,7 +465,7 @@ function RecipeManager({
             <div>
               <p className="eyebrow">Menu setup</p>
               <h2 className="title">{editingKey ? 'Edit Menu Item' : 'Menu Item Creator'}</h2>
-              <p className="subtitle">Set menu pricing and optional ingredient breakdowns in one place.</p>
+              <p className="subtitle">Save the basic item first, then add recipe costing only when needed.</p>
             </div>
             {editingKey && (
               <button type="button" onClick={resetRecipeForm} className="ghost-button">
@@ -321,7 +474,7 @@ function RecipeManager({
             )}
           </div>
 
-          <div className="field-grid">
+          <div className="field-grid field-grid--three">
             <div className="field">
               <label htmlFor="recipe-name">Menu item name</label>
               <input
@@ -347,131 +500,189 @@ function RecipeManager({
                 className="input"
               />
             </div>
-          </div>
 
-          <div className="smart-panel">
-            <div className="smart-panel__header">
-              <span className="breakdown-title">Menu item preview</span>
-              <span className="badge">{touchedIngredientCount} ingredient row{touchedIngredientCount !== 1 ? 's' : ''}</span>
-            </div>
-            <div className="import-summary-grid">
-              <span className="badge">Ingredients R{draftIngredientTotal.toFixed(2)}</span>
-              <span className={draftMenuPrice !== null ? 'badge is-green' : 'badge'}>{draftMenuPrice !== null ? `Price R${draftMenuPrice.toFixed(2)}` : 'No price'}</span>
-              <span className={draftMargin !== null && draftMargin < 0 ? 'badge is-red' : 'badge'}>
-                {draftMargin !== null ? `Gap R${draftMargin.toFixed(2)}` : 'Gap pending'}
-              </span>
-              {incompleteIngredientCount > 0 && <span className="badge is-red">{incompleteIngredientCount} incomplete</span>}
-            </div>
-            <div className="suggestion-row">
-              <button
-                type="button"
-                onClick={() => setRecipePrice(draftIngredientTotal.toFixed(2))}
-                className="suggestion-button"
-                disabled={draftIngredientTotal <= 0}
+            <div className="field">
+              <label htmlFor="recipe-category">Category</label>
+              <select
+                id="recipe-category"
+                value={recipeCategory}
+                onChange={(event) => setRecipeCategory(event.target.value)}
+                className="select"
               >
-                <span>Use ingredient total</span>
-                <strong>R{draftIngredientTotal.toFixed(2)}</strong>
-              </button>
-              <button type="button" onClick={compactIngredientRows} className="suggestion-button">
-                <span>Clean rows</span>
-                <strong>{Math.max(0, ingredients.length - touchedIngredientCount)}</strong>
-              </button>
+                {MENU_CATEGORY_OPTIONS.map((categoryOption) => (
+                  <option key={categoryOption} value={categoryOption}>
+                    {categoryOption}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 
-          <h3 className="breakdown-title">Ingredient breakdown</h3>
-          <div className="ingredient-list">
-            {ingredients.length === 0 ? (
-              <div className="muted-box">
-                <p className="small-text" style={{ margin: 0 }}>No ingredients added. This item will be saved as price-only.</p>
-              </div>
-            ) : (
-              ingredients.map((ingredient, index) => {
-                const catalogPrice = findItemPriceRecord(safeItemPriceCatalog, ingredient.ingredientId) || findItemPriceRecord(safeItemPriceCatalog, ingredient.name);
-                const resolvedCost = calculateRecipeIngredientCost({ ingredient, itemPriceCatalog: safeItemPriceCatalog });
-
-                return (
-                  <div key={`${index}-${ingredient.name}`} className="ingredient-card">
-                    <div className="recipe-ingredient-grid">
-                      <input
-                        type="text"
-                        placeholder="Ingredient name"
-                        value={ingredient.name}
-                        onChange={(e) => handleIngredientChange(index, 'name', e.target.value)}
-                        className="input"
-                        aria-label="Ingredient name"
-                      />
-                      <select
-                        value={ingredient.ingredientId || ''}
-                        onChange={(e) => {
-                          const nextIngredientId = e.target.value;
-                          const selectedRecord = safeItemPriceCatalog[nextIngredientId];
-
-                          handleIngredientChange(index, 'ingredientId', nextIngredientId);
-                          if (selectedRecord && !ingredient.name.trim()) {
-                            handleIngredientChange(index, 'name', selectedRecord.name);
-                          }
-                        }}
-                        className="select"
-                        aria-label="Linked raw ingredient"
-                      >
-                        <option value="">Link ingredient</option>
-                        {ingredientPriceOptions.map((record) => (
-                          <option key={record.key} value={record.key}>
-                            {record.name}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="text"
-                        placeholder="Quantity"
-                        value={ingredient.quantity}
-                        onChange={(e) => handleIngredientChange(index, 'quantity', e.target.value)}
-                        className="input"
-                        aria-label="Ingredient quantity"
-                      />
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        placeholder="Fallback cost (R)"
-                        value={ingredient.cost}
-                        onChange={(e) => handleIngredientChange(index, 'cost', e.target.value)}
-                        className="input"
-                        aria-label="Ingredient cost"
-                      />
-                      <select
-                        value={ingredient.category}
-                        onChange={(e) => handleIngredientChange(index, 'category', e.target.value)}
-                        className="select"
-                        aria-label="Ingredient category"
-                      >
-                        {WASTE_CATEGORY_OPTIONS.map((categoryOption) => (
-                          <option key={categoryOption.value} value={categoryOption.value}>
-                            {categoryOption.label}
-                          </option>
-                        ))}
-                      </select>
-                      <button type="button" onClick={() => removeIngredientRow(index)} className="delete-button" title="Remove ingredient">
-                        x
-                      </button>
-                    </div>
-                    {(catalogPrice || resolvedCost.cost > 0) && (
-                      <div className="small-text ingredient-cost-note">
-                        {resolvedCost.source === 'catalog'
-                          ? `Auto cost R${resolvedCost.cost.toFixed(2)} from R${Number(catalogPrice.costPerBaseUnit || catalogPrice.price).toFixed(4)} / ${catalogPrice.baseUnit || catalogPrice.unit}.`
-                          : `Using fallback ingredient cost R${resolvedCost.cost.toFixed(2)}.`}
-                      </div>
-                    )}
-                  </div>
-                );
-              })
-            )}
+          <div className="suggestion-row" style={{ marginBottom: 12 }}>
+            <button
+              type="button"
+              onClick={() => setIngredientsOpen((currentValue) => !currentValue)}
+              className="suggestion-button"
+            >
+              <span>{ingredientsOpen ? 'Hide recipe costs' : 'Add recipe costs'}</span>
+              <strong>{touchedIngredientCount}</strong>
+            </button>
+            <button
+              type="button"
+              onClick={() => setBulkAddOpen((currentValue) => !currentValue)}
+              className="suggestion-button"
+            >
+              <span>{bulkAddOpen ? 'Close bulk add' : 'Bulk add'}</span>
+              <strong>+</strong>
+            </button>
           </div>
 
-          <button type="button" onClick={addIngredientRow} className="ghost-button" style={{ width: '100%', margin: '14px 0' }}>
-            Add ingredient
-          </button>
+          {bulkAddOpen && (
+            <div className="smart-panel">
+              <div className="smart-panel__header">
+                <span className="breakdown-title">Bulk add menu items</span>
+                <span className="badge">Name, price, category</span>
+              </div>
+              <textarea
+                value={bulkMenuText}
+                onChange={(event) => setBulkMenuText(event.target.value)}
+                className="input bulk-menu-textarea"
+                rows={4}
+                placeholder="Burger, 95, Lunch"
+              />
+              <button type="button" onClick={handleBulkAdd} className="primary-button" style={{ marginTop: 10 }}>
+                Add pasted items
+              </button>
+            </div>
+          )}
+
+          {ingredientsOpen && (
+            <>
+              <div className="smart-panel">
+                <div className="smart-panel__header">
+                  <span className="breakdown-title">Menu item preview</span>
+                  <span className="badge">{touchedIngredientCount} ingredient row{touchedIngredientCount !== 1 ? 's' : ''}</span>
+                </div>
+                <div className="import-summary-grid">
+                  <span className="badge">Ingredients R{draftIngredientTotal.toFixed(2)}</span>
+                  <span className={draftMenuPrice !== null ? 'badge is-green' : 'badge'}>{draftMenuPrice !== null ? `Price R${draftMenuPrice.toFixed(2)}` : 'No price'}</span>
+                  <span className={draftMargin !== null && draftMargin < 0 ? 'badge is-red' : 'badge'}>
+                    {draftMargin !== null ? `Gap R${draftMargin.toFixed(2)}` : 'Gap pending'}
+                  </span>
+                  {incompleteIngredientCount > 0 && <span className="badge is-red">{incompleteIngredientCount} incomplete</span>}
+                </div>
+                <div className="suggestion-row">
+                  <button
+                    type="button"
+                    onClick={() => setRecipePrice(draftIngredientTotal.toFixed(2))}
+                    className="suggestion-button"
+                    disabled={draftIngredientTotal <= 0}
+                  >
+                    <span>Use ingredient total</span>
+                    <strong>R{draftIngredientTotal.toFixed(2)}</strong>
+                  </button>
+                  <button type="button" onClick={compactIngredientRows} className="suggestion-button">
+                    <span>Clean rows</span>
+                    <strong>{Math.max(0, ingredients.length - touchedIngredientCount)}</strong>
+                  </button>
+                </div>
+              </div>
+
+              <h3 className="breakdown-title">Ingredient breakdown</h3>
+              <div className="ingredient-list">
+                {ingredients.length === 0 ? (
+                  <div className="muted-box">
+                    <p className="small-text" style={{ margin: 0 }}>No ingredients added. This item will be saved as price-only.</p>
+                  </div>
+                ) : (
+                  ingredients.map((ingredient, index) => {
+                    const catalogPrice = findItemPriceRecord(safeItemPriceCatalog, ingredient.ingredientId) || findItemPriceRecord(safeItemPriceCatalog, ingredient.name);
+                    const resolvedCost = calculateRecipeIngredientCost({ ingredient, itemPriceCatalog: safeItemPriceCatalog });
+
+                    return (
+                      <div key={`${index}-${ingredient.name}`} className="ingredient-card">
+                        <div className="recipe-ingredient-grid">
+                          <input
+                            type="text"
+                            placeholder="Ingredient name"
+                            value={ingredient.name}
+                            onChange={(e) => handleIngredientChange(index, 'name', e.target.value)}
+                            className="input"
+                            aria-label="Ingredient name"
+                          />
+                          <select
+                            value={ingredient.ingredientId || ''}
+                            onChange={(e) => {
+                              const nextIngredientId = e.target.value;
+                              const selectedRecord = safeItemPriceCatalog[nextIngredientId];
+
+                              handleIngredientChange(index, 'ingredientId', nextIngredientId);
+                              if (selectedRecord && !ingredient.name.trim()) {
+                                handleIngredientChange(index, 'name', selectedRecord.name);
+                              }
+                            }}
+                            className="select"
+                            aria-label="Linked raw ingredient"
+                          >
+                            <option value="">Link ingredient</option>
+                            {ingredientPriceOptions.map((record) => (
+                              <option key={record.key} value={record.key}>
+                                {record.name}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            type="text"
+                            placeholder="Quantity"
+                            value={ingredient.quantity}
+                            onChange={(e) => handleIngredientChange(index, 'quantity', e.target.value)}
+                            className="input"
+                            aria-label="Ingredient quantity"
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            placeholder="Fallback cost (R)"
+                            value={ingredient.cost}
+                            onChange={(e) => handleIngredientChange(index, 'cost', e.target.value)}
+                            className="input"
+                            aria-label="Ingredient cost"
+                          />
+                          <select
+                            value={ingredient.category}
+                            onChange={(e) => handleIngredientChange(index, 'category', e.target.value)}
+                            className="select"
+                            aria-label="Ingredient category"
+                          >
+                            {WASTE_CATEGORY_OPTIONS.map((categoryOption) => (
+                              <option key={categoryOption.value} value={categoryOption.value}>
+                                {categoryOption.label}
+                              </option>
+                            ))}
+                          </select>
+                          <button type="button" onClick={() => removeIngredientRow(index)} className="delete-button" title="Remove ingredient">
+                            x
+                          </button>
+                        </div>
+                        {(catalogPrice || resolvedCost.cost > 0) && (
+                          <div className="small-text ingredient-cost-note">
+                            {resolvedCost.source === 'catalog'
+                              ? `Auto cost R${resolvedCost.cost.toFixed(2)} from R${Number(catalogPrice.costPerBaseUnit || catalogPrice.price).toFixed(4)} / ${catalogPrice.baseUnit || catalogPrice.unit}.`
+                              : `Using fallback ingredient cost R${resolvedCost.cost.toFixed(2)}.`}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              <button type="button" onClick={addIngredientRow} className="ghost-button" style={{ width: '100%', margin: '14px 0' }}>
+                Add ingredient
+              </button>
+            </>
+          )}
 
           <button type="submit" className="primary-button">
             {editingKey ? 'Save changes' : 'Save menu item'}
@@ -572,6 +783,9 @@ function RecipeManager({
                       </span>
                       <button type="button" onClick={() => handleEditItem(item)} className="ghost-button is-warning">
                         Edit
+                      </button>
+                      <button type="button" onClick={() => handleDuplicateItem(item)} className="ghost-button compact-action">
+                        Duplicate
                       </button>
                       {item.archived ? (
                         <button type="button" onClick={() => onRestoreMenuItem?.(item.key)} className="ghost-button compact-action">
