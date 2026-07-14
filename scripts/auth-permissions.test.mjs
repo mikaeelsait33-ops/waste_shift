@@ -40,6 +40,16 @@ const staffProfile = getAccessProfile({ id: 'staff_2', name: 'Team', role: 'Wait
 const chefProfile = getAccessProfile({ id: 'staff_3', name: 'Chef', role: 'Chef' });
 
 assert.equal(managerProfile.canManageStaff, true);
+
+const legacyManagerProfile = getAccessProfile({
+  id: 'staff_legacy_manager',
+  name: 'Nadia',
+  role: 'Manager',
+  roleKey: 'management',
+  staffSection: 'management',
+});
+assert.equal(legacyManagerProfile.roleKey, 'manager');
+assert.equal(legacyManagerProfile.canUseAiImports, true);
 assert.equal(managerProfile.canClearData, true);
 assert.equal(managerProfile.canUseAiImports, true);
 assert.equal(staffProfile.canLogWaste, true);

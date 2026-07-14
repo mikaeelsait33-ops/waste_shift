@@ -8,13 +8,20 @@ const ROLE_PATTERNS = [
 
 const ROLE_LABELS = Object.fromEntries(ROLE_PATTERNS.map((role) => [role.key, role.label]));
 const ROLE_KEYS = new Set(ROLE_PATTERNS.map((role) => role.key));
+const ROLE_ALIASES = new Map([
+  ['management', 'manager'],
+  ['administrator', 'owner'],
+  ['admin', 'owner'],
+  ['supervisor', 'manager'],
+]);
 
 export const ACCESS_ROLE_KEYS = [...ROLE_KEYS];
 
 export const normalizeAccessRoleKey = (roleKey) => (
-  ROLE_KEYS.has(String(roleKey || '').trim().toLowerCase())
+  ROLE_ALIASES.get(String(roleKey || '').trim().toLowerCase())
+  || (ROLE_KEYS.has(String(roleKey || '').trim().toLowerCase())
     ? String(roleKey).trim().toLowerCase()
-    : 'waiter'
+    : 'waiter')
 );
 
 export const inferRoleKey = (roleOrName) => {
@@ -24,9 +31,29 @@ export const inferRoleKey = (roleOrName) => {
   return matchedRole?.key || 'waiter';
 };
 
+const resolveAccessRoleKey = (staffMember) => {
+  const storedRoleKey = String(staffMember?.roleKey || '').trim().toLowerCase();
+
+  if (ROLE_KEYS.has(storedRoleKey) || ROLE_ALIASES.has(storedRoleKey)) {
+    return normalizeAccessRoleKey(storedRoleKey);
+  }
+
+  const inferredRole = inferRoleKey(staffMember?.role);
+
+  if (inferredRole !== 'waiter') {
+    return inferredRole;
+  }
+
+  if (String(staffMember?.staffSection || '').trim().toLowerCase() === 'management') {
+    return 'manager';
+  }
+
+  return normalizeAccessRoleKey(storedRoleKey || inferredRole);
+};
+
 export const getAccessProfile = (staffMember) => {
   const hasOperator = Boolean(staffMember?.id);
-  const roleKey = hasOperator ? normalizeAccessRoleKey(staffMember?.roleKey || inferRoleKey(staffMember?.role)) : 'unassigned';
+  const roleKey = hasOperator ? resolveAccessRoleKey(staffMember) : 'unassigned';
   const isOwner = roleKey === 'owner';
   const isManager = roleKey === 'manager';
   const isChefOrBarista = roleKey === 'chef' || roleKey === 'barista';

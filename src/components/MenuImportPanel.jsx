@@ -7,7 +7,7 @@ import {
   parseMenuPlainText,
   parseMenuPrice,
 } from '../utils/menuImport';
-import { getManagerApiHeaders } from '../utils/apiHeaders';
+import { getManagerApiErrorMessage, getManagerApiHeaders } from '../utils/apiHeaders';
 
 const readFileAsText = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -122,11 +122,7 @@ function MenuImportPanel({
         if (file && payload?.ocr?.rawText) {
           setSourceText(payload.ocr.rawText);
         }
-        const protectedApiMessage = ['manager_api_secret_required', 'sync_api_secret_required'].includes(payload.code)
-          ? 'Gemini menu import is protected by the server access key. Your manager role is active, but this browser needs the sync access key saved in Settings > Database & Backup before using Gemini.'
-          : payload.code === 'manager_api_secret_invalid' || payload.code === 'sync_api_secret_invalid'
-            ? 'Gemini menu import is protected, and the saved access key was rejected. Check the key in Settings > Database & Backup.'
-            : payload.message || payload.errors?.[0] || 'Menu import failed.';
+        const protectedApiMessage = getManagerApiErrorMessage(payload, 'Menu import failed.');
         throw new Error(protectedApiMessage);
       }
 

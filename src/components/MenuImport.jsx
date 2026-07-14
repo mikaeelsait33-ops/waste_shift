@@ -1,5 +1,10 @@
 import { useMemo, useRef, useState } from 'react';
-import { getManagerApiHeaders } from '../utils/apiHeaders';
+import {
+  getManagerApiErrorMessage,
+  getManagerApiHeaders,
+  getStoredManagerApiAccessKey,
+  saveManagerApiAccessKey,
+} from '../utils/apiHeaders';
 import {
   buildMenuImportSaveItems,
   catalogUnitMismatch,
@@ -82,6 +87,7 @@ function MenuImport({
   const [message, setMessage] = useState('');
   const [isExtracting, setIsExtracting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [managerApiAccessKey, setManagerApiAccessKey] = useState(getStoredManagerApiAccessKey);
   const safeCatalog = useMemo(() => sanitizeItemPriceCatalog(itemPriceCatalog), [itemPriceCatalog]);
   const catalogOptions = useMemo(() => getMenuImportCatalogOptions(safeCatalog), [safeCatalog]);
   const canUseAiImports = !accessProfile || Boolean(accessProfile?.canUseAiImports);
@@ -113,7 +119,7 @@ function MenuImport({
     const payload = await response.json().catch(() => ({}));
 
     if (!response.ok || payload.ok === false) {
-      throw new Error(payload.message || 'Gemini could not parse this menu.');
+      throw new Error(getManagerApiErrorMessage(payload, 'Gemini could not parse this menu.'));
     }
 
     setSourceName(nextSourceName);
@@ -168,7 +174,7 @@ function MenuImport({
       const ocrPayload = await ocrResponse.json().catch(() => ({}));
 
       if (!ocrResponse.ok || ocrPayload.ok === false || ocrPayload.success === false) {
-        throw new Error(ocrPayload.message || ocrPayload.errors?.[0] || 'OCR could not read this menu file.');
+        throw new Error(getManagerApiErrorMessage(ocrPayload, 'OCR could not read this menu file.'));
       }
 
       const ocrText = String(ocrPayload?.ocr?.rawText || '').trim();
@@ -343,6 +349,18 @@ function MenuImport({
   };
 
   const saveableCount = reviewDishes.filter((dish) => !dish.rejected && dish.name && dish.ingredients.length > 0).length;
+  const saveManagerApiKey = () => {
+    if (!canUseAiImports) {
+      setMessage(`${operatorName} cannot manage Gemini access. Use a manager account.`);
+      return;
+    }
+
+    const savedKey = saveManagerApiAccessKey(managerApiAccessKey);
+    setManagerApiAccessKey(savedKey);
+    setMessage(savedKey
+      ? 'Gemini access key saved on this device. You can now import the menu.'
+      : 'Gemini access key removed from this device.');
+  };
 
   return (
     <section className={compact ? 'smart-panel menu-import-panel' : 'panel menu-import-panel'}>
@@ -407,7 +425,29 @@ function MenuImport({
 
         {!canUseAiImports && (
           <div className="notice-panel notice-panel--warning">
-            Manager authorization is required for Gemini/OCR menu import.
+            This account does not have manager access for Gemini/OCR menu import.
+          </div>
+        )}
+
+        {canUseAiImports && (
+          <div className="notice-panel">
+            <div className="field">
+              <label htmlFor="menu-import-api-key">Gemini access key</label>
+              <div className="manager-row">
+                <input
+                  id="menu-import-api-key"
+                  type="password"
+                  autoComplete="off"
+                  value={managerApiAccessKey}
+                  onChange={(event) => setManagerApiAccessKey(event.target.value)}
+                  placeholder="Enter the Vercel manager API key"
+                  className="input"
+                />
+                <button type="button" className="ghost-button" onClick={saveManagerApiKey} disabled={isExtracting || isSaving}>
+                  Save key
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

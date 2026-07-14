@@ -13,6 +13,7 @@ const settings = await read('../src/components/Settings.jsx');
 const invoiceScanner = await read('../src/components/InvoiceScanner.jsx');
 const recipeManager = await read('../src/components/RecipeManager.jsx');
 const menuImportPanel = await read('../src/components/MenuImportPanel.jsx');
+const apiHeaders = await read('../src/utils/apiHeaders.js');
 
 assert.match(app, /activeTab === 'dashboard'/);
 assert.match(app, /activeTab === 'logWaste'/);
@@ -54,7 +55,9 @@ assert.match(settings, /accessProfile=\{accessProfile\}/);
 assert.match(recipeManager, /accessProfile=\{accessProfile\}/);
 assert.match(recipeManager, /Wipe menu/);
 assert.match(menuImportPanel, /canUseAiImports/);
-assert.match(menuImportPanel, /Your manager role is active/);
+assert.match(menuImportPanel, /getManagerApiErrorMessage/);
+assert.match(apiHeaders, /Your manager login is active/);
+assert.match(apiHeaders, /saveManagerApiAccessKey/);
 assert.match(invoiceScanner, /Load more invoice lines/);
 assert.match(invoiceScanner, /Cost review queue/);
 
