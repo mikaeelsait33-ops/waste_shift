@@ -60,6 +60,7 @@ const createBlankMenuDraft = () => ({
 function SetupWizard({
   firestoreConfigured,
   firebaseSync,
+  onPrepareManagerAccess,
   onFinishSetup,
 }) {
   const [progress, setProgress] = useState(loadSavedProgress);
@@ -67,6 +68,7 @@ function SetupWizard({
   const [menuDraft, setMenuDraft] = useState(createBlankMenuDraft);
   const [message, setMessage] = useState('');
   const [isFinishing, setIsFinishing] = useState(false);
+  const [isPreparingManager, setIsPreparingManager] = useState(false);
   const [existingRestaurantAccess, setExistingRestaurantAccess] = useState('');
   const stepIndex = Math.max(0, Math.min(STEPS.length - 1, Number(progress.stepIndex) || 0));
   const currentStep = STEPS[stepIndex];
@@ -109,7 +111,7 @@ function SetupWizard({
     return '';
   };
 
-  const goNext = () => {
+  const goNext = async () => {
     const validationError = validateCurrentStep();
 
     if (validationError) {
@@ -117,7 +119,28 @@ function SetupWizard({
       return;
     }
 
-    setMessage('');
+    if (currentStep === 'Manager' && onPrepareManagerAccess) {
+      setIsPreparingManager(true);
+
+      try {
+        const result = await onPrepareManagerAccess({
+          name: progress.managerName,
+          managerPin: progress.managerPin,
+        });
+
+        if (!result?.ok) {
+          setMessage(result?.message || 'Could not prepare manager access.');
+          return;
+        }
+
+        setMessage(result?.message || '');
+      } finally {
+        setIsPreparingManager(false);
+      }
+    } else {
+      setMessage('');
+    }
+
     updateProgress({ stepIndex: Math.min(STEPS.length - 1, stepIndex + 1) });
   };
 
@@ -540,12 +563,14 @@ function SetupWizard({
         )}
 
         <div className="manager-row" style={{ marginTop: 18 }}>
-          <button type="button" className="ghost-button" onClick={goBack} disabled={stepIndex === 0 || isFinishing}>
+          <button type="button" className="ghost-button" onClick={goBack} disabled={stepIndex === 0 || isFinishing || isPreparingManager}>
             Back
           </button>
           {currentStep !== 'Review' && (
-            <button type="button" className="primary-button" onClick={goNext} disabled={isFinishing}>
-              {currentStep === 'Staff' || currentStep === 'Menu' ? 'Continue or skip' : 'Continue'}
+            <button type="button" className="primary-button" onClick={goNext} disabled={isFinishing || isPreparingManager}>
+              {isPreparingManager
+                ? 'Preparing manager...'
+                : currentStep === 'Staff' || currentStep === 'Menu' ? 'Continue or skip' : 'Continue'}
             </button>
           )}
         </div>

@@ -1,4 +1,4 @@
-import { authorizeManagerApiRequest } from './_auth.js';
+import { authorizeManagerSessionRequest } from './_auth.js';
 import { parseInvoiceText, roundMoney } from '../src/utils/invoiceParsing.js';
 
 const DEFAULT_MODEL = 'gemini-2.5-flash-lite';
@@ -606,7 +606,7 @@ export default async function handler(request, response) {
     return;
   }
 
-  const authorization = authorizeManagerApiRequest(request);
+  const authorization = await authorizeManagerSessionRequest(request);
 
   if (!authorization.ok) {
     sendJson(response, authorization.status, authorization.body);

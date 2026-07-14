@@ -53,6 +53,7 @@ import {
 } from './services/restaurantFirestore';
 import { saveCurrentUserStaffProfile } from './services/firebaseAccess';
 import { loadManagerAccounts, saveManagerAccount } from './services/managerAccounts';
+import { establishManagerSession } from './services/managerSession';
 import {
   createEmptyRestaurantData,
   getRestaurantResetStorageKeys,
@@ -1639,6 +1640,14 @@ function App() {
     }).catch((error) => {
       console.warn('Could not save manager Firebase access profile.', error);
     });
+    const managerSessionResult = await establishManagerSession({
+      managerId: managerMember.id,
+      pin: trimmedManagementPin,
+    });
+
+    if (!managerSessionResult.ok) {
+      console.warn('Could not prepare automatic manager session.', managerSessionResult.message);
+    }
     const nextSession = {
       mode: 'management',
       staffId: managerMember.id,
@@ -1660,7 +1669,12 @@ function App() {
       ...prevLog,
     ].slice(0, 500));
 
-    return { ok: true, message: 'Manager access created.' };
+    return {
+      ok: true,
+      message: managerSessionResult.ok
+        ? 'Manager access created.'
+        : `Manager access created. ${managerSessionResult.message}`,
+    };
   }, [upsertLoginAccount]);
 
   const handleLogin = useCallback(async ({ mode, name, staffSection, pin }) => {
@@ -1737,6 +1751,13 @@ function App() {
     }).catch((error) => {
       console.warn('Could not save Firebase access profile.', error);
     });
+    const managerSessionResult = mode === 'management' && (roleKey === 'manager' || roleKey === 'owner')
+      ? await establishManagerSession({ managerId: staffMember.id, pin })
+      : { ok: true };
+
+    if (!managerSessionResult.ok) {
+      console.warn('Could not refresh automatic manager session.', managerSessionResult.message);
+    }
     const nextSession = {
       mode,
       staffId: staffMember.id,
@@ -1758,8 +1779,63 @@ function App() {
       ...prevLog,
     ].slice(0, 500));
 
-    return { ok: true, message: 'Login successful.' };
+    return {
+      ok: true,
+      message: managerSessionResult.ok
+        ? 'Login successful.'
+        : `Login successful. ${managerSessionResult.message}`,
+    };
   }, [authSettings.managementPin, staffList, upsertLoginAccount]);
+
+  const handlePrepareSetupManagerAccess = useCallback(async ({ name, managerPin }) => {
+    const managerName = String(name || '').trim();
+    const safeManagerPin = String(managerPin || '').trim();
+
+    if (!managerName || !safeManagerPin) {
+      return { ok: false, message: 'Enter the manager name and PIN first.' };
+    }
+
+    try {
+      const managerMember = {
+        id: createStaffMemberId(managerName),
+        name: managerName,
+        role: 'Manager',
+        staffSection: 'management',
+        managerPin: await createPinRecord(safeManagerPin),
+        removed: false,
+        removedAt: '',
+        isCsvSeed: false,
+      };
+
+      await saveManagerAccount(managerMember);
+      await saveCurrentUserStaffProfile({
+        displayName: managerMember.name,
+        role: managerMember.role,
+        roleKey: 'manager',
+        staffId: managerMember.id,
+      });
+      const managerSessionResult = await establishManagerSession({
+        managerId: managerMember.id,
+        pin: safeManagerPin,
+      });
+
+      return {
+        ok: true,
+        message: managerSessionResult.ok ? '' : managerSessionResult.message,
+      };
+    } catch (error) {
+      const message = String(error?.message || '');
+      const isPermissionError = error?.code === 'permission-denied'
+        || message.toLowerCase().includes('missing or insufficient permissions');
+
+      return {
+        ok: false,
+        message: isPermissionError
+          ? 'Firestore rules are blocking manager setup. Deploy firestore.rules, then try again.'
+          : message || 'Could not prepare manager access.',
+      };
+    }
+  }, []);
 
   const handleLogout = useCallback(() => {
     const previousSession = authSession;
@@ -2833,6 +2909,14 @@ function App() {
     }).catch((error) => {
       console.warn('Could not save setup manager Firebase access profile.', error);
     });
+    const managerSessionResult = await establishManagerSession({
+      managerId: managerMember.id,
+      pin: managerPin,
+    });
+
+    if (!managerSessionResult.ok) {
+      console.warn('Could not refresh setup manager session.', managerSessionResult.message);
+    }
     const setupStaffMembers = await Promise.all(
       (Array.isArray(setupProgress?.staffMembers) ? setupProgress.staffMembers : [])
         .filter((member) => String(member?.name || '').trim())
@@ -3555,6 +3639,7 @@ function App() {
         <SetupWizard
           firestoreConfigured={FIRESTORE_CONFIGURED}
           firebaseSync={firebaseSync}
+          onPrepareManagerAccess={handlePrepareSetupManagerAccess}
           onFinishSetup={handleFinishSetup}
         />
       </Suspense>

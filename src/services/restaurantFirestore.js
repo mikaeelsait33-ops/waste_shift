@@ -1,5 +1,5 @@
 import { getFirestoreDb, ensureFirebaseAuth } from './firestoreMenuItems';
-import { getManagerApiHeaders } from '../utils/apiHeaders';
+import { getAutomaticManagerApiHeaders } from '../utils/apiHeaders';
 import { getClientDatabaseId } from '../utils/clientDatabaseId';
 
 const getRestaurantProfileRef = () => ['restaurants', getClientDatabaseId() || 'local'];
@@ -129,7 +129,7 @@ export const resetRestaurantFirestoreData = async () => {
   try {
     const response = await fetch('/api/admin-reset', {
       method: 'POST',
-      headers: getManagerApiHeaders({ 'content-type': 'application/json' }),
+      headers: await getAutomaticManagerApiHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ confirmation: 'RESET' }),
       signal: controller.signal,
     });

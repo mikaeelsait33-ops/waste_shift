@@ -1,6 +1,5 @@
-import { cert, getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
-import { authorizeManagerApiRequest, apiIsProductionRuntime } from './_auth.js';
+import { authorizeManagerSessionRequest, apiIsProductionRuntime } from './_auth.js';
+import { getFirebaseAdmin } from './_firebaseAdmin.js';
 
 const RESET_COLLECTIONS = [
   'appData',
@@ -17,6 +16,7 @@ const RESET_COLLECTIONS = [
   'menuImports',
   'auditLogs',
   'settings',
+  'managerSessions',
 ];
 
 const parseBody = (request) => {
@@ -38,38 +38,6 @@ const sendJson = (response, status, body) => {
   response.setHeader('x-content-type-options', 'nosniff');
   response.setHeader('x-robots-tag', 'noindex, nofollow');
   response.status(status).json(body);
-};
-
-const getAdminCredential = () => {
-  const serviceAccountJson = String(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').trim();
-
-  if (serviceAccountJson) {
-    return cert(JSON.parse(serviceAccountJson));
-  }
-
-  const projectId = String(process.env.FIREBASE_ADMIN_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || '').trim();
-  const clientEmail = String(process.env.FIREBASE_ADMIN_CLIENT_EMAIL || '').trim();
-  const privateKey = String(process.env.FIREBASE_ADMIN_PRIVATE_KEY || '').replace(/\\n/g, '\n').trim();
-
-  if (projectId && clientEmail && privateKey) {
-    return cert({ projectId, clientEmail, privateKey });
-  }
-
-  return null;
-};
-
-const getAdminDb = () => {
-  const credential = getAdminCredential();
-
-  if (!credential) {
-    return null;
-  }
-
-  const app = getApps().length > 0
-    ? getApps()[0]
-    : initializeApp({ credential });
-
-  return getFirestore(app);
 };
 
 const deleteCollection = async (db, collectionPath, batchSize = 250) => {
@@ -116,7 +84,7 @@ export default async function handler(request, response) {
     return;
   }
 
-  const authorization = authorizeManagerApiRequest(request);
+  const authorization = await authorizeManagerSessionRequest(request);
 
   if (!authorization.ok) {
     sendJson(response, authorization.status, authorization.body);
@@ -137,7 +105,7 @@ export default async function handler(request, response) {
     return;
   }
 
-  const db = getAdminDb();
+  const db = getFirebaseAdmin()?.db || null;
 
   if (!db) {
     const message = 'Server reset is not configured. Add Firebase Admin credentials and manager secret.';

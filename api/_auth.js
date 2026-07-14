@@ -1,4 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
+import { getFirebaseAdmin } from './_firebaseAdmin.js';
+import { verifyFirebaseIdToken } from './_firebaseIdentity.js';
 
 export const apiIsProductionRuntime = () => (
   process.env.VERCEL_ENV === 'production'
@@ -53,6 +55,18 @@ export const getManagerApiSecret = (request) => (
   || getBearerToken(request)
 );
 
+const getFirebaseIdToken = (request) => (
+  String(getHeaderValue(request, 'x-wasteshift-firebase-token') || '').trim()
+  || getBearerToken(request)
+);
+
+export const getRequestDatabaseId = (request) => (
+  String(getHeaderValue(request, 'x-wasteshift-database-id') || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .slice(0, 80)
+);
+
 export const managerApiProtectionIsConfigured = () => getConfiguredManagerApiSecrets().length > 0;
 
 export const authorizeManagerApiRequest = (request) => {
@@ -101,6 +115,77 @@ export const authorizeManagerApiRequest = (request) => {
   }
 
   return { ok: true, mode: 'secret' };
+};
+
+const managerSessionError = (status, code, message) => ({
+  ok: false,
+  status,
+  body: { ok: false, code, message },
+});
+
+// Gemini/OCR requests prove a manager PIN once, then use a Firebase-authenticated,
+// server-only session. Local development retains the existing protected-route helper.
+export const authorizeManagerSessionRequest = async (request) => {
+  const firebaseAdmin = getFirebaseAdmin();
+
+  if (!firebaseAdmin) {
+    if (!apiIsProductionRuntime()) {
+      return authorizeManagerApiRequest(request);
+    }
+
+    return managerSessionError(
+      503,
+      'firebase_manager_session_not_configured',
+      'Automatic manager access is not configured on the server. Add Firebase Admin credentials in Vercel.',
+    );
+  }
+
+  const databaseId = getRequestDatabaseId(request);
+  const idToken = getFirebaseIdToken(request);
+
+  if (!databaseId) {
+    return managerSessionError(400, 'database_id_required', 'Restaurant data link is missing. Re-open this restaurant link and try again.');
+  }
+
+  if (!idToken) {
+    return managerSessionError(401, 'manager_session_required', 'Sign in with a manager PIN before using Gemini.');
+  }
+
+  let decodedToken;
+
+  try {
+    decodedToken = await verifyFirebaseIdToken(idToken);
+  } catch {
+    return managerSessionError(401, 'manager_session_required', 'Your manager session has expired. Lock and sign in again.');
+  }
+
+  try {
+    const sessionId = `${databaseId}__${decodedToken.uid}`;
+    const sessionSnapshot = await firebaseAdmin.db.collection('managerSessions').doc(sessionId).get();
+    const session = sessionSnapshot.exists ? sessionSnapshot.data() : null;
+    const expiresAt = new Date(String(session?.expiresAt || '')).getTime();
+
+    if (
+      !session
+      || session.databaseId !== databaseId
+      || session.uid !== decodedToken.uid
+      || session.roleKey !== 'manager'
+      || !Number.isFinite(expiresAt)
+      || expiresAt <= Date.now()
+    ) {
+      return managerSessionError(403, 'manager_session_rejected', 'Sign in with your manager PIN before using Gemini.');
+    }
+
+    return {
+      ok: true,
+      mode: 'firebase-manager-session',
+      managerId: String(session.managerId || ''),
+      uid: decodedToken.uid,
+    };
+  } catch (error) {
+    console.error('Could not verify manager session.', error);
+    return managerSessionError(503, 'manager_session_unavailable', 'Manager access is temporarily unavailable. Please try again.');
+  }
 };
 
 export const authorizeSyncApiRequest = (request) => {

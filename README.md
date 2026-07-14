@@ -106,22 +106,21 @@ Environment variable checklist:
 
 Production API protection:
 
-- `WASTESHIFT_MANAGER_API_SECRET` is required in production for manager-only serverless routes such as Gemini invoice/menu scanning.
-- `WASTESHIFT_API_SECRET` can be used as a fallback manager secret, but prefer `WASTESHIFT_MANAGER_API_SECRET` for clarity.
+- Gemini menu imports, invoice scans, and restaurant reset use a short-lived server-only manager session. A manager enters their normal PIN once at sign-in; the browser never stores a Vercel API secret.
+- Set `FIREBASE_SERVICE_ACCOUNT_JSON` in Vercel (recommended) to the complete JSON from Firebase Console > Project settings > Service accounts > Generate new private key. Alternatively set all three of `FIREBASE_ADMIN_PROJECT_ID`, `FIREBASE_ADMIN_CLIENT_EMAIL`, and `FIREBASE_ADMIN_PRIVATE_KEY`.
+- `WASTESHIFT_MANAGER_API_SECRET` and `WASTESHIFT_API_SECRET` remain supported only for the legacy protected backup route. Do not add either value to any `VITE_*` variable or the browser.
 - `WASTESHIFT_SYNC_SECRET` protects the optional Vercel Blob database backup route.
-- Protected restaurant reset uses Firebase Admin from Vercel. Set either `FIREBASE_SERVICE_ACCOUNT_JSON` or all of `FIREBASE_ADMIN_PROJECT_ID`, `FIREBASE_ADMIN_CLIENT_EMAIL`, and `FIREBASE_ADMIN_PRIVATE_KEY`.
 - Store private keys with escaped newlines (`\n`) if Vercel stores them as a single-line value.
 - In production, API routes fail closed when the needed secret is missing. Local development can still run without these secrets.
-- Managers enter the sync/API key from Settings > Database on trusted devices only.
 - `BLOB_READ_WRITE_TOKEN` is required when using the Vercel Blob backup database.
 
 Production deployment checklist:
 
 1. Add all `VITE_FIREBASE_*` values to Vercel and redeploy.
 2. Enable Firebase Anonymous Auth and publish `firestore.rules`.
-3. Add `WASTESHIFT_MANAGER_API_SECRET` in Vercel before enabling OCR/Gemini import and scanning.
-4. Add Firebase Admin credentials for protected restaurant reset.
-5. Add `OCR_SPACE_API_KEY` or `OCR_API_KEY`, plus `GEMINI_API_KEY`, in Vercel for invoice and menu scanning.
+3. Add `FIREBASE_SERVICE_ACCOUNT_JSON` in Vercel before enabling Gemini/OCR. This enables automatic manager sessions without any in-app API-key field.
+4. Add `OCR_SPACE_API_KEY` or `OCR_API_KEY`, plus `GEMINI_API_KEY`, in Vercel for invoice and menu scanning.
+5. Redeploy after adding the Firebase Admin credentials and API keys.
 6. Add Vercel Blob storage and `BLOB_READ_WRITE_TOKEN` only if using server database backups.
 7. Add `WASTESHIFT_SYNC_SECRET` if Vercel Blob backup load/save should be available from the app.
 8. Run `npm.cmd run lint`, `npm.cmd test`, and `npm.cmd run build` before deploying.

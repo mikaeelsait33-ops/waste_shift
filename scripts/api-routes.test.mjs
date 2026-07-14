@@ -2,6 +2,11 @@ import assert from 'node:assert/strict';
 
 let importCounter = 0;
 
+const createSha256Base64 = async (value) => {
+  const { createHash } = await import('node:crypto');
+  return createHash('sha256').update(value).digest('base64');
+};
+
 const createResponse = () => ({
   headers: {},
   statusCode: 0,
@@ -42,6 +47,23 @@ const importDatabaseHandler = async ({ syncSecret = '' } = {}) => {
 const importAdminResetHandler = async () => (
   (await import(`../api/admin-reset.js?case=${importCounter++}`)).default
 );
+
+const importManagerSessionHandler = async () => (
+  (await import(`../api/manager-session.js?case=${importCounter++}`)).default
+);
+
+const managerSessionHelpers = await import(`../api/manager-session.js?case=${importCounter++}`);
+const firebaseIdentityHelpers = await import(`../api/_firebaseIdentity.js?case=${importCounter++}`);
+const testManagerPinRecord = {
+  algorithm: 'sha256-salt-v1',
+  salt: 'test-salt',
+  hash: await createSha256Base64('test-salt:4826'),
+};
+
+assert.equal(managerSessionHelpers.verifyManagerPin('4826', testManagerPinRecord), true);
+assert.equal(managerSessionHelpers.verifyManagerPin('4827', testManagerPinRecord), false);
+assert.equal(managerSessionHelpers.verifyManagerPin('bad', testManagerPinRecord), false);
+assert.equal(typeof firebaseIdentityHelpers.verifyFirebaseIdToken, 'function');
 
 const databaseHelpers = await import(`../api/database.js?case=${importCounter++}`);
 
@@ -99,7 +121,7 @@ response = await callHandler(adminResetProductionMissingSecretHandler, {
   body: JSON.stringify({ confirmation: 'RESET' }),
 });
 assert.equal(response.statusCode, 503);
-assert.equal(response.body.code, 'manager_api_secret_not_configured');
+assert.equal(response.body.code, 'firebase_manager_session_not_configured');
 assert.equal(response.headers['cache-control'], 'no-store');
 
 const databaseProductionSyncOnlyHandler = await importDatabaseHandler({ syncSecret: 'safe-test-secret' });
@@ -227,21 +249,21 @@ response = await callHandler(productionMenuHandler, {
   body: JSON.stringify({ text: 'Coffee R35' }),
 });
 assert.equal(response.statusCode, 503);
-assert.equal(response.body.code, 'manager_api_secret_not_configured');
+assert.equal(response.body.code, 'firebase_manager_session_not_configured');
 
 response = await callHandler(productionInvoiceHandler, {
   method: 'POST',
   body: JSON.stringify({ file: { name: 'invoice.jpg', mimeType: 'image/jpeg', data: 'abc' } }),
 });
 assert.equal(response.statusCode, 503);
-assert.equal(response.body.code, 'manager_api_secret_not_configured');
+assert.equal(response.body.code, 'firebase_manager_session_not_configured');
 
 response = await callHandler(productionScanDocumentHandler, {
   method: 'POST',
   body: JSON.stringify({ documentType: 'invoice', file: { name: 'invoice.jpg', mimeType: 'image/jpeg', data: 'abc' } }),
 });
 assert.equal(response.statusCode, 503);
-assert.equal(response.body.code, 'manager_api_secret_not_configured');
+assert.equal(response.body.code, 'firebase_manager_session_not_configured');
 
 delete process.env.VERCEL_ENV;
 
@@ -267,6 +289,19 @@ delete process.env.FIREBASE_ADMIN_CLIENT_EMAIL;
 delete process.env.FIREBASE_ADMIN_PRIVATE_KEY;
 
 const adminResetHandler = await importAdminResetHandler();
+const managerSessionHandler = await importManagerSessionHandler();
+
+response = await callHandler(managerSessionHandler, {
+  method: 'GET',
+});
+assert.equal(response.statusCode, 405);
+
+response = await callHandler(managerSessionHandler, {
+  method: 'POST',
+  body: JSON.stringify({ managerId: 'manager_nadia', pin: '4826' }),
+});
+assert.equal(response.statusCode, 503);
+assert.equal(response.body.code, 'firebase_manager_session_not_configured');
 
 response = await callHandler(adminResetHandler, {
   method: 'GET',

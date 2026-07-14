@@ -12,8 +12,10 @@ const dashboard = await read('../src/components/Dashboard.jsx');
 const settings = await read('../src/components/Settings.jsx');
 const invoiceScanner = await read('../src/components/InvoiceScanner.jsx');
 const recipeManager = await read('../src/components/RecipeManager.jsx');
+const menuImport = await read('../src/components/MenuImport.jsx');
 const menuImportPanel = await read('../src/components/MenuImportPanel.jsx');
 const apiHeaders = await read('../src/utils/apiHeaders.js');
+const managerSession = await read('../src/services/managerSession.js');
 
 assert.match(app, /activeTab === 'dashboard'/);
 assert.match(app, /activeTab === 'logWaste'/);
@@ -28,6 +30,7 @@ assert.match(setupWizard, /Set Up This Restaurant/);
 assert.match(setupWizard, /Manager PINs do not match/);
 assert.match(setupWizard, /Finish setup/);
 assert.match(setupWizard, /MenuImport/);
+assert.match(setupWizard, /onPrepareManagerAccess/);
 
 assert.match(authGate, /Management login/);
 assert.match(authGate, /Staff login/);
@@ -56,8 +59,11 @@ assert.match(recipeManager, /accessProfile=\{accessProfile\}/);
 assert.match(recipeManager, /Wipe menu/);
 assert.match(menuImportPanel, /canUseAiImports/);
 assert.match(menuImportPanel, /getManagerApiErrorMessage/);
-assert.match(apiHeaders, /Your manager login is active/);
-assert.match(apiHeaders, /saveManagerApiAccessKey/);
+assert.match(menuImport, /getAutomaticManagerApiHeaders/);
+assert.doesNotMatch(menuImport, /Gemini access key/);
+assert.match(apiHeaders, /getAutomaticManagerApiHeaders/);
+assert.doesNotMatch(apiHeaders, /wasteShiftSyncAccessKey/);
+assert.match(managerSession, /\/api\/manager-session/);
 assert.match(invoiceScanner, /Load more invoice lines/);
 assert.match(invoiceScanner, /Cost review queue/);
 

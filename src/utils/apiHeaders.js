@@ -1,55 +1,42 @@
 import { getClientDatabaseHeaders } from './clientDatabaseId';
-
-export const getStoredManagerApiAccessKey = () => (
-  typeof localStorage === 'undefined'
-    ? ''
-    : String(localStorage.getItem('wasteShiftSyncAccessKey') || '').trim()
-);
-
-export const saveManagerApiAccessKey = (value) => {
-  const accessKey = String(value || '').trim();
-
-  if (typeof localStorage === 'undefined') {
-    return accessKey;
-  }
-
-  if (accessKey) {
-    localStorage.setItem('wasteShiftSyncAccessKey', accessKey);
-  } else {
-    localStorage.removeItem('wasteShiftSyncAccessKey');
-  }
-
-  return accessKey;
-};
+import { ensureFirebaseAuth } from '../services/firestoreMenuItems';
 
 export const getManagerApiErrorMessage = (payload, fallback = 'The protected request failed.') => {
   const code = String(payload?.code || '').trim();
 
-  if (code === 'manager_api_secret_required' || code === 'sync_api_secret_required') {
-    return 'Your manager login is active, but this device still needs the Gemini access key. Enter it below once on this trusted device.';
+  if (code === 'manager_session_required' || code === 'manager_session_rejected') {
+    return 'Your manager session has expired. Lock the app and sign in again with your manager PIN.';
   }
 
-  if (code === 'manager_api_secret_invalid' || code === 'sync_api_secret_invalid') {
-    return 'The Gemini access key saved on this device does not match the key in Vercel. Re-enter the correct key and try again.';
+  if (code === 'firebase_token_required' || code === 'firebase_token_invalid') {
+    return 'Your sign-in session needs to be refreshed. Lock the app and sign in again.';
   }
 
-  if (code === 'manager_api_secret_not_configured' || code === 'sync_api_secret_not_configured') {
-    return 'Gemini access is not configured on Vercel yet. Add WASTESHIFT_MANAGER_API_SECRET, then redeploy the app.';
+  if (code === 'firebase_manager_session_not_configured') {
+    return 'Gemini is almost ready. An owner still needs to add Firebase Admin credentials in Vercel once; no key is needed in this app.';
+  }
+
+  if (code === 'manager_session_unavailable') {
+    return 'Manager access is temporarily unavailable. Please try again.';
   }
 
   return payload?.message || payload?.errors?.[0] || fallback;
 };
 
-export const getManagerApiHeaders = (extraHeaders = {}) => {
-  const syncAccessKey = getStoredManagerApiAccessKey();
+// Firebase ID tokens are short-lived and can be verified by Vercel with Firebase Admin.
+// No server secret is ever stored in the browser for Gemini/OCR requests.
+export const getAutomaticManagerApiHeaders = async (extraHeaders = {}) => {
+  let idToken = '';
+
+  try {
+    const user = await ensureFirebaseAuth();
+    idToken = await user?.getIdToken?.();
+  } catch (error) {
+    console.warn('Could not refresh Firebase sign-in for a manager request.', error);
+  }
 
   return getClientDatabaseHeaders({
     ...extraHeaders,
-    ...(syncAccessKey
-      ? {
-          'x-wasteshift-manager-secret': syncAccessKey,
-          'x-wasteshift-sync-secret': syncAccessKey,
-        }
-      : {}),
+    ...(idToken ? { 'x-wasteshift-firebase-token': idToken } : {}),
   });
 };

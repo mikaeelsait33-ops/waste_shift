@@ -38,7 +38,7 @@ import {
   uniqueMasterStrings,
 } from '../utils/masterIngredients';
 import { DEFAULT_PAGE_SIZE, getVisiblePage } from '../utils/listPerformance';
-import { getManagerApiHeaders } from '../utils/apiHeaders';
+import { getAutomaticManagerApiHeaders } from '../utils/apiHeaders';
 
 const DEFAULT_VAT_RATE = 0.15;
 const UNIT_OPTIONS = ['kg', 'g', 'L', 'ml', 'each', '5L', 'case of 12', 'case', 'doz', 'pkt', 'bag', 'box', 'bottle', 'tray', 'tin', 'punnet', 'bunch', 'head', 'pillow'];
@@ -934,7 +934,7 @@ function InvoiceScanner({
     const scanPayload = await createScanPayload(file);
     const response = await fetch('/api/scan-document', {
         method: 'POST',
-        headers: getManagerApiHeaders({ 'content-type': 'application/json' }),
+        headers: await getAutomaticManagerApiHeaders({ 'content-type': 'application/json' }),
         body: JSON.stringify({
           file: scanPayload,
           documentType: 'invoice',

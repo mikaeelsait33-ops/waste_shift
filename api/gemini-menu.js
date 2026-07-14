@@ -1,4 +1,4 @@
-import { authorizeManagerApiRequest } from './_auth.js';
+import { authorizeManagerSessionRequest } from './_auth.js';
 
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
@@ -233,7 +233,7 @@ export default async function handler(request, response) {
     return;
   }
 
-  const authorization = authorizeManagerApiRequest(request);
+  const authorization = await authorizeManagerSessionRequest(request);
 
   if (!authorization.ok) {
     sendJson(response, authorization.status, authorization.body);

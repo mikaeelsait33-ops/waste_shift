@@ -33,6 +33,11 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Manager sessions are created and read only by Firebase Admin in Vercel.
+    match /managerSessions/{sessionId} {
+      allow read, write: if false;
+    }
+
     match /appData/{snapshotId} {
       allow read: if signedIn();
       allow create, update: if signedIn()
