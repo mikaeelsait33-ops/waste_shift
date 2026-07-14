@@ -52,7 +52,7 @@ import {
   saveRestaurantProfile,
 } from './services/restaurantFirestore';
 import { saveCurrentUserStaffProfile } from './services/firebaseAccess';
-import { saveManagerAccount } from './services/managerAccounts';
+import { loadManagerAccounts, saveManagerAccount } from './services/managerAccounts';
 import {
   createEmptyRestaurantData,
   getRestaurantResetStorageKeys,
@@ -614,12 +614,36 @@ const mergeStaffMembers = (baseStaffMembers, customStaffMembers) => {
   return [...mergedBaseMembers, ...customOnlyMembers];
 };
 
+const mergeManagerAccountsIntoStaffList = (staffMembers, managerAccounts) => {
+  const mergedById = new Map();
+
+  sanitizeStaffMembers(staffMembers).forEach((member) => {
+    mergedById.set(member.id, member);
+  });
+
+  sanitizeStaffMembers(managerAccounts).forEach((manager) => {
+    const existingMember = mergedById.get(manager.id);
+
+    mergedById.set(manager.id, {
+      ...existingMember,
+      ...manager,
+      managerPin: manager.managerPin || existingMember?.managerPin || null,
+      staffCode: existingMember?.staffCode || null,
+      staffSection: 'management',
+      role: 'Manager',
+    });
+  });
+
+  return [...mergedById.values()].sort((a, b) => a.name.localeCompare(b.name));
+};
+
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [inventoryView, setInventoryView] = useState('invoices');
   const [menuPricingView, setMenuPricingView] = useState('recipes');
   const [serverSyncEnabled, setServerSyncEnabled] = useState(false);
   const [serverLoadComplete, setServerLoadComplete] = useState(false);
+  const [managerAccountsLoaded, setManagerAccountsLoaded] = useState(!FIRESTORE_CONFIGURED);
   const [serverSync, setServerSync] = useState({
     status: FIRESTORE_CONFIGURED ? 'ready' : 'checking',
     message: FIRESTORE_CONFIGURED
@@ -1299,9 +1323,10 @@ function App() {
         }));
 
         try {
-          const [firebaseSnapshot, firebaseWasteItems] = await Promise.all([
+          const [firebaseSnapshot, firebaseWasteItems, firebaseManagers] = await Promise.all([
             loadFirestoreDatabaseSnapshot(),
             loadFirestoreWasteEntries(),
+            loadManagerAccounts(),
           ]);
 
           if (isCancelled) {
@@ -1311,10 +1336,16 @@ function App() {
           const snapshotData = firebaseSnapshot?.data || {};
           const hasSnapshot = Boolean(firebaseSnapshot?.exists);
           const hasWasteEntries = firebaseWasteItems.length > 0;
+          const hasManagerAccounts = firebaseManagers.length > 0;
           const localFallbackData = latestDatabaseDataRef.current || {};
+          const mergedCustomStaffList = mergeManagerAccountsIntoStaffList(
+            snapshotData.customStaffList ?? snapshotData.staffList ?? localFallbackData.customStaffList ?? localFallbackData.staffList ?? [],
+            firebaseManagers,
+          );
           const firebaseDatabaseData = {
             ...localFallbackData,
             ...snapshotData,
+            customStaffList: mergedCustomStaffList,
             wasteItems: hasWasteEntries
               ? firebaseWasteItems
               : Array.isArray(snapshotData.wasteItems)
@@ -1324,8 +1355,9 @@ function App() {
 
           setServerSyncEnabled(true);
           setServerLoadComplete(true);
+          setManagerAccountsLoaded(true);
 
-          if (hasSnapshot || hasWasteEntries) {
+          if (hasSnapshot || hasWasteEntries || hasManagerAccounts) {
             applyDatabaseData(firebaseDatabaseData);
             setServerSync({
               status: 'synced',
@@ -1359,6 +1391,7 @@ function App() {
           }
 
           console.warn('Firebase primary database unavailable. Using local fallback.', error);
+          setManagerAccountsLoaded(true);
           setServerSyncEnabled(false);
           setServerLoadComplete(false);
           setServerSync({
@@ -3490,6 +3523,7 @@ function App() {
     applyDatabaseData(databaseData);
   };
 
+  const authDataIsLoading = FIRESTORE_CONFIGURED && restaurantProfile.setupCompleted && !managerAccountsLoaded;
   const appIsLocked = !authSession || !managerAuthIsConfigured;
 
   if (restaurantProfileStatus === 'loading') {
@@ -3524,6 +3558,23 @@ function App() {
           onFinishSetup={handleFinishSetup}
         />
       </Suspense>
+    );
+  }
+
+  if (authDataIsLoading) {
+    return (
+      <main className="auth-screen">
+        <section className="auth-panel">
+          <div className="brand auth-brand">
+            <span className="brand-mark">WS</span>
+            <div>
+              <h1 className="brand-name">WasteShift</h1>
+              <p className="brand-subtitle">Loading access</p>
+            </div>
+          </div>
+          <div className="muted-box" style={{ marginBottom: 0 }}>Loading manager and staff access from Firebase.</div>
+        </section>
+      </main>
     );
   }
 

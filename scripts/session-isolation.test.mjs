@@ -14,6 +14,8 @@ assert.doesNotMatch(databaseApi, /list\(\{ prefix: DATABASE_FOLDER/, 'Fallback d
 assert.match(adminResetApi, /cache-control', 'no-store'/, 'Admin reset API responses must not be cacheable.');
 
 assert.match(clientDatabaseId, /wasteShiftClientDatabaseId/, 'Client should persist one generated database id per browser install.');
+assert.match(clientDatabaseId, /restaurant/, 'Client should support a restaurant share URL for additional devices.');
+assert.match(clientDatabaseId, /setClientDatabaseId/, 'Client should allow a pasted restaurant code to select the shared database.');
 assert.match(apiHeaders, /getClientDatabaseHeaders/, 'Protected API calls must include the client database scope header.');
 
 for (const [name, source] of [

@@ -9,9 +9,13 @@ const getFirestoreApi = async () => {
   const firestore = await import('firebase/firestore');
 
   return {
+    collection: firestore.collection,
     doc: firestore.doc,
+    getDocs: firestore.getDocs,
+    query: firestore.query,
     serverTimestamp: firestore.serverTimestamp,
     setDoc: firestore.setDoc,
+    where: firestore.where,
   };
 };
 
@@ -45,4 +49,45 @@ export const saveManagerAccount = async (manager) => {
   }, { merge: true });
 
   return { ok: true, id: managerId };
+};
+
+const sanitizeManagerAccount = (data) => {
+  const managerId = toSafeString(data?.id);
+  const managerName = toSafeString(data?.name);
+
+  if (!managerId || !managerName) {
+    return null;
+  }
+
+  return {
+    id: managerId,
+    name: managerName,
+    role: 'Manager',
+    staffSection: 'management',
+    managerPin: data?.managerPin && typeof data.managerPin === 'object' ? data.managerPin : null,
+    staffCode: null,
+    removed: data?.removed === true || data?.active === false,
+    removedAt: toSafeString(data?.removedAt),
+    isCsvSeed: false,
+  };
+};
+
+export const loadManagerAccounts = async () => {
+  const db = await getFirestoreDb();
+
+  if (!db) {
+    return [];
+  }
+
+  await ensureFirebaseAuth();
+  const { collection, getDocs, query, where } = await getFirestoreApi();
+  const snapshot = await getDocs(query(
+    collection(db, 'managers'),
+    where('databaseId', '==', getActiveDatabaseId()),
+  ));
+
+  return snapshot.docs
+    .map((docSnapshot) => sanitizeManagerAccount(docSnapshot.data()))
+    .filter(Boolean)
+    .sort((a, b) => a.name.localeCompare(b.name));
 };

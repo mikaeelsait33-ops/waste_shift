@@ -1,6 +1,8 @@
 export const CLIENT_DATABASE_ID_STORAGE_KEY = 'wasteShiftClientDatabaseId';
 
-const normalizeDatabaseId = (value) => (
+const DATABASE_ID_QUERY_KEYS = ['restaurant', 'restaurantId', 'databaseId', 'db'];
+
+export const normalizeDatabaseId = (value) => (
   String(value || '')
     .trim()
     .replace(/[^a-zA-Z0-9_-]/g, '_')
@@ -16,9 +18,79 @@ const createClientDatabaseId = () => {
   return normalizeDatabaseId(`ws_${Date.now().toString(36)}_${randomPart}`);
 };
 
+export const resolveClientDatabaseId = (value) => {
+  const rawValue = String(value || '').trim();
+
+  if (!rawValue) {
+    return '';
+  }
+
+  try {
+    const url = new URL(rawValue);
+
+    for (const queryKey of DATABASE_ID_QUERY_KEYS) {
+      const databaseId = normalizeDatabaseId(url.searchParams.get(queryKey));
+
+      if (databaseId) {
+        return databaseId;
+      }
+    }
+
+    return '';
+  } catch {
+    const queryMatch = rawValue.match(/[?&](?:restaurant|restaurantId|databaseId|db)=([^&#]+)/i);
+
+    if (queryMatch?.[1]) {
+      return normalizeDatabaseId(decodeURIComponent(queryMatch[1]));
+    }
+  }
+
+  return normalizeDatabaseId(rawValue);
+};
+
+const getDatabaseIdFromUrl = () => {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  const params = new URLSearchParams(window.location.search);
+
+  for (const queryKey of DATABASE_ID_QUERY_KEYS) {
+    const databaseId = normalizeDatabaseId(params.get(queryKey));
+
+    if (databaseId) {
+      return databaseId;
+    }
+  }
+
+  return '';
+};
+
+export const setClientDatabaseId = (value) => {
+  if (typeof localStorage === 'undefined') {
+    return '';
+  }
+
+  const databaseId = resolveClientDatabaseId(value);
+
+  if (!databaseId) {
+    return '';
+  }
+
+  localStorage.setItem(CLIENT_DATABASE_ID_STORAGE_KEY, databaseId);
+  return databaseId;
+};
+
 export const getClientDatabaseId = () => {
   if (typeof localStorage === 'undefined') {
     return '';
+  }
+
+  const requestedDatabaseId = getDatabaseIdFromUrl();
+
+  if (requestedDatabaseId) {
+    localStorage.setItem(CLIENT_DATABASE_ID_STORAGE_KEY, requestedDatabaseId);
+    return requestedDatabaseId;
   }
 
   const existingId = normalizeDatabaseId(localStorage.getItem(CLIENT_DATABASE_ID_STORAGE_KEY));
@@ -39,4 +111,24 @@ export const getClientDatabaseHeaders = (extraHeaders = {}) => {
     ...extraHeaders,
     ...(databaseId ? { 'x-wasteshift-database-id': databaseId } : {}),
   };
+};
+
+export const getClientDatabaseShareUrl = () => {
+  const databaseId = getClientDatabaseId();
+
+  if (!databaseId) {
+    return '';
+  }
+
+  if (typeof window === 'undefined') {
+    return databaseId;
+  }
+
+  const url = new URL(window.location.href);
+  url.searchParams.set('restaurant', databaseId);
+  DATABASE_ID_QUERY_KEYS
+    .filter((queryKey) => queryKey !== 'restaurant')
+    .forEach((queryKey) => url.searchParams.delete(queryKey));
+  url.hash = '';
+  return url.toString();
 };

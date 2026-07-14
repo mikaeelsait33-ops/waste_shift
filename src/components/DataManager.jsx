@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { getClientDatabaseId, getClientDatabaseShareUrl } from '../utils/clientDatabaseId';
 import { getEntryFoodCostLost } from '../utils/wasteCalculations';
 
 const DATABASE_NAME = 'WasteShift Local Database';
@@ -36,6 +37,8 @@ function DataManager({
   const [draftSyncAccessKey, setDraftSyncAccessKey] = useState(syncAccessKey || '');
   const [lastExportAt, setLastExportAt] = useState(() => localStorage.getItem('wasteShiftLastExportAt') || '');
   const [importPreview, setImportPreview] = useState(null);
+  const restaurantDatabaseId = getClientDatabaseId();
+  const restaurantShareUrl = getClientDatabaseShareUrl();
 
   const recipeCount = Object.keys(recipes).length;
   const menuItemCount = Array.isArray(menuItems) ? menuItems.length : 0;
@@ -249,6 +252,20 @@ function DataManager({
     setMessage(draftSyncAccessKey.trim() ? 'Server sync access key saved on this device.' : 'Server sync access key removed from this device.');
   };
 
+  const copyRestaurantLink = async () => {
+    if (!restaurantShareUrl) {
+      setMessage('Restaurant link is not ready yet.');
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(restaurantShareUrl);
+      setMessage('Restaurant login link copied. Open it on the other device, then log in with the manager or staff PIN.');
+    } catch {
+      setMessage(`Copy this restaurant code on the other device: ${restaurantDatabaseId}`);
+    }
+  };
+
   return (
     <section className="panel">
       <div className="panel-body">
@@ -287,6 +304,23 @@ function DataManager({
             {firebaseSync?.lastSavedAt && (
               <span className="badge is-green">{formatDateTime(firebaseSync.lastSavedAt)}</span>
             )}
+          </div>
+        </div>
+
+        <div className="notice-panel">
+          <div>
+            <h3 className="breakdown-title">Use on another device</h3>
+            <p className="small-text" style={{ margin: 0 }}>
+              Open the restaurant link on a phone, tablet, or manager laptop so it uses this same Firebase restaurant database.
+            </p>
+          </div>
+          <div className="manager-row">
+            <span className="badge" style={{ maxWidth: '100%', wordBreak: 'break-all' }}>
+              {restaurantDatabaseId || 'Creating code...'}
+            </span>
+            <button type="button" onClick={copyRestaurantLink} className="ghost-button is-warning" disabled={!restaurantShareUrl}>
+              Copy restaurant link
+            </button>
           </div>
         </div>
 
