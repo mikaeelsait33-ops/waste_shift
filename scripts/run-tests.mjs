@@ -19,6 +19,7 @@ const testFiles = [
   'scripts/auth-permissions.test.mjs',
   'scripts/api-routes.test.mjs',
   'scripts/session-isolation.test.mjs',
+  'scripts/session-persistence.test.mjs',
   'scripts/large-dataset.test.mjs',
   'scripts/button-audit.mjs',
 ];

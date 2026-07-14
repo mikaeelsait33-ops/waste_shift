@@ -33,6 +33,7 @@ export const getRestaurantResetStorageKeys = () => [
   'activeStaffId',
   'wasteShiftAuthSettings',
   'wasteShiftAuthSession',
+  'wasteShiftRestaurantProfiles',
   'wasteBudget',
   'wasteShiftSettings',
   'wasteShiftLastSavedAt',

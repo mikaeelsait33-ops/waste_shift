@@ -52,7 +52,7 @@ const getFirestoreApi = async () => {
 const getFirebaseAuthApi = async () => {
   if (!firebaseAuthPromise) {
     firebaseAuthPromise = import('firebase/auth').then((auth) => ({
-      browserSessionPersistence: auth.browserSessionPersistence,
+      browserLocalPersistence: auth.browserLocalPersistence,
       getAuth: auth.getAuth,
       setPersistence: auth.setPersistence,
       signInAnonymously: auth.signInAnonymously,
@@ -95,7 +95,7 @@ export const ensureFirebaseAuth = async () => {
 
   await getFirestoreDb();
   const {
-    browserSessionPersistence,
+    browserLocalPersistence,
     getAuth,
     setPersistence,
     signInAnonymously,
@@ -103,13 +103,16 @@ export const ensureFirebaseAuth = async () => {
   const auth = getAuth(firebaseAppInstance);
 
   if (!authPersistencePromise) {
-    authPersistencePromise = setPersistence(auth, browserSessionPersistence)
+    authPersistencePromise = setPersistence(auth, browserLocalPersistence)
       .catch((error) => {
         console.warn('Could not set Firebase session persistence.', error);
       });
   }
 
   await authPersistencePromise;
+  if (typeof auth.authStateReady === 'function') {
+    await auth.authStateReady();
+  }
 
   if (auth.currentUser) {
     return auth.currentUser;

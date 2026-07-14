@@ -46,6 +46,7 @@ import {
 import { deleteIngredient, loadInvoiceDashboardStats, saveIngredientPriceRecord } from './services/invoiceFirestore';
 import {
   createDefaultRestaurantProfile,
+  loadCachedRestaurantProfile,
   loadRestaurantProfile,
   resetRestaurantFirestoreData,
   saveMenuImportHistory,
@@ -60,7 +61,12 @@ import {
   validateRestaurantResetConfirmation,
 } from './utils/restaurantReset';
 import { getActiveWasteEntries } from './utils/wasteSync';
-import { getClientDatabaseHeaders } from './utils/clientDatabaseId';
+import { getClientDatabaseHeaders, getClientDatabaseId } from './utils/clientDatabaseId';
+import {
+  clearPersistedAuthSession,
+  loadPersistedAuthSession,
+  savePersistedAuthSession,
+} from './utils/sessionPersistence';
 
 const DEFAULT_RECIPES = {};
 const DEFAULT_RECIPE_SEED_VERSION = 'fresh-restaurant-empty-v1';
@@ -127,27 +133,6 @@ const markStaffFreshStartComplete = () => {
 
 const markServerStaffFreshStartComplete = () => {
   localStorage.setItem('wasteShiftServerStaffFreshStartVersion', STAFF_FRESH_START_VERSION);
-};
-
-const sanitizeAuthSession = (session) => {
-  if (!session || typeof session !== 'object' || Array.isArray(session)) {
-    return null;
-  }
-
-  const mode = session.mode === 'management' ? 'management' : 'staff';
-  const staffId = String(session.staffId || '');
-
-  if (!staffId) {
-    return null;
-  }
-
-  return {
-    mode,
-    staffId,
-    staffName: String(session.staffName || ''),
-    roleKey: String(session.roleKey || ''),
-    startedAt: String(session.startedAt || ''),
-  };
 };
 
 const createAuditLogEntry = ({ action, user, relatedItem, beforeValue = null, afterValue = null }) => ({
@@ -661,7 +646,7 @@ function App() {
     menuItemCount: 0,
     projectId: FIRESTORE_RUNTIME_INFO.projectId,
   });
-  const [restaurantProfile, setRestaurantProfile] = useState(() => createDefaultRestaurantProfile());
+  const [restaurantProfile, setRestaurantProfile] = useState(loadCachedRestaurantProfile);
   const [restaurantProfileStatus, setRestaurantProfileStatus] = useState(FIRESTORE_CONFIGURED ? 'loading' : 'missing-config');
   const [isOnline, setIsOnline] = useState(() => (
     typeof navigator === 'undefined' ? true : navigator.onLine
@@ -670,12 +655,11 @@ function App() {
   const [authSession, setAuthSession] = useState(() => {
     try {
       if (staffFreshStartIsPending()) {
-        sessionStorage.removeItem('wasteShiftAuthSession');
+        clearPersistedAuthSession();
         return null;
       }
 
-      const savedSession = sessionStorage.getItem('wasteShiftAuthSession');
-      return savedSession ? sanitizeAuthSession(JSON.parse(savedSession)) : null;
+      return loadPersistedAuthSession(getClientDatabaseId());
     } catch {
       return null;
     }
@@ -771,7 +755,7 @@ function App() {
         localStorage.removeItem('customStaffList');
         localStorage.removeItem('staffList');
         localStorage.removeItem('activeStaffId');
-        sessionStorage.removeItem('wasteShiftAuthSession');
+        clearPersistedAuthSession();
         markStaffFreshStartComplete();
         return [];
       }
@@ -856,7 +840,7 @@ function App() {
     localStorage.removeItem('customStaffList');
     localStorage.removeItem('staffList');
     localStorage.removeItem('activeStaffId');
-    sessionStorage.removeItem('wasteShiftAuthSession');
+    clearPersistedAuthSession();
     setCustomStaffList([]);
     setActiveStaffId('');
     setAuthSession(null);
@@ -880,7 +864,7 @@ function App() {
 
     const loadProfile = async () => {
       if (!FIRESTORE_CONFIGURED) {
-        setRestaurantProfile(createDefaultRestaurantProfile());
+        setRestaurantProfile(loadCachedRestaurantProfile());
         setRestaurantProfileStatus('missing-config');
         return;
       }
@@ -898,8 +882,9 @@ function App() {
         console.warn('Restaurant profile unavailable.', error);
 
         if (!isCancelled) {
-          setRestaurantProfile(createDefaultRestaurantProfile());
-          setRestaurantProfileStatus('error');
+          const cachedProfile = loadCachedRestaurantProfile();
+          setRestaurantProfile(cachedProfile);
+          setRestaurantProfileStatus(cachedProfile.setupCompleted ? 'offline' : 'error');
           setFirebaseSync(prev => ({
             ...prev,
             status: 'error',
@@ -1241,11 +1226,11 @@ function App() {
 
   useEffect(() => {
     if (authSession) {
-      sessionStorage.setItem('wasteShiftAuthSession', JSON.stringify(authSession));
+      savePersistedAuthSession(authSession, getClientDatabaseId());
       return;
     }
 
-    sessionStorage.removeItem('wasteShiftAuthSession');
+    clearPersistedAuthSession();
   }, [authSession]);
 
   useEffect(() => {
@@ -1654,6 +1639,7 @@ function App() {
       staffName: managerMember.name,
       roleKey: inferRoleKey(managerMember.role),
       startedAt: new Date().toISOString(),
+      databaseId: getClientDatabaseId(),
     };
 
     setAuthSession(nextSession);
@@ -1764,6 +1750,7 @@ function App() {
       staffName: staffMember.name,
       roleKey,
       startedAt: new Date().toISOString(),
+      databaseId: getClientDatabaseId(),
     };
 
     setAuthSession(nextSession);
@@ -3023,6 +3010,7 @@ function App() {
       staffName: managerMember.name,
       roleKey: inferRoleKey(managerMember.role),
       startedAt: new Date().toISOString(),
+      databaseId: getClientDatabaseId(),
     };
 
     setRestaurantProfile(profileResult.profile);

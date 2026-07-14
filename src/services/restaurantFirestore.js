@@ -19,6 +19,7 @@ const getFirestoreApi = async () => {
 
 const toSafeString = (value) => String(value ?? '').trim();
 const scopeDocId = (id) => `${getClientDatabaseId() || 'local'}__${toSafeString(id)}`;
+export const RESTAURANT_PROFILE_CACHE_KEY = 'wasteShiftRestaurantProfiles';
 
 export const createDefaultRestaurantProfile = () => ({
   restaurantName: '',
@@ -46,11 +47,46 @@ export const sanitizeRestaurantProfile = (profile) => {
   };
 };
 
+export const loadCachedRestaurantProfile = () => {
+  if (typeof localStorage === 'undefined') {
+    return createDefaultRestaurantProfile();
+  }
+
+  try {
+    const databaseId = getClientDatabaseId() || 'local';
+    const profiles = JSON.parse(localStorage.getItem(RESTAURANT_PROFILE_CACHE_KEY) || '{}');
+    return sanitizeRestaurantProfile(profiles?.[databaseId]);
+  } catch {
+    return createDefaultRestaurantProfile();
+  }
+};
+
+export const cacheRestaurantProfile = (profile) => {
+  if (typeof localStorage === 'undefined') {
+    return sanitizeRestaurantProfile(profile);
+  }
+
+  const safeProfile = sanitizeRestaurantProfile(profile);
+
+  try {
+    const databaseId = getClientDatabaseId() || 'local';
+    const profiles = JSON.parse(localStorage.getItem(RESTAURANT_PROFILE_CACHE_KEY) || '{}');
+    localStorage.setItem(RESTAURANT_PROFILE_CACHE_KEY, JSON.stringify({
+      ...(profiles && typeof profiles === 'object' && !Array.isArray(profiles) ? profiles : {}),
+      [databaseId]: safeProfile,
+    }));
+  } catch {
+    return safeProfile;
+  }
+
+  return safeProfile;
+};
+
 export const loadRestaurantProfile = async () => {
   const db = await getFirestoreDb();
 
   if (!db) {
-    return { ok: false, skipped: true, profile: createDefaultRestaurantProfile() };
+    return { ok: false, skipped: true, profile: loadCachedRestaurantProfile() };
   }
 
   await ensureFirebaseAuth();
@@ -58,13 +94,22 @@ export const loadRestaurantProfile = async () => {
   const snapshot = await getDoc(doc(db, ...getRestaurantProfileRef()));
 
   if (!snapshot.exists()) {
-    return { ok: true, exists: false, profile: createDefaultRestaurantProfile() };
+    const cachedProfile = loadCachedRestaurantProfile();
+    return {
+      ok: true,
+      exists: false,
+      source: cachedProfile.setupCompleted ? 'cache' : 'empty',
+      profile: cachedProfile,
+    };
   }
+
+  const profile = cacheRestaurantProfile(snapshot.data());
 
   return {
     ok: true,
     exists: true,
-    profile: sanitizeRestaurantProfile(snapshot.data()),
+    source: 'firestore',
+    profile,
   };
 };
 
@@ -91,15 +136,17 @@ export const saveRestaurantProfile = async (profile, options = {}) => {
     updatedAtServer: serverTimestamp(),
   }, { merge: true });
 
+  const savedProfile = cacheRestaurantProfile({
+    ...safeProfile,
+    setupCompleted,
+    setupCompletedAt: setupCompleted ? safeProfile.setupCompletedAt || now : '',
+    createdAt: safeProfile.createdAt || now,
+    updatedAt: now,
+  });
+
   return {
     ok: true,
-    profile: {
-      ...safeProfile,
-      setupCompleted,
-      setupCompletedAt: setupCompleted ? safeProfile.setupCompletedAt || now : '',
-      createdAt: safeProfile.createdAt || now,
-      updatedAt: now,
-    },
+    profile: savedProfile,
   };
 };
 

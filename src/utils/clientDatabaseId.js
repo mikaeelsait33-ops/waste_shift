@@ -66,6 +66,26 @@ const getDatabaseIdFromUrl = () => {
   return '';
 };
 
+const keepDatabaseIdInUrl = (databaseId) => {
+  if (
+    !databaseId
+    || typeof window === 'undefined'
+    || !window.history?.replaceState
+  ) {
+    return;
+  }
+
+  const url = new URL(window.location.href);
+  url.searchParams.set('restaurant', databaseId);
+  DATABASE_ID_QUERY_KEYS
+    .filter((queryKey) => queryKey !== 'restaurant')
+    .forEach((queryKey) => url.searchParams.delete(queryKey));
+
+  if (url.toString() !== window.location.href) {
+    window.history.replaceState(window.history.state, '', url);
+  }
+};
+
 export const setClientDatabaseId = (value) => {
   if (typeof localStorage === 'undefined') {
     return '';
@@ -78,6 +98,7 @@ export const setClientDatabaseId = (value) => {
   }
 
   localStorage.setItem(CLIENT_DATABASE_ID_STORAGE_KEY, databaseId);
+  keepDatabaseIdInUrl(databaseId);
   return databaseId;
 };
 
@@ -90,17 +111,20 @@ export const getClientDatabaseId = () => {
 
   if (requestedDatabaseId) {
     localStorage.setItem(CLIENT_DATABASE_ID_STORAGE_KEY, requestedDatabaseId);
+    keepDatabaseIdInUrl(requestedDatabaseId);
     return requestedDatabaseId;
   }
 
   const existingId = normalizeDatabaseId(localStorage.getItem(CLIENT_DATABASE_ID_STORAGE_KEY));
 
   if (existingId) {
+    keepDatabaseIdInUrl(existingId);
     return existingId;
   }
 
   const nextId = createClientDatabaseId();
   localStorage.setItem(CLIENT_DATABASE_ID_STORAGE_KEY, nextId);
+  keepDatabaseIdInUrl(nextId);
   return nextId;
 };
 
