@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { normalizeGeminiMenuPayload } from '../api/gemini-menu.js';
+import { createGeminiParts, normalizeGeminiMenuPayload } from '../api/gemini-menu.js';
 import {
   buildMenuImportSaveItems,
   createMenuRecipeReview,
@@ -46,6 +46,15 @@ const normalized = normalizeGeminiMenuPayload({
 assert.equal(normalized.dishes.length, 1);
 assert.equal(normalized.items[0].components[0].name, 'Rocket');
 
+const guideParts = createGeminiParts({
+  text: 'Salmon Benedict R145',
+  makeLineGuide: 'Salmon Benedict: 120g salmon, 35ml hollandaise.',
+  guideFile: { mimeType: 'image/png', base64: 'aGVsbG8=' },
+});
+assert.equal(guideParts.length, 2);
+assert.match(guideParts[0].text, /make-line guide is the source of truth/i);
+assert.match(guideParts[0].text, /120g salmon/);
+
 const review = createMenuRecipeReview(normalized.dishes, catalog);
 assert.equal(review[0].ingredients[0].catalogKey, 'rocket');
 assert.equal(review[0].ingredients[0].unitMismatch, false);
@@ -79,6 +88,7 @@ assert.equal(smartReadyPlan.unmatchedIngredients[0].price, 0);
 const recipeManagerSource = await readFile(new URL('../src/components/RecipeManager.jsx', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8');
 const firestoreMenuSource = await readFile(new URL('../src/services/firestoreMenuItems.js', import.meta.url), 'utf8');
+const menuImportSource = await readFile(new URL('../src/components/MenuImport.jsx', import.meta.url), 'utf8');
 
 assert.match(recipeManagerSource, /Save the basic item first/);
 assert.match(recipeManagerSource, /Bulk add menu items/);
@@ -91,5 +101,7 @@ assert.match(appSource, /category: normalizedCategory/);
 assert.match(appSource, /handleCreateCatalogItems/);
 assert.match(appSource, /saveFirestoreMenuItem\(\{/);
 assert.match(firestoreMenuSource, /category: toSafeString\(category\)/);
+assert.match(menuImportSource, /Add make-line guide for exact grams/);
+assert.match(menuImportSource, /makeLineGuide/);
 
 console.log('Menu recipe import tests passed');

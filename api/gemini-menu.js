@@ -170,47 +170,69 @@ export const normalizeGeminiMenuPayload = (payload) => {
   };
 };
 
-const createGeminiParts = ({ text, file }) => {
+const createGeminiParts = ({ text, file, makeLineGuide, guideFile }) => {
+  const combinedFileBytes = [file, guideFile]
+    .filter((candidate) => candidate?.base64)
+    .reduce((total, candidate) => total + Buffer.byteLength(candidate.base64, 'base64'), 0);
+
+  if (combinedFileBytes > MAX_FILE_BYTES) {
+    throw new Error('The menu and make-line guide together are too large. Use smaller files or paste one as text.');
+  }
+
   const parts = [{
-    text: `Extract restaurant recipes from this restaurant menu for WasteShift.
+    text: `Extract restaurant recipes for WasteShift from the customer-facing menu/dish source and, when provided, its make-line guide.
 Return strict JSON only. The top-level shape must be {"dishes":[...],"warnings":[]}.
 Each dish must include: name, category, ingredients, optional instructions, optional sellingPrice, confidence, warnings.
 Each ingredient must include: name, quantity, unit.
 Use units like g, kg, ml, l, each, doz, slice, bun, bottle, packet where visible.
-If the menu does not give exact recipe quantities, infer conservative prep quantities only when a normal kitchen portion is obvious; otherwise set quantity to 1, unit to "each", and add a warning for human review.
+The make-line guide is the source of truth for portions. Match its recipes to dishes by name and use its explicit quantities exactly, especially grams and millilitres.
+Do not invent gram or millilitre amounts. When an exact amount is not visible in the make-line guide, set quantity to 1, unit to "each", and add a warning for human review.
+If a make-line guide conflicts with the menu, keep the menu's dish name and price but use the guide's ingredients and quantities.
 Do not invent selling prices. Do not include markdown.
-Menu text:
-${String(text || '').slice(0, 20000)}`,
+Customer-facing menu or dish text:
+${String(text || '').slice(0, 20000)}
+
+Make-line guide text:
+${String(makeLineGuide || '').slice(0, 20000)}`,
   }];
 
-  if (file?.base64) {
-    const byteLength = Buffer.byteLength(file.base64, 'base64');
-
-    if (byteLength > MAX_FILE_BYTES) {
-      throw new Error('This menu file is too large. Try a smaller PDF/image or paste the text.');
+  const appendFilePart = (nextFile, label) => {
+    if (!nextFile?.base64) {
+      return;
     }
 
-    if (!ALLOWED_MIME_TYPES.has(file.mimeType)) {
-      throw new Error('Gemini menu import supports PDF, JPG, PNG, and WebP files.');
+    const byteLength = Buffer.byteLength(nextFile.base64, 'base64');
+
+    if (byteLength > MAX_FILE_BYTES) {
+      throw new Error(`This ${label} file is too large. Try a smaller PDF/image or paste the text.`);
+    }
+
+    if (!ALLOWED_MIME_TYPES.has(nextFile.mimeType)) {
+      throw new Error(`Gemini menu import supports PDF, JPG, PNG, and WebP ${label} files.`);
     }
 
     parts.push({
       inline_data: {
-        mime_type: file.mimeType,
-        data: file.base64,
+        mime_type: nextFile.mimeType,
+        data: nextFile.base64,
       },
     });
-  }
+  };
+
+  appendFilePart(file, 'menu');
+  appendFilePart(guideFile, 'make-line guide');
 
   return parts;
 };
 
-const callGemini = async ({ apiKey, model, text, file }) => {
+export { createGeminiParts };
+
+const callGemini = async ({ apiKey, model, text, file, makeLineGuide, guideFile }) => {
   const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      contents: [{ role: 'user', parts: createGeminiParts({ text, file }) }],
+      contents: [{ role: 'user', parts: createGeminiParts({ text, file, makeLineGuide, guideFile }) }],
       generationConfig: {
         temperature: 0.1,
         responseMimeType: 'application/json',
@@ -254,14 +276,16 @@ export default async function handler(request, response) {
     const body = await readJsonBody(request);
     const text = String(body?.text || '');
     const file = body?.file && isPlainObject(body.file) ? body.file : null;
+    const makeLineGuide = String(body?.makeLineGuide || '');
+    const guideFile = body?.guideFile && isPlainObject(body.guideFile) ? body.guideFile : null;
 
     if (!text.trim() && !file?.base64) {
-      sendJson(response, 400, { ok: false, message: 'Provide pasted menu text or a menu file.' });
+      sendJson(response, 400, { ok: false, message: 'Provide pasted menu/dish text or a menu file.' });
       return;
     }
 
     const model = process.env.GEMINI_MENU_MODEL || process.env.GEMINI_MODEL || DEFAULT_MODEL;
-    const geminiResponse = await callGemini({ apiKey, model, text, file });
+    const geminiResponse = await callGemini({ apiKey, model, text, file, makeLineGuide, guideFile });
     const normalized = normalizeGeminiMenuPayload(parseGeminiJsonText(getTextFromGeminiResponse(geminiResponse)));
 
     sendJson(response, 200, {
