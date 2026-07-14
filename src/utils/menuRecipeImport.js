@@ -112,6 +112,63 @@ export const createMenuRecipeReview = (dishes = [], itemPriceCatalog = {}) => {
   }));
 };
 
+// Keep the fast path conservative: only dishes with a clear structure and
+// compatible units are added automatically. Everything else remains editable.
+export const getSmartMenuImportPlan = (reviewDishes = []) => {
+  const readyDishes = [];
+  const reviewOnlyDishes = [];
+  const unmatchedIngredientsByKey = new Map();
+
+  normalizeAiMenuDishes({ dishes: reviewDishes }).forEach((dish) => {
+    const sourceDish = reviewDishes.find((candidate) => candidate?.reviewId === dish.reviewId) || dish;
+    const sourceIngredients = Array.isArray(sourceDish.ingredients) ? sourceDish.ingredients : [];
+    const hasExistingDishWarning = (sourceDish.warnings || []).some((warning) => /already exists/i.test(String(warning)));
+    const needsReview = Boolean(
+      sourceDish.rejected
+      || !dish.name
+      || dish.ingredients.length === 0
+      || hasExistingDishWarning
+      || Number(sourceDish.confidence) < 0.45
+      || sourceIngredients.some((ingredient) => (
+        !String(ingredient?.name || '').trim() || ingredient?.unitMismatch
+      ))
+    );
+
+    if (needsReview) {
+      reviewOnlyDishes.push(sourceDish);
+      return;
+    }
+
+    readyDishes.push(sourceDish);
+
+    sourceIngredients.forEach((ingredient) => {
+      if (ingredient?.catalogKey || !ingredient?.name) {
+        return;
+      }
+
+      const key = createItemPriceKey(ingredient.name);
+      if (!key || unmatchedIngredientsByKey.has(key)) {
+        return;
+      }
+
+      unmatchedIngredientsByKey.set(key, {
+        key,
+        name: ingredient.name,
+        category: sourceDish.category || 'Other',
+        price: 0,
+        unit: normalizeItemPriceUnit(ingredient.unit || 'each'),
+        source: 'menu-import-smart',
+      });
+    });
+  });
+
+  return {
+    readyDishes,
+    reviewOnlyDishes,
+    unmatchedIngredients: [...unmatchedIngredientsByKey.values()],
+  };
+};
+
 export const buildMenuImportSaveItems = (reviewDishes = [], itemPriceCatalog = {}) => {
   const catalog = sanitizeItemPriceCatalog(itemPriceCatalog);
 

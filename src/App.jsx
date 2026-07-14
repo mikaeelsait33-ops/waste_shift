@@ -2314,6 +2314,61 @@ function App() {
     return { ok: true, record: cleanedRecord, message: `${cleanedRecord.name} saved to the ingredient catalog.` };
   };
 
+  const handleCreateCatalogItems = useCallback(async (priceRecords = []) => {
+    const permission = requirePermission(accessProfile, 'canManageMenu', 'manage raw ingredient prices');
+    if (!permission.ok) {
+      return { ok: false, message: permission.message };
+    }
+
+    const existingCatalog = sanitizeItemPriceCatalog(itemPriceCatalog);
+    const candidates = new Map();
+
+    (Array.isArray(priceRecords) ? priceRecords : []).forEach((priceRecord) => {
+      const cleanedRecord = sanitizeItemPriceRecord({
+        ...priceRecord,
+        price: 0,
+        updatedAt: new Date().toISOString(),
+        source: priceRecord?.source || 'menu-import-smart',
+      });
+
+      if (cleanedRecord?.key && !candidates.has(cleanedRecord.key)) {
+        candidates.set(cleanedRecord.key, cleanedRecord);
+      }
+    });
+
+    const records = [...candidates.values()].map((record) => existingCatalog[record.key] || record);
+    const newRecords = records.filter((record) => !existingCatalog[record.key]);
+
+    if (newRecords.length > 0) {
+      setItemPriceCatalog((currentCatalog) => ({
+        ...currentCatalog,
+        ...Object.fromEntries(newRecords.map((record) => [record.key, record])),
+      }));
+
+      if (FIRESTORE_CONFIGURED) {
+        await Promise.all(newRecords.map((record) => saveIngredientPriceRecord(record)));
+      }
+
+      setAuditLog((prevLog) => [
+        createAuditLogEntry({
+          action: 'Ingredients created from menu import',
+          user: activeStaffMember?.name || 'System',
+          relatedItem: `${newRecords.length} ingredient${newRecords.length === 1 ? '' : 's'}`,
+          afterValue: newRecords.map((record) => ({ name: record.name, unit: record.unit })),
+        }),
+        ...prevLog,
+      ].slice(0, 500));
+    }
+
+    return {
+      ok: true,
+      records,
+      message: newRecords.length > 0
+        ? `${newRecords.length} ingredient${newRecords.length === 1 ? '' : 's'} added to the catalog.`
+        : 'Ingredients already exist in the catalog.',
+    };
+  }, [accessProfile, activeStaffMember?.name, itemPriceCatalog]);
+
   const handleDeleteItemPrice = (itemPriceKey) => {
     const permission = requirePermission(accessProfile, 'canManageMenu', 'remove raw ingredient prices');
     if (!permission.ok) {
@@ -3825,6 +3880,7 @@ function App() {
                     onRestoreMenuItem={handleRestoreMenuItem}
                     onImportMenuItems={saveApprovedMenuItems}
                     onCreateCatalogItem={handleSaveItemPrice}
+                    onCreateCatalogItems={handleCreateCatalogItems}
                     activeStaffMember={activeStaffMember}
                   />
                 ) : (

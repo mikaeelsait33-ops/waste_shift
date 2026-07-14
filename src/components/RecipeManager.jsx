@@ -104,6 +104,7 @@ function RecipeManager({
   onRestoreMenuItem,
   onImportMenuItems,
   onCreateCatalogItem,
+  onCreateCatalogItems,
   activeStaffMember,
 }) {
   const [recipeName, setRecipeName] = useState('');
@@ -457,6 +458,7 @@ function RecipeManager({
         activeStaffMember={activeStaffMember}
         onSaveApprovedItems={onImportMenuItems}
         onCreateCatalogItem={onCreateCatalogItem}
+        onCreateCatalogItems={onCreateCatalogItems}
       />
 
       <form onSubmit={handleSubmitRecipe} className="panel">

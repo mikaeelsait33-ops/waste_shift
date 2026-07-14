@@ -8,6 +8,7 @@ import {
   catalogUnitMismatch,
   createMenuRecipeReview,
   getMenuImportCatalogOptions,
+  getSmartMenuImportPlan,
 } from '../utils/menuRecipeImport';
 import { createImportHistoryRecord } from '../utils/menuImport';
 import {
@@ -79,6 +80,7 @@ function MenuImport({
   activeStaffMember,
   onSaveApprovedItems,
   onCreateCatalogItem,
+  onCreateCatalogItems,
   compact = false,
 }) {
   const fileInputRef = useRef(null);
@@ -91,6 +93,7 @@ function MenuImport({
   const [isSaving, setIsSaving] = useState(false);
   const safeCatalog = useMemo(() => sanitizeItemPriceCatalog(itemPriceCatalog), [itemPriceCatalog]);
   const catalogOptions = useMemo(() => getMenuImportCatalogOptions(safeCatalog), [safeCatalog]);
+  const smartImportPlan = useMemo(() => getSmartMenuImportPlan(reviewDishes), [reviewDishes]);
   const canUseAiImports = !accessProfile || Boolean(accessProfile?.canUseAiImports);
   const canManageMenu = !accessProfile || Boolean(accessProfile?.canManageMenu);
   const operatorName = accessProfile?.operatorName || activeStaffMember?.name || 'Current operator';
@@ -360,6 +363,110 @@ function MenuImport({
     }
   };
 
+  const addSmartRecipes = async () => {
+    if (!canManageMenu) {
+      setMessage(`${operatorName} cannot save menu recipes. Use a manager account.`);
+      return;
+    }
+
+    if (smartImportPlan.readyDishes.length === 0) {
+      setMessage('There are no confidently matched recipes to add yet. Review the remaining dishes below.');
+      return;
+    }
+
+    if (smartImportPlan.unmatchedIngredients.length > 0 && !onCreateCatalogItems) {
+      setMessage('Smart ingredient creation is not available yet. Review the unmatched ingredients before saving.');
+      return;
+    }
+
+    setIsSaving(true);
+    setMessage('Adding ready recipes and linking ingredients...');
+
+    try {
+      let nextCatalog = safeCatalog;
+
+      if (smartImportPlan.unmatchedIngredients.length > 0) {
+        const catalogResult = await onCreateCatalogItems(smartImportPlan.unmatchedIngredients);
+        if (!catalogResult?.ok) {
+          throw new Error(catalogResult?.message || 'Could not add the new ingredients to the catalog.');
+        }
+
+        nextCatalog = sanitizeItemPriceCatalog({
+          ...safeCatalog,
+          ...(catalogResult.records || {}).reduce((records, record) => ({
+            ...records,
+            [record.key]: record,
+          }), {}),
+        });
+      }
+
+      const linkedDishes = smartImportPlan.readyDishes.map((dish) => ({
+        ...dish,
+        ingredients: dish.ingredients.map((ingredient) => {
+          const record = findItemPriceRecord(nextCatalog, ingredient.catalogKey || ingredient.name);
+          if (!record) {
+            throw new Error(`Could not link ${ingredient.name} to the ingredient catalog.`);
+          }
+
+          const costIngredient = {
+            ingredientId: record.ingredientId || record.key,
+            priceCatalogKey: record.key,
+            name: ingredient.name,
+            quantity: formatIngredientQuantity(ingredient.quantity, ingredient.unit),
+            quantityValue: Number(ingredient.quantity) || 1,
+            unit: ingredient.unit,
+            category: record.category || dish.category,
+          };
+          const cost = calculateRecipeIngredientCost({ ingredient: costIngredient, itemPriceCatalog: nextCatalog });
+
+          return {
+            ...ingredient,
+            catalogKey: record.key,
+            ingredientId: record.ingredientId || record.key,
+            matchedName: record.name,
+            createNewCatalogItem: false,
+            unitMismatch: false,
+            warnings: [],
+            cost: cost.cost,
+            costSource: cost.source,
+            costPerBaseUnit: cost.costPerBaseUnit ?? null,
+            baseUnit: cost.baseUnit || record.baseUnit || '',
+          };
+        }),
+      }));
+      const items = buildMenuImportSaveItems(linkedDishes, nextCatalog);
+      const historyRecord = createImportHistoryRecord({
+        importType: inputMode === 'file' ? 'menu-recipe-ocr-gemini' : 'menu-recipe-gemini',
+        sourceName,
+        importedBy: activeStaffMember?.name || 'Manager',
+        reviewedItems: linkedDishes.map((dish) => ({ ...dish, approved: true })),
+        warnings: [],
+      });
+      const result = await onSaveApprovedItems?.({ items, historyRecord });
+
+      if (!result?.ok) {
+        throw new Error(result?.message || 'Could not add the ready recipes.');
+      }
+
+      setReviewDishes(smartImportPlan.reviewOnlyDishes);
+      if (smartImportPlan.reviewOnlyDishes.length === 0) {
+        setRawText('');
+      }
+
+      const ingredientMessage = smartImportPlan.unmatchedIngredients.length > 0
+        ? ` ${smartImportPlan.unmatchedIngredients.length} new ingredient${smartImportPlan.unmatchedIngredients.length === 1 ? '' : 's'} added without a price.`
+        : '';
+      const reviewMessage = smartImportPlan.reviewOnlyDishes.length > 0
+        ? ` ${smartImportPlan.reviewOnlyDishes.length} dish${smartImportPlan.reviewOnlyDishes.length === 1 ? '' : 'es'} still need review.`
+        : '';
+      setMessage(`${items.length} recipe${items.length === 1 ? '' : 's'} added.${ingredientMessage}${reviewMessage}`);
+    } catch (error) {
+      setMessage(error?.message || 'Could not add the ready recipes.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const saveableCount = reviewDishes.filter((dish) => !dish.rejected && dish.name && dish.ingredients.length > 0).length;
 
   return (
@@ -369,7 +476,7 @@ function MenuImport({
           <div>
             <p className="eyebrow">Menu import</p>
             <h2 className="title">Import Recipes With Gemini</h2>
-            <p className="subtitle">Paste menu text or upload a menu photo/PDF. Review every ingredient before saving.</p>
+            <p className="subtitle">WasteShift links safe matches automatically and holds only uncertain dishes for review.</p>
           </div>
           <span className="badge">{saveableCount} ready</span>
         </div>
@@ -430,7 +537,26 @@ function MenuImport({
         )}
 
         {reviewDishes.length > 0 && (
-          <div className="ingredient-list">
+          <div className="notice-panel">
+            <div className="section-header">
+              <div>
+                <h3 className="breakdown-title">Smart import</h3>
+                <p className="small-text">
+                  {smartImportPlan.readyDishes.length} ready to add. {smartImportPlan.unmatchedIngredients.length} new ingredient{smartImportPlan.unmatchedIngredients.length === 1 ? '' : 's'} will be added without a price until an invoice updates it.
+                </p>
+              </div>
+              {smartImportPlan.reviewOnlyDishes.length > 0 && <span className="badge">{smartImportPlan.reviewOnlyDishes.length} to review</span>}
+            </div>
+            <button type="button" className="primary-button" onClick={addSmartRecipes} disabled={isSaving || !canManageMenu || smartImportPlan.readyDishes.length === 0}>
+              {isSaving ? 'Adding recipes...' : `Add ${smartImportPlan.readyDishes.length} ready recipe${smartImportPlan.readyDishes.length === 1 ? '' : 's'}`}
+            </button>
+          </div>
+        )}
+
+        {reviewDishes.length > 0 && (
+          <details className="notice-panel" open={smartImportPlan.reviewOnlyDishes.length > 0}>
+            <summary className="breakdown-title">Review and edit imported dishes</summary>
+            <div className="ingredient-list" style={{ marginTop: 14 }}>
             {reviewDishes.map((dish) => (
               <div key={dish.reviewId} className={`inventory-card${dish.rejected ? ' is-muted' : ''}`}>
                 <div className="field-grid">
@@ -482,11 +608,12 @@ function MenuImport({
                 </div>
               </div>
             ))}
-          </div>
+            </div>
+          </details>
         )}
 
         {reviewDishes.length > 0 && (
-          <button type="button" className="primary-button" onClick={confirmImport} disabled={isSaving || !canManageMenu || saveableCount === 0}>
+          <button type="button" className="ghost-button" onClick={confirmImport} disabled={isSaving || !canManageMenu || saveableCount === 0}>
             {isSaving ? 'Saving recipes...' : 'Confirm reviewed recipes'}
           </button>
         )}
