@@ -60,6 +60,7 @@ assert.match(recipeManager, /Wipe menu/);
 assert.match(menuImportPanel, /canUseAiImports/);
 assert.match(menuImportPanel, /getManagerApiErrorMessage/);
 assert.match(menuImport, /getAutomaticManagerApiHeaders/);
+assert.match(menuImport, /shouldTryGeminiVisionFallback/);
 assert.doesNotMatch(menuImport, /Gemini access key/);
 assert.match(apiHeaders, /getAutomaticManagerApiHeaders/);
 assert.doesNotMatch(apiHeaders, /wasteShiftSyncAccessKey/);

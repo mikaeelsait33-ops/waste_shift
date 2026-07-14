@@ -34,6 +34,10 @@ const createFilePayload = async (file) => {
   };
 };
 
+const shouldTryGeminiVisionFallback = (response) => (
+  response?.status === 422 || Number(response?.status) >= 500
+);
+
 function MenuImportPanel({
   existingMenuItems = [],
   accessProfile,
@@ -98,7 +102,7 @@ function MenuImportPanel({
 
     try {
       const filePayload = file ? await createFilePayload(file) : null;
-      const response = await fetch(file ? '/api/scan-document' : '/api/gemini-menu', {
+      let response = await fetch(file ? '/api/scan-document' : '/api/gemini-menu', {
         method: 'POST',
         headers: await getAutomaticManagerApiHeaders({ 'content-type': 'application/json' }),
         body: JSON.stringify(file
@@ -116,18 +120,43 @@ function MenuImportPanel({
               file: null,
             }),
       });
-      const payload = await response.json().catch(() => ({}));
+      let payload = await response.json().catch(() => ({}));
+      let usedGeminiVisionFallback = false;
 
       if (!response.ok || payload.ok === false || payload.success === false) {
+        if (file && shouldTryGeminiVisionFallback(response)) {
+          setMessage('OCR could not read this file. Asking Gemini to inspect the original file...');
+          response = await fetch('/api/gemini-menu', {
+            method: 'POST',
+            headers: await getAutomaticManagerApiHeaders({ 'content-type': 'application/json' }),
+            body: JSON.stringify({
+              text: '',
+              file: {
+                name: filePayload.name,
+                mimeType: filePayload.mimeType,
+                base64: filePayload.base64,
+              },
+            }),
+          });
+          payload = await response.json().catch(() => ({}));
+          usedGeminiVisionFallback = true;
+        }
+
+        if (!response.ok || payload.ok === false || payload.success === false) {
+          if (file && payload?.ocr?.rawText) {
+            setSourceText(payload.ocr.rawText);
+          }
+          const protectedApiMessage = getManagerApiErrorMessage(payload, 'Menu import failed.');
+          throw new Error(protectedApiMessage);
+        }
+
         if (file && payload?.ocr?.rawText) {
           setSourceText(payload.ocr.rawText);
         }
-        const protectedApiMessage = getManagerApiErrorMessage(payload, 'Menu import failed.');
-        throw new Error(protectedApiMessage);
       }
 
       const extractedMenuItems = file
-        ? (payload.extracted?.menuItems || []).map((item) => ({
+        ? (usedGeminiVisionFallback ? (payload.items || []) : (payload.extracted?.menuItems || []).map((item) => ({
             name: item.name,
             category: item.category || '',
             sellingPrice: item.sellingPrice,
@@ -141,12 +170,12 @@ function MenuImportPanel({
             confidence: item.confidence,
             warnings: [],
             source: 'ocr-gemini',
-          }))
+          })))
         : (payload.items || []);
 
       loadReviewItems(
         extractedMenuItems,
-        file ? 'ocr-gemini-menu' : 'gemini-text',
+        file ? (usedGeminiVisionFallback ? 'gemini-file' : 'ocr-gemini-menu') : 'gemini-text',
         file?.name || sourceName || 'Menu import'
       );
     } catch (error) {

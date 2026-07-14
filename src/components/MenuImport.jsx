@@ -36,6 +36,10 @@ const createFilePayload = async (file) => {
   };
 };
 
+const shouldTryGeminiVisionFallback = (response) => (
+  response?.status === 422 || Number(response?.status) >= 500
+);
+
 const normalizeDishesFromPayload = (payload) => {
   if (Array.isArray(payload?.dishes)) {
     return payload.dishes;
@@ -107,11 +111,11 @@ function MenuImport({
       : 'No dishes were found. Try clearer text or a better menu photo.');
   };
 
-  const requestGeminiMenuParse = async (text, nextSourceName) => {
+  const requestGeminiMenuParse = async (text, nextSourceName, file = null) => {
     const response = await fetch('/api/gemini-menu', {
       method: 'POST',
       headers: await getAutomaticManagerApiHeaders({ 'content-type': 'application/json' }),
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, file }),
     });
     const payload = await response.json().catch(() => ({}));
 
@@ -171,7 +175,18 @@ function MenuImport({
       const ocrPayload = await ocrResponse.json().catch(() => ({}));
 
       if (!ocrResponse.ok || ocrPayload.ok === false || ocrPayload.success === false) {
-        throw new Error(getManagerApiErrorMessage(ocrPayload, 'OCR could not read this menu file.'));
+        if (!shouldTryGeminiVisionFallback(ocrResponse)) {
+          throw new Error(getManagerApiErrorMessage(ocrPayload, 'OCR could not read this menu file.'));
+        }
+
+        setMessage('OCR could not read this file. Asking Gemini to inspect the original file...');
+        await requestGeminiMenuParse('', file.name, {
+          name: filePayload.name,
+          mimeType: filePayload.mimeType,
+          base64: filePayload.data,
+        });
+        setMessage('Gemini read the original menu file. Review the dishes and ingredients before saving.');
+        return;
       }
 
       const ocrText = String(ocrPayload?.ocr?.rawText || '').trim();
