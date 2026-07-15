@@ -16,9 +16,10 @@ assert.doesNotMatch(databaseApi, /list\(\{ prefix: DATABASE_FOLDER/, 'Fallback d
 assert.match(adminResetApi, /cache-control', 'no-store'/, 'Admin reset API responses must not be cacheable.');
 
 assert.match(clientDatabaseId, /wasteShiftClientDatabaseId/, 'Client should persist one generated database id per browser install.');
-assert.match(clientDatabaseId, /restaurant/, 'Client should support a restaurant share URL for additional devices.');
-assert.match(clientDatabaseId, /setClientDatabaseId/, 'Client should allow a pasted restaurant code to select the shared database.');
-assert.match(clientDatabaseId, /keepDatabaseIdInUrl/, 'Client should keep the selected restaurant in the reloadable URL.');
+assert.doesNotMatch(clientDatabaseId, /getClientDatabaseShareUrl/, 'Single-shop mode must not expose a restaurant sharing link.');
+assert.doesNotMatch(clientDatabaseId, /setClientDatabaseId/, 'Single-shop mode must not allow switching the active restaurant database.');
+assert.doesNotMatch(clientDatabaseId, /keepDatabaseIdInUrl/, 'Single-shop mode must not put internal database identifiers in the URL.');
+assert.match(clientDatabaseId, /removeLegacyDatabaseQuery/, 'Single-shop mode should clean old restaurant-sharing URLs after loading.');
 assert.match(apiHeaders, /getClientDatabaseHeaders/, 'Protected API calls must include the client database scope header.');
 assert.match(restaurantFirestore, /wasteShiftRestaurantProfiles/, 'Completed restaurant profiles should have a local reload fallback.');
 assert.match(appSource, /loadPersistedAuthSession/, 'App should restore a remembered local login.');

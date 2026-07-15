@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import MenuImport from './MenuImport';
-import { setClientDatabaseId } from '../utils/clientDatabaseId';
 import { createRecordId } from '../utils/ids';
 import { createMenuItemKey, parseMenuPrice } from '../utils/menuImport';
 import { validatePin } from '../utils/pinAuth';
@@ -69,7 +68,6 @@ function SetupWizard({
   const [message, setMessage] = useState('');
   const [isFinishing, setIsFinishing] = useState(false);
   const [isPreparingManager, setIsPreparingManager] = useState(false);
-  const [existingRestaurantAccess, setExistingRestaurantAccess] = useState('');
   const stepIndex = Math.max(0, Math.min(STEPS.length - 1, Number(progress.stepIndex) || 0));
   const currentStep = STEPS[stepIndex];
   const completionPercent = Math.round(((stepIndex + 1) / STEPS.length) * 100);
@@ -289,19 +287,6 @@ function SetupWizard({
     }
   };
 
-  const openExistingRestaurant = () => {
-    const databaseId = setClientDatabaseId(existingRestaurantAccess);
-
-    if (!databaseId) {
-      setMessage('Paste the restaurant link or code from Settings > Database on the device that is already working.');
-      return;
-    }
-
-    localStorage.removeItem(SETUP_PROGRESS_KEY);
-    setMessage('Opening existing restaurant database...');
-    window.location.reload();
-  };
-
   return (
     <main className="auth-screen setup-screen">
       <section className="auth-panel setup-panel">
@@ -338,23 +323,6 @@ function SetupWizard({
               <p className="small-text" style={{ margin: 0 }}>
                 {firebaseSync?.message || 'Restaurant setup saves to Firestore.'}
               </p>
-            </div>
-            <div className="database-card">
-              <h3 className="breakdown-title">Already set up on another device?</h3>
-              <p className="small-text">
-                Paste the restaurant link or code from the working device to use the same Firestore data here.
-              </p>
-              <div className="field-grid">
-                <input
-                  value={existingRestaurantAccess}
-                  onChange={(event) => setExistingRestaurantAccess(event.target.value)}
-                  className="input"
-                  placeholder="Paste restaurant link or code"
-                />
-                <button type="button" className="ghost-button is-warning" onClick={openExistingRestaurant}>
-                  Open restaurant
-                </button>
-              </div>
             </div>
           </div>
         )}
