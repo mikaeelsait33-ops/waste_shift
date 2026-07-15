@@ -13,6 +13,7 @@ import {
   calculateMenuWasteFinancials,
   getEntryFoodCostLost,
   getMenuSellingPrice,
+  getRestaurantDateTimeParts,
   getRecipeIngredientTotal,
   getWasteClassificationMeta,
   roundCurrency,
@@ -679,16 +680,7 @@ function WasteForm({
     }
   };
 
-  const getTodayDateParts = () => {
-    const now = new Date();
-    const [year, month, day] = now.toISOString().split('T')[0].split('-');
-
-    return {
-      now,
-      formattedDate: `${day}/${month}/${year}`,
-      time: now.toTimeString().slice(0, 5),
-    };
-  };
+  const getTodayDateParts = () => getRestaurantDateTimeParts();
 
   const handleStaffChange = (staffId) => {
     setSelectedStaffId(staffId);

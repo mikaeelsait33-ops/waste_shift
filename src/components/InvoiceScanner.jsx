@@ -14,8 +14,10 @@ import {
 import { createItemPriceKey, roundUnitPrice } from '../utils/itemPriceCatalog';
 import {
   deleteIngredient,
+  loadInvoiceHistoryPage,
   invoiceFirestoreIsConfigured,
   loadInvoiceWorkspaceData,
+  loadStockMovementPage,
   saveConfirmedInvoice,
   saveIngredient,
   saveInvoiceSettings,
@@ -318,6 +320,10 @@ function InvoiceScanner({
     stockMovements: [],
     invoices: [],
     suppliers: [],
+    pagination: {
+      invoices: { cursor: null, hasMore: false },
+      stockMovements: { cursor: null, hasMore: false },
+    },
     settings: { vatRate: DEFAULT_VAT_RATE },
   });
   const [activeView, setActiveView] = useState('entry');
@@ -363,6 +369,8 @@ function InvoiceScanner({
   const [visibleStockMovementLimit, setVisibleStockMovementLimit] = useState(DEFAULT_PAGE_SIZE);
   const [deletingIngredientId, setDeletingIngredientId] = useState('');
   const [deletingInvoiceId, setDeletingInvoiceId] = useState('');
+  const [loadingOlderInvoices, setLoadingOlderInvoices] = useState(false);
+  const [loadingOlderStockMovements, setLoadingOlderStockMovements] = useState(false);
 
   const canManageInvoices = Boolean(accessProfile?.canUseAiImports);
   const canExportInvoiceReports = Boolean(accessProfile?.canExportData);
@@ -795,6 +803,54 @@ function InvoiceScanner({
     const data = await loadInvoiceWorkspaceData();
     setWorkspace(data);
     onInvoiceSaved?.();
+  };
+
+  const loadOlderInvoices = async () => {
+    if (loadingOlderInvoices || !workspace.pagination?.invoices?.hasMore) return;
+
+    setLoadingOlderInvoices(true);
+    try {
+      const page = await loadInvoiceHistoryPage({ cursor: workspace.pagination.invoices.cursor });
+      setWorkspace((current) => {
+        const knownIds = new Set(current.invoices.map((invoice) => invoice.id));
+        return {
+          ...current,
+          invoices: [...current.invoices, ...page.records.filter((invoice) => !knownIds.has(invoice.id))],
+          pagination: {
+            ...current.pagination,
+            invoices: { cursor: page.cursor, hasMore: page.hasMore },
+          },
+        };
+      });
+    } catch (error) {
+      setMessage(error?.message || 'Could not load older invoices.');
+    } finally {
+      setLoadingOlderInvoices(false);
+    }
+  };
+
+  const loadOlderStockMovements = async () => {
+    if (loadingOlderStockMovements || !workspace.pagination?.stockMovements?.hasMore) return;
+
+    setLoadingOlderStockMovements(true);
+    try {
+      const page = await loadStockMovementPage({ cursor: workspace.pagination.stockMovements.cursor });
+      setWorkspace((current) => {
+        const knownIds = new Set(current.stockMovements.map((movement) => movement.id));
+        return {
+          ...current,
+          stockMovements: [...current.stockMovements, ...page.records.filter((movement) => !knownIds.has(movement.id))],
+          pagination: {
+            ...current.pagination,
+            stockMovements: { cursor: page.cursor, hasMore: page.hasMore },
+          },
+        };
+      });
+    } catch (error) {
+      setMessage(error?.message || 'Could not load older stock movements.');
+    } finally {
+      setLoadingOlderStockMovements(false);
+    }
   };
 
   const applyLineCalculations = (item, options = {}) => {
@@ -1274,7 +1330,7 @@ function InvoiceScanner({
       await deleteIngredient(ingredient.id);
       onIngredientDeleted?.(ingredient);
       await refreshWorkspace();
-      setMessage(`${ingredient.name} deleted from the raw ingredient library.`);
+      setMessage(`${ingredient.name} archived from the raw ingredient library. Its audit history was preserved.`);
     } catch (error) {
       setMessage(error?.message || 'Could not delete this raw ingredient.');
     } finally {
@@ -1315,7 +1371,7 @@ function InvoiceScanner({
         currentInvoice?.invoiceId === invoice.id ? null : currentInvoice
       ));
       setStockUpdates([]);
-      setMessage(`Invoice deleted. Removed ${result.removedHistoryCount || 0} price histor${result.removedHistoryCount === 1 ? 'y entry' : 'y entries'} and refreshed ${result.affectedIngredientCount || 0} ingredient${result.affectedIngredientCount === 1 ? '' : 's'}.`);
+      setMessage(`Invoice archived. Excluded ${result.removedHistoryCount || 0} price histor${result.removedHistoryCount === 1 ? 'y entry' : 'y entries'} from costing and refreshed ${result.affectedIngredientCount || 0} ingredient${result.affectedIngredientCount === 1 ? '' : 's'}.`);
     } catch (error) {
       setMessage(error?.message || 'Could not delete this invoice.');
     } finally {
@@ -2529,6 +2585,19 @@ function InvoiceScanner({
                 </span>
               </div>
             )}
+            {!visibleInvoiceSupplierPage.hasMore && workspace.pagination?.invoices?.hasMore && (
+              <div className="load-more-row">
+                <button
+                  type="button"
+                  className="ghost-button is-warning"
+                  onClick={loadOlderInvoices}
+                  disabled={loadingOlderInvoices}
+                >
+                  {loadingOlderInvoices ? 'Loading older invoices...' : 'Load older invoices'}
+                </button>
+                <span className="small-text">Older invoice records remain in Firebase.</span>
+              </div>
+            )}
           </div>
         </section>
       )}
@@ -2614,6 +2683,19 @@ function InvoiceScanner({
                 <span className="small-text">
                   Showing {visibleStockMovementPage.visibleCount} of {visibleStockMovementPage.totalCount}
                 </span>
+              </div>
+            )}
+            {!visibleStockMovementPage.hasMore && workspace.pagination?.stockMovements?.hasMore && (
+              <div className="load-more-row">
+                <button
+                  type="button"
+                  className="ghost-button is-warning"
+                  onClick={loadOlderStockMovements}
+                  disabled={loadingOlderStockMovements}
+                >
+                  {loadingOlderStockMovements ? 'Loading older movements...' : 'Load older stock movements'}
+                </button>
+                <span className="small-text">Older stock records remain in Firebase.</span>
               </div>
             )}
           </div>

@@ -1,5 +1,5 @@
 import { cert, getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 
 const getAdminCredential = () => {
   const serviceAccountJson = String(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').trim();
@@ -33,6 +33,7 @@ export const getFirebaseAdmin = () => {
 
     return {
       db: getFirestore(app),
+      Timestamp,
     };
   } catch (error) {
     console.error('Firebase Admin configuration could not be loaded.', error);

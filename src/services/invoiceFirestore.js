@@ -42,7 +42,7 @@ const getFirestoreApi = async () => {
   if (!firestoreApiPromise) {
     firestoreApiPromise = Promise.all([
       import('firebase/app'),
-      import('firebase/firestore'),
+      import('firebase/firestore/lite'),
     ]).then(([firebaseApp, firestore]) => ({
       collection: firestore.collection,
       doc: firestore.doc,
@@ -56,9 +56,12 @@ const getFirestoreApi = async () => {
       limit: firestore.limit,
       orderBy: firestore.orderBy,
       query: firestore.query,
+      runTransaction: firestore.runTransaction,
       serverTimestamp: firestore.serverTimestamp,
       setDoc: firestore.setDoc,
+      startAfter: firestore.startAfter,
       updateDoc: firestore.updateDoc,
+      where: firestore.where,
     }));
   }
 
@@ -148,37 +151,47 @@ const getActiveDatabaseId = () => getClientDatabaseId() || 'local';
 
 const scopeDocId = (id) => `${getActiveDatabaseId()}__${sanitizeString(id)}`;
 
-const readCollection = async (collectionName, options = {}) => {
+const readCollectionPage = async (collectionName, options = {}) => {
   const db = await getFirestoreDb();
 
   if (!db) {
-    return [];
+    return { records: [], cursor: null, hasMore: false };
   }
 
   await ensureFirebaseAuth();
-  const { collection, getDocs, query, where } = await getFirestoreApi();
+  const { collection, getDocs, limit, orderBy, query, startAfter, where } = await getFirestoreApi();
   const collectionRef = collection(db, collectionName);
-  const snapshot = await getDocs(query(
-    collectionRef,
-    where('databaseId', '==', getActiveDatabaseId()),
-  ));
+  const constraints = [where('databaseId', '==', getActiveDatabaseId())];
+
+  if (options.orderByField) {
+    constraints.push(orderBy(options.orderByField, options.direction === 'asc' ? 'asc' : 'desc'));
+  }
+
+  if (options.cursor) {
+    constraints.push(startAfter(options.cursor));
+  }
+
+  const limitCount = options.limitCount ? Math.max(1, Number(options.limitCount) || 1) : 0;
+  if (options.limitCount) {
+    constraints.push(limit(limitCount));
+  }
+
+  const snapshot = await getDocs(query(collectionRef, ...constraints));
   const records = snapshot.docs.map((docSnapshot) => ({
     id: docSnapshot.id,
     ...docSnapshot.data(),
   }));
 
-  if (options.orderByField) {
-    const direction = options.direction === 'asc' ? 1 : -1;
-    records.sort((a, b) => (
-      String(a[options.orderByField] || '').localeCompare(String(b[options.orderByField] || '')) * direction
-    ));
-  }
+  return {
+    records,
+    cursor: snapshot.docs.at(-1) || null,
+    hasMore: limitCount > 0 && snapshot.size === limitCount,
+  };
+};
 
-  if (options.limitCount) {
-    return records.slice(0, Math.max(1, Number(options.limitCount) || 1));
-  }
-
-  return records;
+const readCollection = async (collectionName, options = {}) => {
+  const page = await readCollectionPage(collectionName, options);
+  return page.records;
 };
 
 const normalizeIngredient = (docData) => {
@@ -299,20 +312,35 @@ const withPriceHistory = async (ingredient) => {
   }
 
   await ensureFirebaseAuth();
-  const { collection, getDocs } = await getFirestoreApi();
-  const snapshot = await getDocs(collection(db, 'ingredients', scopeDocId(ingredient.id), 'priceHistory'));
+  const { collection, getDocs, limit, orderBy, query } = await getFirestoreApi();
+  const snapshot = await getDocs(query(
+    collection(db, 'ingredients', scopeDocId(ingredient.id), 'priceHistory'),
+    orderBy('date', 'desc'),
+    limit(100),
+  ));
   const priceHistory = snapshot.docs
     .map((docSnapshot) => ({
       id: docSnapshot.id,
       ...docSnapshot.data(),
     }))
-    .filter((history) => history.databaseId === getActiveDatabaseId())
+    .filter((history) => (
+      history.databaseId === getActiveDatabaseId()
+      && history.isDeleted !== true
+      && !['deleted', 'voided'].includes(String(history.status || '').toLowerCase())
+    ))
     .sort((a, b) => new Date(a.date || 0).getTime() - new Date(b.date || 0).getTime());
 
   return { ...ingredient, priceHistory };
 };
 
 const normalizePriceHistory = (docData) => {
+  if (
+    docData?.isDeleted === true
+    || ['deleted', 'voided'].includes(String(docData?.status || '').toLowerCase())
+  ) {
+    return null;
+  }
+
   const ingredientId = sanitizeString(docData?.ingredientId);
   const supplierId = sanitizeString(docData?.supplierId) || createSupplierId(docData?.supplier);
   const date = sanitizeString(docData?.date);
@@ -512,14 +540,14 @@ export const loadInvoiceWorkspaceData = async () => {
     };
   }
 
-  const [ingredientDocs, menuItemDocs, stockDocs, stockMovementDocs, invoiceDocs, supplierDocs, priceHistoryDocs] = await Promise.all([
+  const [ingredientDocs, menuItemDocs, stockDocs, stockMovementPage, invoicePage, supplierDocs, priceHistoryDocs] = await Promise.all([
     readCollection('ingredients'),
     readCollection('menuItems'),
     readCollection('stockLevels'),
-    readCollection('stockMovements', { orderByField: 'createdAt', limitCount: 500 }),
-    readCollection('invoices', { orderByField: 'invoiceDate', limitCount: 300 }),
+    readCollectionPage('stockMovements', { orderByField: 'createdAt', limitCount: 250 }),
+    readCollectionPage('invoices', { orderByField: 'invoiceDate', limitCount: 150 }),
     readCollection('suppliers'),
-    readCollection('priceHistory', { orderByField: 'date', limitCount: 750 }),
+    readCollection('priceHistory', { orderByField: 'date', limitCount: 500 }),
   ]);
   const db = await getFirestoreDb();
   const { doc, getDoc } = await getFirestoreApi();
@@ -536,15 +564,45 @@ export const loadInvoiceWorkspaceData = async () => {
     ingredients,
     menuItems: menuItemDocs.map(normalizeMenuItem).filter(Boolean),
     stockLevels: stockDocs.map(normalizeStockLevel).filter(Boolean),
-    stockMovements: stockMovementDocs
+    stockMovements: stockMovementPage.records
       .map(normalizeStockMovement)
       .filter(Boolean)
       .sort((a, b) => new Date(b.sortDate || 0).getTime() - new Date(a.sortDate || 0).getTime()),
-    invoices: invoiceDocs.sort((a, b) => new Date(b.invoiceDate || b.scannedAt || 0).getTime() - new Date(a.invoiceDate || a.scannedAt || 0).getTime()),
+    invoices: invoicePage.records.sort((a, b) => new Date(b.invoiceDate || b.scannedAt || 0).getTime() - new Date(a.invoiceDate || a.scannedAt || 0).getTime()),
     suppliers: supplierDocs,
+    pagination: {
+      invoices: { cursor: invoicePage.cursor, hasMore: invoicePage.hasMore },
+      stockMovements: { cursor: stockMovementPage.cursor, hasMore: stockMovementPage.hasMore },
+    },
     settings: {
       vatRate: sanitizeNumber(settingsSnapshot.data()?.vatRate, 0.15),
     },
+  };
+};
+
+export const loadInvoiceHistoryPage = async ({ cursor = null, pageSize = 150 } = {}) => {
+  const page = await readCollectionPage('invoices', {
+    orderByField: 'invoiceDate',
+    limitCount: Math.max(1, Math.min(300, Number(pageSize) || 150)),
+    cursor,
+  });
+  return {
+    records: page.records.sort((a, b) => new Date(b.invoiceDate || b.scannedAt || 0).getTime() - new Date(a.invoiceDate || a.scannedAt || 0).getTime()),
+    cursor: page.cursor,
+    hasMore: page.hasMore,
+  };
+};
+
+export const loadStockMovementPage = async ({ cursor = null, pageSize = 250 } = {}) => {
+  const page = await readCollectionPage('stockMovements', {
+    orderByField: 'createdAt',
+    limitCount: Math.max(1, Math.min(500, Number(pageSize) || 250)),
+    cursor,
+  });
+  return {
+    records: page.records.map(normalizeStockMovement).filter(Boolean),
+    cursor: page.cursor,
+    hasMore: page.hasMore,
   };
 };
 
@@ -717,7 +775,7 @@ export const deleteIngredient = async (ingredientId) => {
   }
 
   await ensureFirebaseAuth();
-  const { collection, deleteDoc, doc, getDoc, getDocs, serverTimestamp, setDoc } = await getFirestoreApi();
+  const { doc, getDoc, serverTimestamp, setDoc } = await getFirestoreApi();
   const ingredientRef = doc(db, 'ingredients', scopeDocId(id));
   const ingredientSnapshot = await getDoc(ingredientRef);
   const ingredient = ingredientSnapshot.data() || {};
@@ -732,20 +790,11 @@ export const deleteIngredient = async (ingredientId) => {
     name: sanitizeString(ingredient.name || ingredient.ingredientName) || id,
     category: sanitizeString(ingredient.category) || 'Other',
     unit: sanitizeString(ingredient.unit) || 'each',
+    active: false,
     isDeleted: true,
     deletedAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   }, { merge: true });
-
-  const historySnapshot = await getDocs(collection(db, 'ingredients', scopeDocId(id), 'priceHistory')).catch(() => ({ docs: [] }));
-
-  await Promise.all(historySnapshot.docs
-    .filter((docSnapshot) => docSnapshot.data()?.databaseId === getActiveDatabaseId())
-    .map((docSnapshot) => deleteDoc(docSnapshot.ref).catch(() => {})));
-  await Promise.all([
-    deleteDoc(doc(db, 'stockLevels', scopeDocId(id))).catch(() => {}),
-    deleteDoc(ingredientRef).catch(() => {}),
-  ]);
 
   return { ok: true, ingredientId: id };
 };
@@ -978,7 +1027,7 @@ export const softDeleteInvoice = async (invoiceId, { deletedBy = '' } = {}) => {
   }
 
   await ensureFirebaseAuth();
-  const { collection, deleteDoc, doc, getDoc, getDocs, increment, serverTimestamp, setDoc, updateDoc } = await getFirestoreApi();
+  const { collection, doc, getDoc, getDocs, increment, serverTimestamp, setDoc, updateDoc } = await getFirestoreApi();
   const invoiceRef = doc(db, 'invoices', scopeDocId(safeInvoiceId));
   const invoiceSnapshot = await getDoc(invoiceRef);
 
@@ -1008,7 +1057,14 @@ export const softDeleteInvoice = async (invoiceId, { deletedBy = '' } = {}) => {
   ]);
   let removedHistoryCount = topLevelDocsToDelete.length;
 
-  await Promise.all(topLevelDocsToDelete.map((docSnapshot) => deleteDoc(docSnapshot.ref)));
+  const safeDeletedBy = sanitizeString(deletedBy) || 'System';
+
+  await Promise.all(topLevelDocsToDelete.map((docSnapshot) => setDoc(docSnapshot.ref, {
+    status: 'deleted',
+    isDeleted: true,
+    deletedAt: serverTimestamp(),
+    deletedBy: safeDeletedBy,
+  }, { merge: true })));
 
   await Promise.all(ingredientIds.map(async (ingredientId) => {
     const historySnapshot = await getDocs(collection(db, 'ingredients', scopeDocId(ingredientId), 'priceHistory')).catch(() => ({ docs: [] }));
@@ -1019,7 +1075,12 @@ export const softDeleteInvoice = async (invoiceId, { deletedBy = '' } = {}) => {
     ));
 
     removedHistoryCount += nestedDocsToDelete.length;
-    await Promise.all(nestedDocsToDelete.map((docSnapshot) => deleteDoc(docSnapshot.ref)));
+    await Promise.all(nestedDocsToDelete.map((docSnapshot) => setDoc(docSnapshot.ref, {
+      status: 'deleted',
+      isDeleted: true,
+      deletedAt: serverTimestamp(),
+      deletedBy: safeDeletedBy,
+    }, { merge: true })));
   }));
 
   await Promise.all(ingredientIds.map((ingredientId) => refreshIngredientLatestPrice(db, ingredientId, safeInvoiceId)));
@@ -1027,7 +1088,7 @@ export const softDeleteInvoice = async (invoiceId, { deletedBy = '' } = {}) => {
   await updateDoc(invoiceRef, {
     status: 'deleted',
     deletedAt: serverTimestamp(),
-    deletedBy: sanitizeString(deletedBy) || 'System',
+    deletedBy: safeDeletedBy,
     previousStatus: sanitizeString(invoice.status) || 'confirmed',
     priceHistoryRemoved: removedHistoryCount,
     updatedAt: serverTimestamp(),
@@ -1065,108 +1126,131 @@ export const updateStockFromInvoice = async ({
   }
 
   await ensureFirebaseAuth();
-  const { doc, getDoc, serverTimestamp, setDoc, updateDoc } = await getFirestoreApi();
+  const { doc, runTransaction, serverTimestamp } = await getFirestoreApi();
   const invoiceRef = doc(db, 'invoices', scopeDocId(invoiceId));
-  const invoiceSnapshot = await getDoc(invoiceRef);
-  const invoiceData = invoiceSnapshot.data() || {};
-
-  if (invoiceSnapshot.exists() && invoiceData.databaseId !== getActiveDatabaseId()) {
-    return { ok: false, skipped: true, updates: [], stockMovementIds: [] };
-  }
-  const currentPostingStatus = sanitizeString(invoiceData.stockPostingStatus);
-
-  if (['posted', 'historical_posted'].includes(currentPostingStatus)) {
-    return {
-      ok: true,
-      alreadyPosted: true,
-      updates: [],
-      stockMovementIds: Array.isArray(invoiceData.stockMovementIds) ? invoiceData.stockMovementIds : [],
-      message: 'Stock was already updated for this invoice.',
-    };
-  }
-
-  const updates = [];
-  const stockMovementIds = [];
   const nextPostingStatus = postingMode === 'historical_posted' ? 'historical_posted' : 'posted';
+  const safeLineItems = Array.isArray(lineItems) ? lineItems : [];
+  const postingGroups = new Map();
 
-  for (const row of Array.isArray(ingredientRows) ? ingredientRows : []) {
+  (Array.isArray(ingredientRows) ? ingredientRows : []).forEach((row) => {
     const ingredientId = sanitizeString(row?.ingredientId);
-    const lineItem = (Array.isArray(lineItems) ? lineItems : []).find((item) => item.id === row.lineItemId);
+    const lineItem = safeLineItems.find((item) => item.id === row.lineItemId);
 
     if (!ingredientId || !lineItem) {
-      continue;
+      return;
     }
 
-    const stockRef = doc(db, 'stockLevels', scopeDocId(ingredientId));
-    const stockSnapshot = await getDoc(stockRef);
-    const currentQty = sanitizeNumber(stockSnapshot.data()?.currentQty);
-    const incomingQty = sanitizeNumber(lineItem.baseQuantity || lineItem.quantity, 0);
-    const nextQty = roundMoney(currentQty + incomingQty);
-    const parLevel = sanitizeNumber(row.parLevel);
-    const reorderPoint = sanitizeNumber(row.reorderPoint);
-    const status = parLevel > 0 && nextQty > parLevel
-      ? 'overstocked'
-      : reorderPoint > 0 && nextQty <= reorderPoint
-        ? 'low'
-        : 'ok';
-    const movementId = createStockMovementId({
-      invoiceId,
-      lineItemId: lineItem.id || row.lineItemId,
-      ingredientId,
-    });
-    const movementRecord = createStockMovementRecord({
-      movementId,
-      invoiceId,
-      invoiceNumber: invoiceData.invoiceNumber,
-      supplier: invoiceData.supplier,
-      invoiceDate: invoiceData.invoiceDate,
-      receivedDate: invoiceData.receivedDate,
-      lineItem,
-      ingredientRow: row,
-      previousQty: currentQty,
-      incomingQty,
-      nextQty,
-      unit: lineItem.baseUnit || lineItem.unit || row.unit || 'each',
-      status,
-      postingMode: nextPostingStatus,
-      postedBy,
-      createdAt: serverTimestamp(),
-    });
+    const group = postingGroups.get(ingredientId) || { ingredientId, row, items: [] };
+    group.items.push({ row, lineItem });
+    postingGroups.set(ingredientId, group);
+  });
 
-    stockMovementIds.push(movementId);
+  return runTransaction(db, async (transaction) => {
+    const invoiceSnapshot = await transaction.get(invoiceRef);
+    const invoiceData = invoiceSnapshot.data() || {};
 
-    await Promise.all([
-      setDoc(stockRef, {
+    if (!invoiceSnapshot.exists() || invoiceData.databaseId !== getActiveDatabaseId()) {
+      return { ok: false, skipped: true, updates: [], stockMovementIds: [] };
+    }
+
+    const currentPostingStatus = sanitizeString(invoiceData.stockPostingStatus);
+
+    if (['posted', 'historical_posted'].includes(currentPostingStatus)) {
+      return {
+        ok: true,
+        alreadyPosted: true,
+        updates: [],
+        stockMovementIds: Array.isArray(invoiceData.stockMovementIds) ? invoiceData.stockMovementIds : [],
+        message: 'Stock was already updated for this invoice.',
+      };
+    }
+
+    const groups = [...postingGroups.values()];
+    const stockRefs = groups.map((group) => doc(db, 'stockLevels', scopeDocId(group.ingredientId)));
+    const stockSnapshots = await Promise.all(stockRefs.map((stockRef) => transaction.get(stockRef)));
+    const updates = [];
+    const stockMovementIds = [];
+
+    groups.forEach((group, groupIndex) => {
+      const stockRef = stockRefs[groupIndex];
+      const stockSnapshot = stockSnapshots[groupIndex];
+      const startingQty = sanitizeNumber(stockSnapshot.data()?.currentQty);
+      const parLevel = sanitizeNumber(group.row.parLevel);
+      const reorderPoint = sanitizeNumber(group.row.reorderPoint);
+      let runningQty = startingQty;
+      let lastMovementId = '';
+
+      group.items.forEach(({ row, lineItem }) => {
+        const incomingQty = sanitizeNumber(lineItem.baseQuantity || lineItem.quantity, 0);
+        const previousQty = runningQty;
+        runningQty = roundMoney(runningQty + incomingQty);
+        const status = parLevel > 0 && runningQty > parLevel
+          ? 'overstocked'
+          : reorderPoint > 0 && runningQty <= reorderPoint
+            ? 'low'
+            : 'ok';
+        const movementId = createStockMovementId({
+          invoiceId,
+          lineItemId: lineItem.id || row.lineItemId,
+          ingredientId: group.ingredientId,
+        });
+        const movementRecord = createStockMovementRecord({
+          movementId,
+          invoiceId,
+          invoiceNumber: invoiceData.invoiceNumber,
+          supplier: invoiceData.supplier,
+          invoiceDate: invoiceData.invoiceDate,
+          receivedDate: invoiceData.receivedDate,
+          lineItem,
+          ingredientRow: row,
+          previousQty,
+          incomingQty,
+          nextQty: runningQty,
+          unit: lineItem.baseUnit || lineItem.unit || row.unit || 'each',
+          status,
+          postingMode: nextPostingStatus,
+          postedBy,
+          createdAt: serverTimestamp(),
+        });
+
+        lastMovementId = movementId;
+        stockMovementIds.push(movementId);
+        transaction.set(doc(db, 'stockMovements', scopeDocId(movementId)), {
+          databaseId: getActiveDatabaseId(),
+          ...movementRecord,
+        }, { merge: true });
+        updates.push({
+          ingredientId: group.ingredientId,
+          ingredientName: row.ingredientName,
+          previousQty,
+          incomingQty,
+          currentQty: runningQty,
+          unit: lineItem.baseUnit || lineItem.unit || row.unit || 'each',
+          status,
+        });
+      });
+
+      const finalStatus = parLevel > 0 && runningQty > parLevel
+        ? 'overstocked'
+        : reorderPoint > 0 && runningQty <= reorderPoint
+          ? 'low'
+          : 'ok';
+      const finalLineItem = group.items[group.items.length - 1]?.lineItem || {};
+      transaction.set(stockRef, {
         databaseId: getActiveDatabaseId(),
-        ingredientId,
-        currentQty: nextQty,
-        unit: lineItem.baseUnit || lineItem.unit || row.unit || 'each',
+        ingredientId: group.ingredientId,
+        currentQty: runningQty,
+        unit: finalLineItem.baseUnit || finalLineItem.unit || group.row.unit || 'each',
         lastUpdated: serverTimestamp(),
         lastInvoiceId: invoiceId,
-        lastMovementId: movementId,
-        status,
+        lastMovementId,
+        status: finalStatus,
         parLevel,
         reorderPoint,
-      }, { merge: true }),
-      setDoc(doc(db, 'stockMovements', scopeDocId(movementId)), {
-        databaseId: getActiveDatabaseId(),
-        ...movementRecord,
-      }, { merge: true }),
-    ]);
-
-    updates.push({
-      ingredientId,
-      ingredientName: row.ingredientName,
-      previousQty: currentQty,
-      incomingQty,
-      currentQty: nextQty,
-      unit: lineItem.baseUnit || lineItem.unit || row.unit || 'each',
-      status,
+      }, { merge: true });
     });
-  }
 
-  if (invoiceId) {
-    await updateDoc(invoiceRef, {
+    transaction.update(invoiceRef, {
       stockUpdatedAt: serverTimestamp(),
       stockUpdateCount: updates.length,
       stockPostingStatus: nextPostingStatus,
@@ -1175,9 +1259,9 @@ export const updateStockFromInvoice = async ({
       stockMovementIds,
       status: nextPostingStatus === 'historical_posted' ? 'historical_stock' : 'posted_to_stock',
     });
-  }
 
-  return { ok: true, updates, stockMovementIds };
+    return { ok: true, updates, stockMovementIds };
+  });
 };
 
 export const loadInvoiceDashboardStats = async () => {
@@ -1204,9 +1288,9 @@ export const loadInvoiceDashboardStats = async () => {
 
   const [ingredientDocs, invoiceDocs, stockDocs, priceHistoryDocs] = await Promise.all([
     readCollection('ingredients'),
-    readCollection('invoices'),
+    readCollection('invoices', { orderByField: 'invoiceDate', limitCount: 500 }),
     readCollection('stockLevels'),
-    readCollection('priceHistory'),
+    readCollection('priceHistory', { orderByField: 'date', limitCount: 1000 }),
   ]);
   const ingredients = mergeTopLevelPriceHistory(
     ingredientDocs.map(normalizeIngredient).filter(Boolean),

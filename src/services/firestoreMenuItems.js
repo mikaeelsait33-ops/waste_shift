@@ -27,7 +27,7 @@ const getFirestoreApi = async () => {
   if (!firestoreApiPromise) {
     firestoreApiPromise = Promise.all([
       import('firebase/app'),
-      import('firebase/firestore'),
+      import('firebase/firestore/lite'),
     ]).then(([firebaseApp, firestore]) => ({
       initializeApp: firebaseApp.initializeApp,
       getApps: firebaseApp.getApps,
@@ -42,6 +42,7 @@ const getFirestoreApi = async () => {
       query: firestore.query,
       serverTimestamp: firestore.serverTimestamp,
       setDoc: firestore.setDoc,
+      startAfter: firestore.startAfter,
       where: firestore.where,
     }));
   }
@@ -186,29 +187,25 @@ const sanitizeWasteComponent = (component, index) => {
   };
 };
 
-const stripLargeLocalFields = (entry) => {
-  const photoUrl = toSafeString(entry?.photoUrl);
-
-  if (!photoUrl.startsWith('data:image/')) {
-    return entry;
-  }
-
-  return {
-    ...entry,
-    photoUrl: '',
-    photoCapturedAt: '',
-    hasPhoto: true,
-  };
-};
-
 const createFirestoreAppDataPayload = (databaseData) => {
   const data = databaseData && typeof databaseData === 'object' ? databaseData : {};
+  const stripStaffCredentials = (records) => (Array.isArray(records) ? records : []).map((record) => {
+    const { staffCode: _staffCode, managerPin: _managerPin, ...safeRecord } = record || {};
+    return safeRecord;
+  });
 
   return removeUndefinedValues({
     ...data,
-    wasteItems: Array.isArray(data.wasteItems)
-      ? data.wasteItems.map(stripLargeLocalFields)
-      : [],
+    // Waste entries are stored separately so this shared snapshot stays below
+    // Firestore's single-document size limit as history grows.
+    wasteItems: [],
+    customStaffList: stripStaffCredentials(data.customStaffList),
+    staffList: stripStaffCredentials(data.staffList),
+    authSettings: {
+      ...(data.authSettings && typeof data.authSettings === 'object' ? data.authSettings : {}),
+      staffPin: null,
+      managementPin: null,
+    },
   });
 };
 
@@ -342,30 +339,51 @@ export const loadFirestoreMenuItems = async () => {
   return snapshot.docs.map(normalizeFirestoreMenuItem).filter(Boolean);
 };
 
-export const loadFirestoreWasteEntries = async (options = {}) => {
-  const daysBack = Number.isFinite(Number(options.daysBack)) ? Math.max(1, Number(options.daysBack)) : 90;
-  const resultLimit = Number.isFinite(Number(options.limit)) ? Math.max(1, Number(options.limit)) : 750;
+export const loadFirestoreWasteEntryPage = async (options = {}) => {
+  const daysBack = Number.isFinite(Number(options.daysBack)) ? Math.max(1, Number(options.daysBack)) : null;
+  const pageSize = Number.isFinite(Number(options.pageSize))
+    ? Math.max(1, Math.min(500, Number(options.pageSize)))
+    : 250;
   const db = await getFirestoreDb();
 
   if (!db) {
-    return [];
+    return { entries: [], cursor: null, hasMore: false };
   }
 
   await ensureFirebaseAuth();
-  const { collection, getDocs, query, where } = await getFirestoreApi();
-  const since = new Date();
-  since.setDate(since.getDate() - daysBack);
-  const snapshot = await getDocs(query(
-    collection(db, 'wasteEntries'),
-    where('databaseId', '==', getActiveDatabaseId()),
-  ));
-  return snapshot.docs
+  const { collection, getDocs, limit, orderBy, query, startAfter, where } = await getFirestoreApi();
+  const constraints = [where('databaseId', '==', getActiveDatabaseId())];
+
+  if (daysBack) {
+    const since = new Date();
+    since.setDate(since.getDate() - daysBack);
+    constraints.push(where('createdAt', '>=', since.toISOString()));
+  }
+
+  constraints.push(orderBy('createdAt', 'desc'));
+  if (options.cursor) {
+    constraints.push(startAfter(options.cursor));
+  }
+  constraints.push(limit(pageSize));
+  const snapshot = await getDocs(query(collection(db, 'wasteEntries'), ...constraints));
+  const entries = snapshot.docs
     .map(normalizeFirestoreWasteEntry)
     .filter((entry) => entry.name && entry.reason)
-    .filter((entry) => new Date(entry.createdAt || entry.timestamp || 0) >= since)
-    .sort((a, b) => new Date(b.createdAt || b.timestamp || 0).getTime() - new Date(a.createdAt || a.timestamp || 0).getTime())
-    .slice(0, resultLimit)
     .sort((a, b) => new Date(a.createdAt || a.timestamp || 0).getTime() - new Date(b.createdAt || b.timestamp || 0).getTime());
+
+  return {
+    entries,
+    cursor: snapshot.docs.at(-1) || null,
+    hasMore: snapshot.size === pageSize,
+  };
+};
+
+export const loadFirestoreWasteEntries = async (options = {}) => {
+  const page = await loadFirestoreWasteEntryPage({
+    ...options,
+    pageSize: options.pageSize ?? options.limit,
+  });
+  return page.entries;
 };
 
 export const loadFirestoreDatabaseSnapshot = async () => {
@@ -413,12 +431,6 @@ export const saveFirestoreDatabaseSnapshot = async (databaseData) => {
     updatedAtClient: exportedAt,
     updatedAt: serverTimestamp(),
   }, { merge: true });
-
-  await Promise.all((Array.isArray(databaseData?.wasteItems) ? databaseData.wasteItems : [])
-    .map((entry) => saveFirestoreWasteEntry(entry).catch((error) => {
-      console.warn('Could not sync waste entry while saving Firebase database snapshot.', error);
-      return null;
-    })));
 
   return { ok: true, updatedAt: exportedAt };
 };
@@ -552,13 +564,13 @@ export const deleteFirestoreMenuItems = async (itemKeys = []) => {
   }
 
   await ensureFirebaseAuth();
-  const { collection, deleteDoc, doc, getDoc, getDocs, query, where } = await getFirestoreApi();
+  const { collection, doc, getDoc, getDocs, query, serverTimestamp, setDoc, where } = await getFirestoreApi();
   const safeKeys = [...new Set((Array.isArray(itemKeys) ? itemKeys : [])
     .map((key) => String(key || '').trim())
     .filter(Boolean))];
 
   if (safeKeys.length > 0) {
-    const deleteResults = await Promise.all(safeKeys.map(async (key) => {
+    const archiveResults = await Promise.all(safeKeys.map(async (key) => {
       const docRef = doc(db, 'menuItems', scopeDocId(key));
       const docSnapshot = await getDoc(docRef).catch(() => null);
 
@@ -566,18 +578,28 @@ export const deleteFirestoreMenuItems = async (itemKeys = []) => {
         return false;
       }
 
-      await deleteDoc(docRef);
+      await setDoc(docRef, {
+        archived: true,
+        archivedAt: new Date().toISOString(),
+        archivedBy: 'Bulk menu wipe',
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
       return true;
     }));
 
-    return { ok: true, deletedCount: deleteResults.filter(Boolean).length };
+    return { ok: true, deletedCount: archiveResults.filter(Boolean).length };
   }
 
   const snapshot = await getDocs(query(
     collection(db, 'menuItems'),
     where('databaseId', '==', getActiveDatabaseId()),
   ));
-  await Promise.all(snapshot.docs.map((docSnapshot) => deleteDoc(docSnapshot.ref)));
+  await Promise.all(snapshot.docs.map((docSnapshot) => setDoc(docSnapshot.ref, {
+    archived: true,
+    archivedAt: new Date().toISOString(),
+    archivedBy: 'Bulk menu wipe',
+    updatedAt: serverTimestamp(),
+  }, { merge: true })));
 
   return { ok: true, deletedCount: snapshot.docs.length };
 };

@@ -25,7 +25,15 @@ const getWeekStart = (date) => {
   return value;
 };
 
-function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile }) {
+function WasteList({
+  items,
+  onDeleteEntry,
+  onRestoreEntry,
+  onLoadOlderEntries,
+  hasOlderEntries = false,
+  isLoadingOlderEntries = false,
+  accessProfile,
+}) {
   const [activeFilter, setActiveFilter] = useState('All');
   const [classificationFilter, setClassificationFilter] = useState('All');
   const [searchTerm, setSearchTerm] = useState('');
@@ -620,6 +628,20 @@ function WasteList({ items, onDeleteEntry, onRestoreEntry, accessProfile }) {
           <span className="small-text">
             Showing {visiblePage.visibleCount} of {visiblePage.totalCount}
           </span>
+        </div>
+      )}
+
+      {!visiblePage.hasMore && hasOlderEntries && (
+        <div className="load-more-row">
+          <button
+            type="button"
+            className="ghost-button is-warning"
+            onClick={onLoadOlderEntries}
+            disabled={isLoadingOlderEntries}
+          >
+            {isLoadingOlderEntries ? 'Loading older entries...' : 'Load older history'}
+          </button>
+          <span className="small-text">Older records remain in Firebase.</span>
         </div>
       )}
     </section>

@@ -179,6 +179,7 @@ export const authorizeManagerSessionRequest = async (request) => {
     return {
       ok: true,
       mode: 'firebase-manager-session',
+      databaseId,
       managerId: String(session.managerId || ''),
       uid: decodedToken.uid,
     };

@@ -4,7 +4,7 @@ import { ensureFirebaseAuth, getFirestoreDb } from './firestoreMenuItems';
 const STAFF_COLLECTION = 'staff';
 
 const getFirestoreApi = async () => {
-  const firestore = await import('firebase/firestore');
+  const firestore = await import('firebase/firestore/lite');
 
   return {
     doc: firestore.doc,

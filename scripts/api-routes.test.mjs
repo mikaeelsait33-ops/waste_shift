@@ -52,6 +52,18 @@ const importManagerSessionHandler = async () => (
   (await import(`../api/manager-session.js?case=${importCounter++}`)).default
 );
 
+const importStaffSessionHandler = async () => (
+  (await import(`../api/staff-session.js?case=${importCounter++}`)).default
+);
+
+const importStaffAccountsHandler = async () => (
+  (await import(`../api/staff-accounts.js?case=${importCounter++}`)).default
+);
+
+const importManagerRecoveryHandler = async () => (
+  (await import(`../api/manager-recovery.js?case=${importCounter++}`)).default
+);
+
 const managerSessionHelpers = await import(`../api/manager-session.js?case=${importCounter++}`);
 const firebaseIdentityHelpers = await import(`../api/_firebaseIdentity.js?case=${importCounter++}`);
 const testManagerPinRecord = {
@@ -290,6 +302,9 @@ delete process.env.FIREBASE_ADMIN_PRIVATE_KEY;
 
 const adminResetHandler = await importAdminResetHandler();
 const managerSessionHandler = await importManagerSessionHandler();
+const staffSessionHandler = await importStaffSessionHandler();
+const staffAccountsHandler = await importStaffAccountsHandler();
+const managerRecoveryHandler = await importManagerRecoveryHandler();
 
 response = await callHandler(managerSessionHandler, {
   method: 'GET',
@@ -302,6 +317,29 @@ response = await callHandler(managerSessionHandler, {
 });
 assert.equal(response.statusCode, 503);
 assert.equal(response.body.code, 'firebase_manager_session_not_configured');
+
+response = await callHandler(staffSessionHandler, {
+  method: 'POST',
+  body: JSON.stringify({ staffId: 'staff_nadia', pin: '4826' }),
+});
+assert.equal(response.statusCode, 503);
+assert.equal(response.body.code, 'firebase_access_not_configured');
+
+process.env.VERCEL_ENV = 'production';
+response = await callHandler(staffAccountsHandler, {
+  method: 'POST',
+  body: JSON.stringify({ staff: { id: 'staff_nadia', name: 'Nadia' } }),
+});
+assert.equal(response.statusCode, 503);
+assert.equal(response.body.code, 'firebase_manager_session_not_configured');
+delete process.env.VERCEL_ENV;
+
+response = await callHandler(managerRecoveryHandler, {
+  method: 'POST',
+  body: JSON.stringify({ name: 'Nadia', managerId: 'staff_nadia', pin: '4826', recoveryKey: 'bad' }),
+});
+assert.equal(response.statusCode, 503);
+assert.equal(response.body.code, 'manager_recovery_not_configured');
 
 response = await callHandler(adminResetHandler, {
   method: 'GET',

@@ -246,7 +246,7 @@ function DataManager({
     }
 
     onSaveSyncAccessKey?.(draftSyncAccessKey.trim());
-    setMessage(draftSyncAccessKey.trim() ? 'Server sync access key saved on this device.' : 'Server sync access key removed from this device.');
+    setMessage(draftSyncAccessKey.trim() ? 'Server sync access key is active until the app is locked or refreshed.' : 'Server sync access key removed.');
   };
 
   return (
@@ -330,11 +330,11 @@ function DataManager({
               aria-label="Server sync access key"
             />
             <button type="button" onClick={saveSyncAccessKey} className="ghost-button is-warning" disabled={!canManageServerSync}>
-              Save key
+              Use key
             </button>
           </div>
           <span className={`badge${syncAccessKey ? ' is-green' : ''}`}>
-            {syncAccessKey ? 'Key saved on this device' : 'No key saved'}
+            {syncAccessKey ? 'Key active for this session' : 'No key active'}
           </span>
         </div>
 

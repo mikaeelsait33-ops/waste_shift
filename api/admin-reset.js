@@ -17,6 +17,9 @@ const RESET_COLLECTIONS = [
   'auditLogs',
   'settings',
   'managerSessions',
+  'accessSessions',
+  'staffAccounts',
+  'loginAttempts',
 ];
 
 const parseBody = (request) => {

@@ -28,3 +28,46 @@ export const establishManagerSession = async ({ managerId, pin } = {}) => {
     return { ok: false, message: error?.message || 'Could not prepare manager access for Gemini.' };
   }
 };
+
+export const revokeManagerSession = async () => {
+  try {
+    const response = await fetch('/api/manager-session', {
+      method: 'DELETE',
+      headers: await getAutomaticManagerApiHeaders(),
+    });
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok || payload?.ok === false) {
+      return {
+        ok: false,
+        message: getManagerApiErrorMessage(payload, 'Could not close the server manager session.'),
+      };
+    }
+
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, message: error?.message || 'Could not close the server manager session.' };
+  }
+};
+
+export const recoverManagerSession = async ({ managerId, name, pin, recoveryKey } = {}) => {
+  try {
+    const response = await fetch('/api/manager-recovery', {
+      method: 'POST',
+      headers: await getAutomaticManagerApiHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ managerId, name, pin, recoveryKey }),
+    });
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok || payload?.ok === false) {
+      return {
+        ok: false,
+        message: getManagerApiErrorMessage(payload, 'Could not recover manager access.'),
+      };
+    }
+
+    return payload;
+  } catch (error) {
+    return { ok: false, message: error?.message || 'Could not recover manager access.' };
+  }
+};

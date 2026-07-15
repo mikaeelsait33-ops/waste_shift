@@ -4,7 +4,7 @@ import { getClientDatabaseId, persistClientDatabaseId } from '../utils/clientDat
 
 const getRestaurantProfileRef = () => ['restaurants', getClientDatabaseId() || 'local'];
 const getFirestoreApi = async () => {
-  const firestore = await import('firebase/firestore');
+  const firestore = await import('firebase/firestore/lite');
 
   return {
     collection: firestore.collection,

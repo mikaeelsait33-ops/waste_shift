@@ -6,6 +6,30 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function hasAccessRole(databaseId, allowedRoles) {
+      let sessionPath = /databases/$(database)/documents/accessSessions/$(databaseId + "__" + request.auth.uid);
+      return signedIn()
+        && databaseId is string
+        && exists(sessionPath)
+        && get(sessionPath).data.databaseId == databaseId
+        && get(sessionPath).data.uid == request.auth.uid
+        && get(sessionPath).data.roleKey in allowedRoles
+        && get(sessionPath).data.expiresAtTimestamp is timestamp
+        && get(sessionPath).data.expiresAtTimestamp > request.time;
+    }
+
+    function hasRestaurantAccess(databaseId) {
+      return hasAccessRole(databaseId, ['owner', 'manager', 'chef', 'barista', 'waiter']);
+    }
+
+    function hasManagerAccess(databaseId) {
+      return hasAccessRole(databaseId, ['owner', 'manager']);
+    }
+
+    function restaurantExists(databaseId) {
+      return exists(/databases/$(database)/documents/restaurants/$(databaseId + "__main"));
+    }
+
     function validStaffProfile() {
       return request.resource.data.displayName is string
         && request.resource.data.roleKey in ['owner', 'manager', 'chef', 'barista', 'waiter']
@@ -15,7 +39,7 @@ service cloud.firestore {
     }
 
     match /staff/{staffId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && request.auth.uid == staffId;
       allow create, update: if signedIn()
         && request.auth.uid == staffId
         && validStaffProfile();
@@ -23,13 +47,21 @@ service cloud.firestore {
     }
 
     match /managers/{managerId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn()
+      allow read: if signedIn() && hasManagerAccess(resource.data.databaseId);
+      allow create: if signedIn()
         && request.resource.data.databaseId is string
         && request.resource.data.id is string
         && request.resource.data.name is string
         && request.resource.data.roleKey == 'manager'
-        && request.resource.data.managerPin is map;
+        && request.resource.data.managerPin is map
+        && (hasManagerAccess(request.resource.data.databaseId) || !restaurantExists(request.resource.data.databaseId));
+      allow update: if signedIn()
+        && request.resource.data.databaseId == resource.data.databaseId
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.name is string
+        && request.resource.data.roleKey == 'manager'
+        && request.resource.data.managerPin is map
+        && hasManagerAccess(resource.data.databaseId);
       allow delete: if false;
     }
 
@@ -38,9 +70,22 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    match /accessSessions/{sessionId} {
+      allow read, write: if false;
+    }
+
+    match /staffAccounts/{staffId} {
+      allow read, write: if false;
+    }
+
+    match /loginAttempts/{attemptId} {
+      allow read, write: if false;
+    }
+
     match /appData/{snapshotId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && hasManagerAccess(resource.data.databaseId);
       allow create, update: if signedIn()
+        && hasManagerAccess(request.resource.data.databaseId)
         && request.resource.data.databaseId is string
         && request.resource.data.data is map
         && request.resource.data.exportedAt is string;
@@ -50,6 +95,7 @@ service cloud.firestore {
     match /restaurants/{restaurantId} {
       allow read: if signedIn();
       allow create, update: if signedIn()
+        && hasManagerAccess(request.resource.data.databaseId)
         && request.resource.data.databaseId is string
         && request.resource.data.restaurantName is string
         && request.resource.data.currency is string
@@ -59,8 +105,9 @@ service cloud.firestore {
     }
 
     match /menuItems/{menuItemId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && hasRestaurantAccess(resource.data.databaseId);
       allow create, update: if signedIn()
+        && hasManagerAccess(request.resource.data.databaseId)
         && request.resource.data.databaseId is string
         && request.resource.data.name is string
         && request.resource.data.totalCost is number
@@ -69,8 +116,9 @@ service cloud.firestore {
     }
 
     match /recipes/{recipeId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && hasRestaurantAccess(resource.data.databaseId);
       allow create, update: if signedIn()
+        && hasManagerAccess(request.resource.data.databaseId)
         && request.resource.data.databaseId is string
         && request.resource.data.name is string
         && request.resource.data.ingredients is list;
@@ -78,20 +126,38 @@ service cloud.firestore {
     }
 
     match /wasteEntries/{entryId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn()
+      allow read: if signedIn() && hasRestaurantAccess(resource.data.databaseId);
+      allow create: if signedIn()
+        && hasRestaurantAccess(request.resource.data.databaseId)
         && request.resource.data.databaseId is string
+        && request.resource.data.createdByUid == request.auth.uid
         && request.resource.data.name is string
         && request.resource.data.reason is string
         && request.resource.data.foodCostLost is number
         && request.resource.data.quantity is number
         && request.resource.data.timestamp is string;
+      allow update: if signedIn()
+        && request.resource.data.databaseId == resource.data.databaseId
+        && request.resource.data.createdByUid == resource.data.createdByUid
+        && request.resource.data.name is string
+        && request.resource.data.reason is string
+        && request.resource.data.foodCostLost is number
+        && request.resource.data.quantity is number
+        && request.resource.data.timestamp is string
+        && (
+          hasManagerAccess(resource.data.databaseId)
+          || (
+            resource.data.createdByUid == request.auth.uid
+            && request.resource.data.status == resource.data.status
+          )
+        );
       allow delete: if false;
     }
 
     match /menuImports/{importId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && hasManagerAccess(resource.data.databaseId);
       allow create, update: if signedIn()
+        && hasManagerAccess(request.resource.data.databaseId)
         && request.resource.data.databaseId is string
         && request.resource.data.id is string
         && request.resource.data.createdAt is string;
@@ -99,30 +165,33 @@ service cloud.firestore {
     }
 
     match /ingredients/{ingredientId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && hasAccessRole(resource.data.databaseId, ['owner', 'manager', 'chef', 'barista']);
       allow create, update: if signedIn()
+        && hasManagerAccess(request.resource.data.databaseId)
         && request.resource.data.databaseId is string
         && request.resource.data.name is string
         && request.resource.data.category is string
         && request.resource.data.unit is string;
-      allow delete: if signedIn();
+      allow delete: if false;
 
       match /priceHistory/{historyId} {
-        allow read: if signedIn();
+        allow read: if signedIn() && hasManagerAccess(resource.data.databaseId);
         allow create, update: if signedIn()
+          && hasManagerAccess(request.resource.data.databaseId)
           && request.resource.data.databaseId is string
           && request.resource.data.date is string
           && request.resource.data.supplier is string
           && request.resource.data.priceExVAT is number
           && request.resource.data.priceIncVAT is number
           && request.resource.data.invoiceId is string;
-        allow delete: if signedIn();
+        allow delete: if false;
       }
     }
 
     match /priceHistory/{historyId} {
-  allow read: if signedIn();
+      allow read: if signedIn() && hasManagerAccess(resource.data.databaseId);
       allow create, update: if signedIn()
+        && hasManagerAccess(request.resource.data.databaseId)
         && request.resource.data.databaseId is string
         && request.resource.data.ingredientId is string
         && request.resource.data.supplierId is string
@@ -130,22 +199,24 @@ service cloud.firestore {
         && request.resource.data.priceExVAT is number
         && request.resource.data.priceIncVAT is number
         && request.resource.data.invoiceId is string;
-      allow delete: if signedIn();
+      allow delete: if false;
     }
 
     match /stockLevels/{stockId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && hasRestaurantAccess(resource.data.databaseId);
       allow create, update: if signedIn()
+        && hasManagerAccess(request.resource.data.databaseId)
         && request.resource.data.databaseId is string
         && request.resource.data.ingredientId is string
         && request.resource.data.currentQty is number
         && request.resource.data.unit is string;
-      allow delete: if signedIn();
+      allow delete: if false;
     }
 
     match /stockMovements/{movementId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && hasRestaurantAccess(resource.data.databaseId);
       allow create, update: if signedIn()
+        && hasManagerAccess(request.resource.data.databaseId)
         && request.resource.data.databaseId is string
         && request.resource.data.movementId is string
         && request.resource.data.type is string
@@ -156,8 +227,9 @@ service cloud.firestore {
     }
 
     match /invoices/{invoiceId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && hasManagerAccess(resource.data.databaseId);
       allow create, update: if signedIn()
+        && hasManagerAccess(request.resource.data.databaseId)
         && request.resource.data.databaseId is string
         && request.resource.data.invoiceDate is string
         && request.resource.data.supplier is string
@@ -170,16 +242,18 @@ service cloud.firestore {
     }
 
     match /suppliers/{supplierId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && hasManagerAccess(resource.data.databaseId);
       allow create, update: if signedIn()
+        && hasManagerAccess(request.resource.data.databaseId)
         && request.resource.data.databaseId is string
         && request.resource.data.name is string;
       allow delete: if false;
     }
 
     match /settings/{settingsId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && hasManagerAccess(resource.data.databaseId);
       allow create, update: if signedIn()
+        && hasManagerAccess(request.resource.data.databaseId)
         && request.resource.data.databaseId is string
         && request.resource.data.vatRate is number;
       allow delete: if false;

@@ -38,4 +38,5 @@ export const getRestaurantResetStorageKeys = () => [
   'wasteShiftSettings',
   'wasteShiftLastSavedAt',
   'wasteShiftSetupProgress',
+  'wasteShiftSyncAccessKey',
 ];

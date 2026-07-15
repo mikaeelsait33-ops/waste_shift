@@ -6,7 +6,7 @@ const getActiveDatabaseId = () => getClientDatabaseId() || 'local';
 const scopeDocId = (id) => `${getActiveDatabaseId()}__${toSafeString(id)}`;
 
 const getFirestoreApi = async () => {
-  const firestore = await import('firebase/firestore');
+  const firestore = await import('firebase/firestore/lite');
 
   return {
     collection: firestore.collection,
@@ -39,7 +39,7 @@ export const saveManagerAccount = async (manager) => {
     role: 'Manager',
     roleKey: 'manager',
     staffSection: 'management',
-    managerPin: manager.managerPin || null,
+    ...(manager.managerPin ? { managerPin: manager.managerPin } : {}),
     active: manager.removed !== true,
     removed: manager.removed === true,
     removedAt: toSafeString(manager.removedAt),

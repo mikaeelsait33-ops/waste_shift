@@ -36,7 +36,6 @@ import {
   deleteFirestoreMenuItems,
   loadFirestoreDatabaseSnapshot,
   loadFirestoreMenuItems,
-  loadFirestoreWasteEntries,
   restoreFirestoreMenuItem,
   saveFirestoreDatabaseSnapshot,
   saveFirestoreMenuItem,
@@ -54,7 +53,14 @@ import {
 } from './services/restaurantFirestore';
 import { saveCurrentUserStaffProfile } from './services/firebaseAccess';
 import { loadManagerAccounts, saveManagerAccount } from './services/managerAccounts';
-import { establishManagerSession } from './services/managerSession';
+import { establishManagerSession, recoverManagerSession, revokeManagerSession } from './services/managerSession';
+import {
+  establishStaffSession,
+  revokeStaffSession,
+  saveStaffAccessAccount,
+} from './services/staffSession';
+import { useRestaurantAccess } from './hooks/useRestaurantAccess';
+import { useWasteHistoryPagination } from './hooks/useWasteHistoryPagination';
 import {
   createEmptyRestaurantData,
   getRestaurantResetStorageKeys,
@@ -498,6 +504,14 @@ const sanitizeStaffMembers = (members) => {
     });
 };
 
+const stripStaffCredentialsForStorage = (members) => (
+  sanitizeStaffMembers(members).map(({
+    staffCode: _staffCode,
+    managerPin: _managerPin,
+    ...member
+  }) => member)
+);
+
 const createStoreRoomItemId = (name) => `store_${createMenuItemKey(name)}`;
 
 const sanitizeStoreRoomItems = (items) => {
@@ -651,7 +665,10 @@ function App() {
   const [isOnline, setIsOnline] = useState(() => (
     typeof navigator === 'undefined' ? true : navigator.onLine
   ));
-  const [syncAccessKey, setSyncAccessKey] = useState(() => localStorage.getItem('wasteShiftSyncAccessKey') || '');
+  const [syncAccessKey, setSyncAccessKey] = useState(() => {
+    localStorage.removeItem('wasteShiftSyncAccessKey');
+    return '';
+  });
   const [authSession, setAuthSession] = useState(() => {
     try {
       if (staffFreshStartIsPending()) {
@@ -832,6 +849,37 @@ function App() {
     }
   });
 
+  const handleSessionRejected = useCallback(() => {
+    clearPersistedAuthSession();
+    setAuthSession(null);
+    setActiveStaffId('');
+  }, []);
+  const appendWasteHistoryEntries = useCallback((entries) => {
+    setWasteItems((currentItems) => {
+      const knownIds = new Set(currentItems.map((item) => item.id));
+      return [...entries.filter((entry) => !knownIds.has(entry.id)), ...currentItems];
+    });
+  }, []);
+  const {
+    hasMore: hasOlderWasteEntries,
+    isLoading: isLoadingOlderWasteEntries,
+    loadInitialPage: loadInitialWasteHistoryPage,
+    loadOlderPage: handleLoadOlderWasteEntries,
+  } = useWasteHistoryPagination({
+    enabled: FIRESTORE_CONFIGURED,
+    onAppendEntries: appendWasteHistoryEntries,
+  });
+  const {
+    directoryLoaded,
+    sessionValidationStatus,
+    staffDirectory,
+  } = useRestaurantAccess({
+    firebaseConfigured: FIRESTORE_CONFIGURED,
+    restaurantReady: restaurantProfile.setupCompleted,
+    authSession,
+    onSessionRejected: handleSessionRejected,
+  });
+
   useEffect(() => {
     if (!staffFreshStartIsPending()) {
       return;
@@ -908,6 +956,26 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!directoryLoaded) return;
+
+    if (staffDirectory.length > 0) {
+      setCustomStaffList((currentStaff) => {
+        const staffById = new Map(currentStaff.map((member) => [member.id, member]));
+        staffDirectory.forEach((member) => {
+          staffById.set(member.id, {
+            ...staffById.get(member.id),
+            ...member,
+            staffCode: staffById.get(member.id)?.staffCode || null,
+            managerPin: null,
+          });
+        });
+        return sanitizeStaffMembers([...staffById.values()]);
+      });
+    }
+    setManagerAccountsLoaded(true);
+  }, [directoryLoaded, staffDirectory]);
+
+  useEffect(() => {
     let isCancelled = false;
 
     const loadMenuItems = async () => {
@@ -917,6 +985,10 @@ function App() {
           status: 'local',
           message: 'Firebase env vars are not configured. Live records stay in this browser.',
         }));
+        return;
+      }
+
+      if (!authSession || sessionValidationStatus !== 'ready') {
         return;
       }
 
@@ -958,7 +1030,7 @@ function App() {
     return () => {
       isCancelled = true;
     };
-  }, []);
+  }, [authSession, sessionValidationStatus]);
 
   const firestoreRecipeMap = useMemo(() => (
     createRecipeMapFromFirestoreMenuItems(firestoreMenuItems)
@@ -1026,14 +1098,21 @@ function App() {
     !member.removed
     && (member.staffSection === 'management' || inferRoleKey(member.role) === 'manager' || inferRoleKey(member.role) === 'owner')
   )), [staffList]);
+  const managerRecoveryRequired = FIRESTORE_CONFIGURED
+    && restaurantProfile?.setupCompleted === true
+    && directoryLoaded
+    && !staffDirectory.some((member) => ['owner', 'manager'].includes(inferRoleKey(member.roleKey || member.role)));
   const managerAuthIsConfigured = useMemo(() => (
-    activeManagerAccounts.some((member) => sanitizePinRecord(member.managerPin))
+    restaurantProfile?.setupCompleted === true
+    || activeManagerAccounts.some((member) => sanitizePinRecord(member.managerPin))
     || authPinsAreConfigured(authSettings)
-  ), [activeManagerAccounts, authSettings]);
+  ), [activeManagerAccounts, authSettings, restaurantProfile?.setupCompleted]);
 
   useEffect(() => {
-    refreshInvoiceDashboardStats();
-  }, [refreshInvoiceDashboardStats]);
+    if (authSession && accessProfile.canViewFinancials && sessionValidationStatus === 'ready') {
+      refreshInvoiceDashboardStats();
+    }
+  }, [accessProfile.canViewFinancials, authSession, refreshInvoiceDashboardStats, sessionValidationStatus]);
 
   const getSyncHeaders = useCallback((extraHeaders = {}) => {
     const trimmedAccessKey = syncAccessKey.trim();
@@ -1062,6 +1141,7 @@ function App() {
     auditLog,
   }), [wasteItems, budget, recipes, staffList, customStaffList, customMenuItems, portionProfiles, itemPriceCatalog, storeRoomItems, storeRoomMovements, settings, authSettings, activeStaffId, inventoryMovements, auditLog]);
   const latestDatabaseDataRef = useRef(null);
+  const bulkWasteClearInFlightRef = useRef(false);
 
   useEffect(() => {
     latestDatabaseDataRef.current = buildDatabaseData();
@@ -1087,9 +1167,7 @@ function App() {
   }, []);
 
   const saveDatabaseToServer = useCallback(async (mode = 'manual') => {
-    const permission = mode === 'manual'
-      ? requirePermission(accessProfile, 'canManageServerSync', 'sync the server database')
-      : requirePermission(accessProfile, 'canLogWaste', 'sync the server database');
+    const permission = requirePermission(accessProfile, 'canManageServerSync', 'sync the server database');
 
     if (!permission.ok) {
       setServerSync(prev => ({
@@ -1227,7 +1305,12 @@ function App() {
   }, [settings]);
 
   useEffect(() => {
-    localStorage.setItem('wasteShiftAuthSettings', JSON.stringify(authSettings));
+    const {
+      managementPin: _managementPin,
+      staffPin: _staffPin,
+      ...safeAuthSettings
+    } = authSettings;
+    localStorage.setItem('wasteShiftAuthSettings', JSON.stringify(safeAuthSettings));
   }, [authSettings]);
 
   useEffect(() => {
@@ -1238,17 +1321,6 @@ function App() {
 
     clearPersistedAuthSession();
   }, [authSession]);
-
-  useEffect(() => {
-    const trimmedAccessKey = syncAccessKey.trim();
-
-    if (trimmedAccessKey) {
-      localStorage.setItem('wasteShiftSyncAccessKey', trimmedAccessKey);
-      return;
-    }
-
-    localStorage.removeItem('wasteShiftSyncAccessKey');
-  }, [syncAccessKey]);
 
   useEffect(() => {
     if (activeStaffId) {
@@ -1265,8 +1337,8 @@ function App() {
   }, [recipes]);
 
   useEffect(() => {
-    localStorage.setItem('customStaffList', JSON.stringify(customStaffList));
-    localStorage.setItem('staffList', JSON.stringify(staffList));
+    localStorage.setItem('customStaffList', JSON.stringify(stripStaffCredentialsForStorage(customStaffList)));
+    localStorage.setItem('staffList', JSON.stringify(stripStaffCredentialsForStorage(staffList)));
   }, [customStaffList, staffList]);
 
   useEffect(() => {
@@ -1308,6 +1380,13 @@ function App() {
 
     const loadServerDatabase = async () => {
       if (FIRESTORE_CONFIGURED) {
+        if (!authSession || sessionValidationStatus !== 'ready') {
+          setManagerAccountsLoaded(true);
+          setServerSyncEnabled(false);
+          setServerLoadComplete(false);
+          return;
+        }
+
         setServerSync(prev => ({
           ...prev,
           status: 'checking',
@@ -1315,10 +1394,13 @@ function App() {
         }));
 
         try {
-          const [firebaseSnapshot, firebaseWasteItems, firebaseManagers] = await Promise.all([
-            loadFirestoreDatabaseSnapshot(),
-            loadFirestoreWasteEntries(),
-            loadManagerAccounts(),
+          const isManagementSession = ['owner', 'manager'].includes(String(authSession?.roleKey || '').toLowerCase());
+          const [firebaseSnapshot, firebaseWastePage, firebaseManagers] = await Promise.all([
+            isManagementSession
+              ? loadFirestoreDatabaseSnapshot()
+              : Promise.resolve({ ok: true, exists: false, data: null, updatedAt: '' }),
+            loadInitialWasteHistoryPage(),
+            isManagementSession ? loadManagerAccounts().catch(() => []) : Promise.resolve([]),
           ]);
 
           if (isCancelled) {
@@ -1326,6 +1408,7 @@ function App() {
           }
 
           const snapshotData = firebaseSnapshot?.data || {};
+          const firebaseWasteItems = firebaseWastePage.entries;
           const hasSnapshot = Boolean(firebaseSnapshot?.exists);
           const hasWasteEntries = firebaseWasteItems.length > 0;
           const hasManagerAccounts = firebaseManagers.length > 0;
@@ -1348,7 +1431,6 @@ function App() {
           setServerSyncEnabled(true);
           setServerLoadComplete(true);
           setManagerAccountsLoaded(true);
-
           if (hasSnapshot || hasWasteEntries || hasManagerAccounts) {
             applyDatabaseData(firebaseDatabaseData);
             setServerSync({
@@ -1463,7 +1545,7 @@ function App() {
     return () => {
       isCancelled = true;
     };
-  }, [applyDatabaseData, getSyncHeaders]);
+  }, [applyDatabaseData, authSession, getSyncHeaders, loadInitialWasteHistoryPage, restaurantProfile.setupCompleted, sessionValidationStatus]);
 
   useEffect(() => {
     if (!serverSyncEnabled || !serverLoadComplete) {
@@ -1637,7 +1719,7 @@ function App() {
     });
 
     if (!managerSessionResult.ok) {
-      console.warn('Could not prepare automatic manager session.', managerSessionResult.message);
+      return { ok: false, message: managerSessionResult.message };
     }
     const nextSession = {
       mode: 'management',
@@ -1672,6 +1754,7 @@ function App() {
   const handleLogin = useCallback(async ({ mode, name, staffSection, pin }) => {
     const trimmedName = String(name || '').trim();
     let authenticatedStaffMember = null;
+    let accessSessionResult = null;
 
     if (!trimmedName) {
       return { ok: false, message: mode === 'management' ? 'Enter your management name.' : 'Choose your staff profile.' };
@@ -1680,24 +1763,18 @@ function App() {
     if (mode === 'staff') {
       const accountId = createStaffMemberId(trimmedName);
       const existingMember = staffList.find((member) => member.id === accountId);
-      const existingStaffCode = sanitizePinRecord(existingMember?.staffCode);
 
       if (!existingMember) {
         return { ok: false, message: 'Ask a manager to add you in Settings > Staff before logging in.' };
-      }
-
-      if (!existingStaffCode) {
-        return { ok: false, message: 'This staff member does not have a PIN yet. Ask a manager to reset or issue one.' };
       }
 
       if (!/^\d{5}$/.test(String(pin || '').trim())) {
         return { ok: false, message: 'Enter your 5 digit staff PIN.' };
       }
 
-      const staffCodeMatches = await verifyPin(pin, existingStaffCode);
-
-      if (!staffCodeMatches) {
-        return { ok: false, message: 'Incorrect staff PIN.' };
+      accessSessionResult = await establishStaffSession({ staffId: accountId, pin });
+      if (!accessSessionResult.ok) {
+        return { ok: false, message: accessSessionResult.message };
       }
 
       authenticatedStaffMember = existingMember;
@@ -1708,24 +1785,16 @@ function App() {
         && !member.removed
         && (member.staffSection === 'management' || inferRoleKey(member.role) === 'manager' || inferRoleKey(member.role) === 'owner')
       ));
-      const managerPinRecord = sanitizePinRecord(existingManager?.managerPin);
-      const pinMatches = managerPinRecord
-        ? await verifyPin(pin, managerPinRecord)
-        : await verifyPin(pin, authSettings.managementPin);
+      accessSessionResult = await establishManagerSession({ managerId: accountId, pin });
 
-      if (!pinMatches) {
-        return {
-          ok: false,
-          message: existingManager
-            ? 'Incorrect manager PIN.'
-            : 'Manager account not found. Ask an owner or manager to add this manager in Settings > Staff.',
-        };
+      if (!accessSessionResult.ok) {
+        return { ok: false, message: accessSessionResult.message };
       }
 
       authenticatedStaffMember = existingManager || upsertLoginAccount({
         mode,
         name: trimmedName,
-        managerPin: authSettings.managementPin,
+        managerPin: null,
       });
     }
 
@@ -1743,13 +1812,6 @@ function App() {
     }).catch((error) => {
       console.warn('Could not save Firebase access profile.', error);
     });
-    const managerSessionResult = mode === 'management' && (roleKey === 'manager' || roleKey === 'owner')
-      ? await establishManagerSession({ managerId: staffMember.id, pin })
-      : { ok: true };
-
-    if (!managerSessionResult.ok) {
-      console.warn('Could not refresh automatic manager session.', managerSessionResult.message);
-    }
     const nextSession = {
       mode,
       staffId: staffMember.id,
@@ -1774,11 +1836,55 @@ function App() {
 
     return {
       ok: true,
-      message: managerSessionResult.ok
-        ? 'Login successful.'
-        : `Login successful. ${managerSessionResult.message}`,
+      message: 'Login successful.',
     };
-  }, [authSettings.managementPin, staffList, upsertLoginAccount]);
+  }, [staffList, upsertLoginAccount]);
+
+  const handleRecoverManagerAccess = useCallback(async ({ name, pin, recoveryKey }) => {
+    const managerName = String(name || '').trim();
+    const managerId = createStaffMemberId(managerName);
+    const result = await recoverManagerSession({ managerId, name: managerName, pin, recoveryKey });
+
+    if (!result?.ok) {
+      return { ok: false, message: result?.message || 'Could not recover manager access.' };
+    }
+
+    const managerMember = upsertLoginAccount({
+      mode: 'management',
+      name: managerName,
+      managerPin: null,
+    });
+    await saveCurrentUserStaffProfile({
+      displayName: managerMember.name,
+      role: 'Manager',
+      roleKey: 'manager',
+      staffId: managerMember.id,
+    }).catch((error) => {
+      console.warn('Could not save recovered Firebase access profile.', error);
+    });
+    const nextSession = {
+      mode: 'management',
+      staffId: managerMember.id,
+      staffName: managerMember.name,
+      roleKey: 'manager',
+      startedAt: new Date().toISOString(),
+      databaseId: getClientDatabaseId(),
+    };
+
+    setAuthSession(nextSession);
+    setActiveStaffId(managerMember.id);
+    setActiveTab('dashboard');
+    setAuditLog((currentLog) => [
+      createAuditLogEntry({
+        action: 'Legacy manager access recovered',
+        user: managerMember.name,
+        relatedItem: restaurantProfile.restaurantName || 'Restaurant',
+      }),
+      ...currentLog,
+    ].slice(0, 500));
+
+    return { ok: true, message: 'Manager access restored.' };
+  }, [restaurantProfile.restaurantName, upsertLoginAccount]);
 
   const handlePrepareSetupManagerAccess = useCallback(async ({ name, managerPin }) => {
     const managerName = String(name || '').trim();
@@ -1813,7 +1919,7 @@ function App() {
       });
 
       return {
-        ok: true,
+        ok: managerSessionResult.ok,
         message: managerSessionResult.ok ? '' : managerSessionResult.message,
       };
     } catch (error) {
@@ -1830,11 +1936,13 @@ function App() {
     }
   }, []);
 
-  const handleLogout = useCallback(() => {
+  const handleLogout = useCallback(async () => {
     const previousSession = authSession;
 
+    clearPersistedAuthSession();
     setAuthSession(null);
     setActiveStaffId('');
+    setSyncAccessKey('');
     setActiveTab('dashboard');
 
     if (previousSession?.staffName) {
@@ -1846,6 +1954,13 @@ function App() {
         }),
         ...prevLog,
       ].slice(0, 500));
+    }
+
+    const result = previousSession?.mode === 'management'
+      ? await revokeManagerSession()
+      : await revokeStaffSession();
+    if (!result.ok) {
+      console.warn(result.message);
     }
   }, [authSession]);
 
@@ -1888,6 +2003,22 @@ function App() {
       isCsvSeed: false,
     };
 
+    if (!isManagerAccount) {
+      const accountResult = await saveStaffAccessAccount({
+        ...nextStaffMember,
+        roleKey: inferRoleKey(nextStaffMember.role),
+      });
+      if (!accountResult.ok) {
+        return { ok: false, message: accountResult.message };
+      }
+    } else {
+      try {
+        await saveManagerAccount(nextStaffMember);
+      } catch (error) {
+        return { ok: false, message: error?.message || 'Could not save the manager account.' };
+      }
+    }
+
     setCustomStaffList(prev => {
       const existingIndex = prev.findIndex((member) => member.id === nextStaffMember.id);
 
@@ -1915,12 +2046,6 @@ function App() {
       ...prevLog,
     ].slice(0, 500));
 
-    if (isManagerAccount) {
-      saveManagerAccount(nextStaffMember).catch((error) => {
-        console.warn('Could not save manager account to Firestore.', error);
-      });
-    }
-
     return {
       ok: true,
       staffName: nextStaffMember.name,
@@ -1931,7 +2056,7 @@ function App() {
     };
   };
 
-  const handleDeleteStaff = (staffId) => {
+  const handleDeleteStaff = async (staffId) => {
     const permission = requirePermission(accessProfile, 'canManageStaff', 'remove staff');
     if (!permission.ok) {
       alert(permission.message);
@@ -1943,6 +2068,29 @@ function App() {
 
     if (!staffMember) {
       return;
+    }
+
+    const isManagerAccount = staffMember.staffSection === 'management'
+      || inferRoleKey(staffMember.role) === 'manager'
+      || inferRoleKey(staffMember.role) === 'owner';
+    const removedStaffMember = {
+      ...staffMember,
+      removed: true,
+      active: false,
+      removedAt: new Date().toISOString(),
+    };
+
+    if (!isManagerAccount) {
+      const accountResult = await saveStaffAccessAccount(removedStaffMember);
+      if (!accountResult.ok) {
+        return { ok: false, message: accountResult.message };
+      }
+    } else {
+      try {
+        await saveManagerAccount(removedStaffMember);
+      } catch (error) {
+        return { ok: false, message: error?.message || 'Could not archive the manager account.' };
+      }
     }
 
     if (baseStaffMember) {
@@ -1965,16 +2113,6 @@ function App() {
       });
     } else {
       setCustomStaffList(prevStaffList => prevStaffList.filter((member) => member.id !== staffId));
-    }
-
-    if (staffMember.staffSection === 'management' || inferRoleKey(staffMember.role) === 'manager' || inferRoleKey(staffMember.role) === 'owner') {
-      saveManagerAccount({
-        ...staffMember,
-        removed: true,
-        removedAt: new Date().toISOString(),
-      }).catch((error) => {
-        console.warn('Could not mark manager account inactive in Firestore.', error);
-      });
     }
 
     if (activeStaffId === staffId) {
@@ -2029,6 +2167,14 @@ function App() {
 
     const generatedStaffCode = chosenStaffPin;
     const staffCodeRecord = await createPinRecord(chosenStaffPin);
+    const accountResult = await saveStaffAccessAccount({
+      ...staffMember,
+      staffCode: staffCodeRecord,
+      roleKey: inferRoleKey(staffMember.role),
+    });
+    if (!accountResult.ok) {
+      return { ok: false, message: accountResult.message };
+    }
 
     setCustomStaffList(prevStaffList => {
       const existingIndex = prevStaffList.findIndex((member) => member.id === staffId);
@@ -2963,7 +3109,7 @@ function App() {
     });
 
     if (!managerSessionResult.ok) {
-      console.warn('Could not refresh setup manager session.', managerSessionResult.message);
+      return { ok: false, message: managerSessionResult.message };
     }
     const setupStaffMembers = await Promise.all(
       (Array.isArray(setupProgress?.staffMembers) ? setupProgress.staffMembers : [])
@@ -2981,6 +3127,13 @@ function App() {
             isCsvSeed: false,
         }))
     );
+    const setupStaffSaveResults = await Promise.all(setupStaffMembers.map((member) => (
+      saveStaffAccessAccount({ ...member, roleKey: inferRoleKey(member.role) })
+    )));
+    const failedStaffSave = setupStaffSaveResults.find((result) => !result.ok);
+    if (failedStaffSave) {
+      return { ok: false, message: failedStaffSave.message };
+    }
 
     setCustomStaffList([managerMember, ...setupStaffMembers]);
     setBudget(parseFloat(setupProgress?.budget) || 0);
@@ -3485,30 +3638,76 @@ function App() {
       .catch((error) => ({ ok: false, entry: restoredEntry, message: error?.message || 'Restore saved locally but did not sync yet.' }));
   };
 
-  const handleClearAll = () => {
+  const handleClearAll = async () => {
+    if (bulkWasteClearInFlightRef.current) {
+      return;
+    }
+
     const permission = requirePermission(accessProfile, 'canClearData', 'clear all waste data');
     if (!permission.ok) {
       alert(permission.message);
       return;
     }
 
-    const typedConfirmation = window.prompt('Type CLEAR WASTE to permanently clear the entire waste log.');
+    const activeEntries = getActiveWasteEntries(wasteItems);
+
+    if (activeEntries.length === 0) {
+      alert('There are no active waste entries to clear.');
+      return;
+    }
+
+    const typedConfirmation = window.prompt('Type CLEAR WASTE to void every active waste entry. The audit history will be kept.');
 
     if (typedConfirmation === 'CLEAR WASTE') {
-      setWasteItems([]);
-      setInventoryMovements([]);
+      bulkWasteClearInFlightRef.current = true;
+      const voidedAt = new Date().toISOString();
+      const voidedBy = activeStaffMember?.name || 'System';
+      const activeIds = new Set(activeEntries.map((entry) => entry.id));
+      const voidedEntries = activeEntries.map((entry) => ({
+        ...entry,
+        status: 'voided',
+        voidedAt,
+        voidedBy,
+        voidReason: 'Bulk waste-log clear',
+        lastEditedBy: voidedBy,
+        syncStatus: 'pending',
+        syncError: '',
+      }));
+      const voidedEntriesById = new Map(voidedEntries.map((entry) => [entry.id, entry]));
+      const nextWasteItems = wasteItems.map((entry) => (
+        activeIds.has(entry.id) ? voidedEntriesById.get(entry.id) : entry
+      ));
+
+      setWasteItems(nextWasteItems);
+      setInventoryMovements(nextWasteItems.flatMap(createInventoryMovementsFromEntry));
       setAuditLog(prevLog => [
         createAuditLogEntry({
-          action: 'Waste log cleared',
-          user: staffList.find((member) => member.id === activeStaffId)?.name || 'System',
+          action: 'Waste log bulk voided',
+          user: voidedBy,
           relatedItem: 'All waste entries',
           beforeValue: {
-            entries: wasteItems.length,
-            foodCostLost: wasteItems.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0),
+            entries: activeEntries.length,
+            foodCostLost: activeEntries.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0),
           },
+          afterValue: { status: 'voided', voidedAt },
         }),
         ...prevLog,
       ].slice(0, 500));
+
+      try {
+        const results = await Promise.all(voidedEntries.map(syncWasteEntryToFirestore));
+        const failedCount = results.filter((result) => !result?.ok).length;
+        setFirebaseSync(prev => ({
+          ...prev,
+          status: failedCount > 0 ? 'error' : 'synced',
+          message: failedCount > 0
+            ? `${activeEntries.length - failedCount} entries were voided in Firebase; ${failedCount} still need sync.`
+            : `${activeEntries.length} waste entries were voided and remain available in manager audit history.`,
+          lastSavedAt: failedCount > 0 ? prev.lastSavedAt : new Date().toISOString(),
+        }));
+      } finally {
+        bulkWasteClearInFlightRef.current = false;
+      }
     }
   };
 
@@ -3656,7 +3855,9 @@ function App() {
     applyDatabaseData(databaseData);
   };
 
-  const authDataIsLoading = FIRESTORE_CONFIGURED && restaurantProfile.setupCompleted && !managerAccountsLoaded;
+  const authDataIsLoading = FIRESTORE_CONFIGURED
+    && restaurantProfile.setupCompleted
+    && (sessionValidationStatus === 'checking' || !managerAccountsLoaded);
   const appIsLocked = !authSession || !managerAuthIsConfigured;
 
   if (restaurantProfileStatus === 'loading') {
@@ -3718,8 +3919,10 @@ function App() {
         isPreparingAuth={isPreparingAuth}
         authIsConfigured={managerAuthIsConfigured}
         staffList={staffList}
+        managerRecoveryRequired={managerRecoveryRequired}
         onLogin={handleLogin}
         onInitialManagerSetup={handleInitialManagerSetup}
+        onRecoverManagerAccess={handleRecoverManagerAccess}
       />
     );
   }
@@ -3775,6 +3978,9 @@ function App() {
                 items={wasteItems}
                 onDeleteEntry={handleDeleteEntry}
                 onRestoreEntry={handleRestoreEntry}
+                onLoadOlderEntries={handleLoadOlderWasteEntries}
+                hasOlderEntries={hasOlderWasteEntries}
+                isLoadingOlderEntries={isLoadingOlderWasteEntries}
                 accessProfile={accessProfile}
               />
             )}

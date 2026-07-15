@@ -10,7 +10,7 @@ const navItems = [
 function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, accessProfile, onLogout }) {
   const visibleNavItems = navItems.filter((item) => {
     if (item.key === 'inventory') {
-      return accessProfile?.canViewStoreRoom;
+      return accessProfile?.canViewFinancials;
     }
 
     if (item.key === 'menuPricing') {

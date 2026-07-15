@@ -98,4 +98,73 @@ test('remembered shop and login survive reopening the app', async ({ page, conte
   await reopenedPage.goto('/?restaurant=legacy-shop');
   await expect(reopenedPage.locator('.app-shell')).toBeVisible();
   expect(reopenedPage.url()).not.toContain('restaurant=');
+
+  await reopenedPage.locator('.navbar').getByRole('button', { name: 'Lock' }).click();
+  await expect(reopenedPage.getByRole('heading', { name: 'Start Waste Logging' })).toBeVisible();
+  expect(await reopenedPage.evaluate(() => localStorage.getItem('wasteShiftAuthSession'))).toBeNull();
+
+  await reopenedPage.reload();
+  await expect(reopenedPage.getByRole('heading', { name: 'Start Waste Logging' })).toBeVisible();
+  await expect(reopenedPage.locator('.app-shell')).toHaveCount(0);
+});
+
+test('staff session exposes waste logging without management screens', async ({ page, isMobile }) => {
+  const databaseId = 'ws_staff_role_test';
+  const manager = {
+    id: 'staff_manager',
+    name: 'Manager',
+    role: 'Manager',
+    staffSection: 'management',
+    managerPin: {
+      algorithm: 'sha256-salt-v1',
+      salt: 'test-salt',
+      hash: 'test-hash',
+    },
+  };
+  const waiter = {
+    id: 'staff_waiter',
+    name: 'Waiter',
+    role: 'Waiter',
+    roleKey: 'waiter',
+    staffSection: 'front-of-house',
+    staffCode: {
+      algorithm: 'sha256-salt-v1',
+      salt: 'staff-salt',
+      hash: 'staff-hash',
+    },
+  };
+
+  await page.evaluate(({ restaurantId, managerAccount, staffAccount }) => {
+    localStorage.setItem('wasteShiftStaffFreshStartVersion', 'empty-staff-roster-v1');
+    localStorage.setItem('wasteShiftClientDatabaseId', restaurantId);
+    localStorage.setItem('wasteShiftRestaurantProfiles', JSON.stringify({
+      [restaurantId]: {
+        restaurantName: 'Role Test Kitchen',
+        branchName: 'Main',
+        currency: 'ZAR',
+        timezone: 'Africa/Johannesburg',
+        setupCompleted: true,
+      },
+    }));
+    localStorage.setItem('customStaffList', JSON.stringify([managerAccount, staffAccount]));
+    localStorage.setItem('activeStaffId', staffAccount.id);
+    localStorage.setItem('wasteShiftAuthSession', JSON.stringify({
+      mode: 'staff',
+      staffId: staffAccount.id,
+      staffName: staffAccount.name,
+      roleKey: 'waiter',
+      databaseId: restaurantId,
+      startedAt: new Date().toISOString(),
+    }));
+  }, { restaurantId: databaseId, managerAccount: manager, staffAccount: waiter });
+
+  await page.reload();
+  await expect(page.locator('.app-shell')).toBeVisible();
+  const wasteNavigation = isMobile ? page.locator('.bottom-nav') : page.locator('.nav-links');
+  await expect(wasteNavigation.getByRole('button', { name: isMobile ? 'Log' : /Log Waste/ })).toBeVisible();
+  await expect(wasteNavigation.getByRole('button', { name: isMobile ? 'Waste' : /Waste Log/ })).toBeVisible();
+  await expect(page.locator('.nav-button', { hasText: 'Dashboard' })).toHaveCount(0);
+  await expect(page.locator('.nav-button', { hasText: 'Inventory' })).toHaveCount(0);
+  await expect(page.locator('.nav-button', { hasText: 'Menu & Pricing' })).toHaveCount(0);
+  await expect(page.locator('.nav-button', { hasText: 'Settings' })).toHaveCount(0);
 });

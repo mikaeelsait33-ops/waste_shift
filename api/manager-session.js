@@ -1,7 +1,9 @@
-import { createHash } from 'node:crypto';
 import { getFirebaseAdmin } from './_firebaseAdmin.js';
 import { verifyFirebaseIdToken } from './_firebaseIdentity.js';
 import { getRequestDatabaseId, getHeaderValue } from './_auth.js';
+import { createAccessSession, deleteAccessSession } from './_accessSession.js';
+import { checkPinAttemptAllowed, clearPinFailures, recordPinFailure } from './_loginThrottle.js';
+import { verifyPinRecord } from './_pinVerification.js';
 
 const SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
 
@@ -26,28 +28,11 @@ const readJsonBody = async (request) => {
   return JSON.parse(request.body);
 };
 
-export const verifyManagerPin = (pin, record) => {
-  const normalizedPin = String(pin || '').trim();
-
-  if (
-    !/^\d{4,8}$/.test(normalizedPin)
-    || record?.algorithm !== 'sha256-salt-v1'
-    || typeof record?.salt !== 'string'
-    || typeof record?.hash !== 'string'
-  ) {
-    return false;
-  }
-
-  const expectedHash = createHash('sha256')
-    .update(`${record.salt}:${normalizedPin}`)
-    .digest('base64');
-
-  return expectedHash === record.hash;
-};
+export const verifyManagerPin = verifyPinRecord;
 
 export default async function handler(request, response) {
-  if (request.method !== 'POST') {
-    sendJson(response, 405, { ok: false, message: 'Use POST to establish a manager session.' });
+  if (!['POST', 'DELETE'].includes(request.method)) {
+    sendJson(response, 405, { ok: false, message: 'Use POST to establish or DELETE to close a manager session.' });
     return;
   }
 
@@ -88,6 +73,24 @@ export default async function handler(request, response) {
     return;
   }
 
+  if (request.method === 'DELETE') {
+    try {
+      await Promise.all([
+        firebaseAdmin.db.collection('managerSessions').doc(`${databaseId}__${decodedToken.uid}`).delete(),
+        deleteAccessSession(firebaseAdmin, databaseId, decodedToken.uid),
+      ]);
+      sendJson(response, 200, { ok: true });
+    } catch (error) {
+      console.error('Could not close manager session.', error);
+      sendJson(response, 503, {
+        ok: false,
+        code: 'manager_session_unavailable',
+        message: 'Manager access could not be closed on the server. Please try again.',
+      });
+    }
+    return;
+  }
+
   const managerId = String(body?.managerId || '').trim();
   const pin = String(body?.pin || '').trim();
 
@@ -97,6 +100,23 @@ export default async function handler(request, response) {
   }
 
   try {
+    const attemptIdentity = {
+      databaseId,
+      uid: decodedToken.uid,
+      accountType: 'manager',
+      accountId: managerId,
+    };
+    const attemptStatus = await checkPinAttemptAllowed(firebaseAdmin, attemptIdentity);
+    if (!attemptStatus.allowed) {
+      response.setHeader('retry-after', String(attemptStatus.retryAfterSeconds));
+      sendJson(response, 429, {
+        ok: false,
+        code: 'manager_pin_locked',
+        message: 'Too many PIN attempts. Wait a few minutes and try again.',
+      });
+      return;
+    }
+
     const managerSnapshot = await firebaseAdmin.db
       .collection('managers')
       .doc(`${databaseId}__${managerId}`)
@@ -112,9 +132,12 @@ export default async function handler(request, response) {
       || manager.removed === true
       || !verifyManagerPin(pin, manager.managerPin)
     ) {
+      await recordPinFailure(firebaseAdmin, attemptIdentity);
       sendJson(response, 403, { ok: false, code: 'manager_pin_rejected', message: 'Manager PIN was not accepted.' });
       return;
     }
+
+    await clearPinFailures(firebaseAdmin, attemptIdentity);
 
     const issuedAt = new Date();
     const expiresAt = new Date(issuedAt.getTime() + SESSION_DURATION_MS);
@@ -127,7 +150,16 @@ export default async function handler(request, response) {
       roleKey: 'manager',
       issuedAt: issuedAt.toISOString(),
       expiresAt: expiresAt.toISOString(),
+      expiresAtEpochMs: expiresAt.getTime(),
       updatedAt: issuedAt.toISOString(),
+    });
+    await createAccessSession(firebaseAdmin, {
+      databaseId,
+      uid: decodedToken.uid,
+      staffId: managerId,
+      staffName: manager.name,
+      roleKey: 'manager',
+      durationMs: SESSION_DURATION_MS,
     });
 
     sendJson(response, 200, {

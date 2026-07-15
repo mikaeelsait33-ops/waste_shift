@@ -3,6 +3,7 @@ import {
   buildRecipeIngredientBreakdown,
   calculateMenuWasteFinancials,
   createInventoryMovementsFromEntry,
+  getRestaurantDateTimeParts,
   scaleQuantityLabel,
 } from '../src/utils/wasteCalculations.js';
 import {
@@ -18,6 +19,10 @@ import { normalizeImportedMenuItem } from '../src/utils/menuImport.js';
 import { getAccessProfile, requirePermission } from '../src/utils/accessControl.js';
 import { createPinRecord, createRandomPin, validatePin, verifyPin } from '../src/utils/pinAuth.js';
 import { getActiveWasteEntries, getVoidedWasteEntries, isWasteEntryVoided } from '../src/utils/wasteSync.js';
+
+const restaurantMidnight = getRestaurantDateTimeParts(new Date('2026-07-15T22:30:00.000Z'));
+assert.equal(restaurantMidnight.formattedDate, '16/07/2026');
+assert.equal(restaurantMidnight.time, '00:30');
 
 const recipe = {
   name: 'Chicken Burger',

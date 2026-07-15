@@ -36,7 +36,19 @@ const STEPS = [
 const loadSavedProgress = () => {
   try {
     const savedProgress = localStorage.getItem(SETUP_PROGRESS_KEY);
-    return savedProgress ? { ...createInitialProgress(), ...JSON.parse(savedProgress) } : createInitialProgress();
+    if (!savedProgress) {
+      return createInitialProgress();
+    }
+
+    const parsedProgress = JSON.parse(savedProgress);
+    return {
+      ...createInitialProgress(),
+      ...parsedProgress,
+      stepIndex: Math.min(2, Number(parsedProgress?.stepIndex) || 0),
+      managerPin: '',
+      confirmManagerPin: '',
+      staffMembers: [],
+    };
   } catch {
     return createInitialProgress();
   }
@@ -73,7 +85,18 @@ function SetupWizard({
   const completionPercent = Math.round(((stepIndex + 1) / STEPS.length) * 100);
 
   useEffect(() => {
-    localStorage.setItem(SETUP_PROGRESS_KEY, JSON.stringify({ ...progress, stepIndex }));
+    const {
+      managerPin: _managerPin,
+      confirmManagerPin: _confirmManagerPin,
+      staffMembers: _staffMembers,
+      ...safeProgress
+    } = progress;
+
+    localStorage.setItem(SETUP_PROGRESS_KEY, JSON.stringify({
+      ...safeProgress,
+      stepIndex: Math.min(2, stepIndex),
+      staffMembers: [],
+    }));
   }, [progress, stepIndex]);
 
   const existingMenuItems = useMemo(() => progress.menuItems.map((item) => ({
@@ -379,6 +402,8 @@ function SetupWizard({
                   id="setup-manager-pin"
                   type="password"
                   inputMode="numeric"
+                  autoComplete="new-password"
+                  maxLength={8}
                   value={progress.managerPin}
                   onChange={(event) => updateProgress({ managerPin: event.target.value })}
                   className="input"
@@ -390,6 +415,8 @@ function SetupWizard({
                   id="setup-manager-pin-confirm"
                   type="password"
                   inputMode="numeric"
+                  autoComplete="new-password"
+                  maxLength={8}
                   value={progress.confirmManagerPin}
                   onChange={(event) => updateProgress({ confirmManagerPin: event.target.value })}
                   className="input"
@@ -459,7 +486,7 @@ function SetupWizard({
                   <option key={section.key} value={section.key}>{section.label}</option>
                 ))}
               </select>
-              <input className="input" value={staffDraft.code} onChange={(event) => setStaffDraft({ ...staffDraft, code: event.target.value })} placeholder="5 digit PIN" inputMode="numeric" />
+              <input className="input" type="password" value={staffDraft.code} onChange={(event) => setStaffDraft({ ...staffDraft, code: event.target.value })} placeholder="5 digit PIN" inputMode="numeric" autoComplete="new-password" maxLength={5} />
             </div>
             <button type="button" className="ghost-button" onClick={addStaffDraft}>Add staff</button>
             {progress.staffMembers.length > 0 && (

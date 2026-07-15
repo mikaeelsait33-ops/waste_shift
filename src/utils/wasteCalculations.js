@@ -68,6 +68,33 @@ export const roundCurrency = (value) => {
   return Number.isFinite(numericValue) ? Math.round(numericValue * 100) / 100 : 0;
 };
 
+export const getRestaurantDateTimeParts = (
+  value = new Date(),
+  timeZone = 'Africa/Johannesburg',
+) => {
+  const date = value instanceof Date ? value : new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    throw new Error('A valid date is required.');
+  }
+
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date).map((part) => [part.type, part.value]));
+
+  return {
+    now: date,
+    formattedDate: `${parts.day}/${parts.month}/${parts.year}`,
+    time: `${parts.hour}:${parts.minute}`,
+  };
+};
+
 export const createComponentKey = (component, index = 0) => {
   const name = String(component?.name || component || '').trim().toLowerCase();
   const normalizedName = name

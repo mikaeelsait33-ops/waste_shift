@@ -53,7 +53,7 @@ Troubleshooting tests:
 - If Firebase rules deploy fails, run `firebase login` locally and then `npm.cmd run firebase:deploy:firestore`.
 - If `npm.cmd test` hangs, use the file-by-file runner output to identify the last printed script.
 - If stress tests fail thresholds locally, reduce concurrency or check the dev server first.
-- If build warns about large chunks, verify the build still exits successfully; Firebase/recharts chunks are the current known source.
+- The client uses Firestore Lite for one-shot reads, writes, and transactions; production builds should not emit the previous oversized Firebase chunk warning.
 
 Beta testing checklist:
 
@@ -80,6 +80,7 @@ Offline and weak-signal behavior:
 Safety behavior:
 
 - Destructive reset/delete actions require confirmation.
+- Normal ingredient, invoice, menu, and waste removal uses archive/void records so audit history is retained.
 - Invoice duplicate checks warn before saving likely duplicates.
 - Save buttons use guarded saving where duplicate submissions are risky.
 - A friendly recovery screen appears if a UI section crashes, with retry and reload options.
@@ -87,8 +88,8 @@ Safety behavior:
 Known MVP limitations:
 
 - Very large historical datasets are still stored in simple Firestore collections.
-- Invoice reporting is client-side after records load.
-- The app does not yet use advanced Firestore cursor pagination for every collection.
+- Invoice reporting is client-side over bounded pages after records load.
+- Waste, invoice, stock movement, and price history reads are ordered, limited, and cursor-paged. Small reference collections still load in one bounded workspace request.
 - Browser-local fallback data is device-specific and should not replace Firebase for live operations.
 
 Environment variable checklist:
@@ -106,10 +107,11 @@ Environment variable checklist:
 
 Production API protection:
 
-- Gemini menu imports, invoice scans, and restaurant reset use a short-lived server-only manager session. A manager enters their normal PIN once at sign-in; the browser never stores a Vercel API secret.
+- Gemini menu imports, invoice scans, restaurant reset, and Firestore management writes use short-lived server-only access sessions. A manager enters their normal PIN once at sign-in; the browser never stores a Vercel API secret or PIN hash.
 - Set `FIREBASE_SERVICE_ACCOUNT_JSON` in Vercel (recommended) to the complete JSON from Firebase Console > Project settings > Service accounts > Generate new private key. Alternatively set all three of `FIREBASE_ADMIN_PROJECT_ID`, `FIREBASE_ADMIN_CLIENT_EMAIL`, and `FIREBASE_ADMIN_PRIVATE_KEY`.
 - `WASTESHIFT_MANAGER_API_SECRET` and `WASTESHIFT_API_SECRET` remain supported only for the legacy protected backup route. Do not add either value to any `VITE_*` variable or the browser.
 - `WASTESHIFT_SYNC_SECRET` protects the optional Vercel Blob database backup route.
+- `WASTESHIFT_RECOVERY_SECRET` is only needed for one-time recovery of a legacy single-shop database that has no server-side manager record. Recovery permanently closes after the first active manager is created.
 - Store private keys with escaped newlines (`\n`) if Vercel stores them as a single-line value.
 - In production, API routes fail closed when the needed secret is missing. Local development can still run without these secrets.
 - `BLOB_READ_WRITE_TOKEN` is required when using the Vercel Blob backup database.
@@ -117,7 +119,7 @@ Production API protection:
 Production deployment checklist:
 
 1. Add all `VITE_FIREBASE_*` values to Vercel and redeploy.
-2. Enable Firebase Anonymous Auth and publish `firestore.rules`.
+2. Enable Firebase Anonymous Auth. Deploy the Vercel app first, then publish `firestore.rules` plus `firestore.indexes.json` so the session API is available when the stricter rules become active.
 3. Add `FIREBASE_SERVICE_ACCOUNT_JSON` in Vercel before enabling Gemini/OCR. This enables automatic manager sessions without any in-app API-key field.
 4. Add `OCR_SPACE_API_KEY` or `OCR_API_KEY`, plus `GEMINI_API_KEY`, in Vercel for invoice and menu scanning.
 5. Redeploy after adding the Firebase Admin credentials and API keys.
@@ -136,7 +138,7 @@ Manual entry remains available and every scanned line is editable before saving.
 
 Confirmed invoices are the main source of truth for raw ingredient prices. When a manager reviews and saves an invoice, WasteShift updates `ingredients`, nested `ingredients/{id}/priceHistory`, top-level `priceHistory`, `stockLevels`, `suppliers`, and the saved invoice record.
 
-The raw ingredient library shows the latest invoice cost, supplier, unit, price history, missing-cost warnings, and significant price jumps. New scanned invoice lines can be matched to an existing ingredient or saved as a new raw ingredient, and raw ingredients can be deleted from the library when they are no longer used.
+The raw ingredient library shows the latest invoice cost, supplier, unit, price history, missing-cost warnings, and significant price jumps. New scanned invoice lines can be matched to an existing ingredient or saved as a new raw ingredient, and inactive ingredients can be archived without deleting their stock or price audit history.
 
 Recipe and waste costing use the invoice-backed item price catalog where possible. If a waste item, recipe component, or invoice line has missing or low-confidence cost data, it appears in the cost review queue instead of blocking normal logging.
 
@@ -160,9 +162,9 @@ Troubleshooting invoice costs:
 
 On a fresh restaurant profile, WasteShift opens a setup wizard before the normal login screen. The wizard collects the restaurant name, optional branch, first manager name, management PIN, basic limits, optional staff codes, and optional menu items.
 
-Setup progress is saved in the browser so a manager can refresh and continue. The completed restaurant profile is saved to Firestore at `restaurants/main` with `currency: ZAR`, `timezone: Africa/Johannesburg`, and `setupCompleted: true`.
+Non-sensitive setup progress is saved in the browser so a manager can refresh and continue. Manager PINs, confirmation PINs, and staff PINs are deliberately excluded and must be entered again after a refresh. The completed restaurant profile is saved to a database-scoped Firestore restaurant document with `currency: ZAR`, `timezone: Africa/Johannesburg`, and `setupCompleted: true`.
 
-Staff codes entered during setup are shown once in the wizard but are stored as salted hashes, not plain text. Staff can also be added later from Settings > Staff.
+Staff codes entered during setup are shown once in the wizard but are stored as salted hashes in the server-only `staffAccounts` collection, not plain text or browser storage. Successful PIN checks create expiring `accessSessions` documents that Firestore rules use for role enforcement. Staff can also be added later from Settings > Staff.
 
 ## Menu Import
 
@@ -262,7 +264,7 @@ After publishing Firestore rules, run:
 npm.cmd run firebase:smoke
 ```
 
-That verifies menu, waste, invoice, ingredient, supplier, settings, and stock writes.
+That performs a read-only connectivity check for Firebase Anonymous Auth and restaurant discovery. It does not create or modify production records.
 
 ## Firebase + Vercel
 
@@ -270,6 +272,7 @@ Firebase is the live data layer:
 
 - `menuItems` stores menu item names, total costs, and component costs.
 - `wasteEntries` stores logged waste entries using the app entry id as the Firestore document id, so retries update the same entry instead of creating duplicates.
+- `accessSessions`, `managerSessions`, `staffAccounts`, and `loginAttempts` are server-only authorization collections managed by Vercel functions and denied to browser clients.
 - Large local-only fields, such as photo data URLs, are not mirrored into Firestore.
 
 Vercel is the hosting layer. Add the `VITE_FIREBASE_*` variables from `.env.firebase.example` to Vercel Project Settings > Environment Variables, then redeploy.

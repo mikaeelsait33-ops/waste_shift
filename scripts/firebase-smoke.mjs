@@ -2,12 +2,12 @@ import { readFileSync } from 'node:fs';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously } from 'firebase/auth';
 import {
-  doc,
-  getDoc,
+  collection,
   getFirestore,
-  serverTimestamp,
-  setDoc,
-} from 'firebase/firestore';
+  getDocs,
+  limit,
+  query,
+} from 'firebase/firestore/lite';
 
 const handleSmokeFailure = (error) => {
   console.error(JSON.stringify({
@@ -58,198 +58,45 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 
 await signInAnonymously(auth);
+const restaurantSnapshot = await getDocs(query(collection(db, 'restaurants'), limit(1)));
+const restaurantData = restaurantSnapshot.docs[0]?.data() || null;
+const databaseId = String(restaurantData?.databaseId || restaurantSnapshot.docs[0]?.id || '').trim();
+const productionBaseUrl = String(process.env.WASTESHIFT_SMOKE_BASE_URL || '').trim().replace(/\/$/, '');
+let directoryCheck = { checked: false, readable: false, accountCount: 0, managerCount: 0 };
 
-const menuItemRef = doc(db, 'menuItems', 'salmon_benedict');
-await setDoc(menuItemRef, {
-  key: 'salmon_benedict',
-  name: 'Salmon Benedict',
-  totalCost: 85,
-  components: [
-    { key: 'salmon', name: 'Salmon', cost: 45 },
-    { key: 'english_muffin', name: 'English Muffin', cost: 8 },
-    { key: 'hollandaise', name: 'Hollandaise', cost: 12 },
-    { key: 'poached_egg', name: 'Poached Egg', cost: 10 },
-  ],
-  updatedAt: serverTimestamp(),
-}, { merge: true });
+if (productionBaseUrl && databaseId) {
+  const idToken = await auth.currentUser.getIdToken();
+  const response = await fetch(`${productionBaseUrl}/api/staff-session?action=directory`, {
+    cache: 'no-store',
+    headers: {
+      'x-wasteshift-database-id': databaseId,
+      'x-wasteshift-firebase-token': idToken,
+    },
+  });
+  const payload = await response.json().catch(() => ({}));
 
-const snapshot = await getDoc(menuItemRef);
-const data = snapshot.data();
-const now = new Date().toISOString();
-const wasteEntryRef = doc(db, 'wasteEntries', 'firebase_smoke_partial_waste');
-const wasteEntry = {
-  localEntryId: 'firebase_smoke_partial_waste',
-  name: 'Salmon Benedict',
-  itemType: 'menuItem',
-  recipeKey: 'salmon_benedict',
-  quantity: 1,
-  unit: 'portion',
-  reason: 'Smoke test',
-  notes: '',
-  staff: 'Firebase smoke test',
-  date: now.slice(0, 10),
-  time: now.slice(11, 16),
-  timestamp: now,
-  createdAt: now,
-  createdBy: 'Firebase smoke test',
-  status: 'logged',
-  cost: 45,
-  foodCostLost: 45,
-  partialWaste: true,
-  allComponentsSelected: false,
-  totalComponentCount: 4,
-  wastedComponentCount: 1,
-  totalMenuItemCost: 85,
-  selectedComponentKeys: ['salmon'],
-  componentsWasted: ['Salmon'],
-  wastedComponents: [{ key: 'salmon', name: 'Salmon', cost: 45 }],
-  hasPhoto: false,
-  firestoreSavedAt: serverTimestamp(),
-};
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(payload?.message || `Production staff directory returned HTTP ${response.status}.`);
+  }
 
-await setDoc(wasteEntryRef, wasteEntry, { merge: true });
-await setDoc(wasteEntryRef, {
-  ...wasteEntry,
-  notes: 'Idempotent update verified',
-  firestoreSavedAt: serverTimestamp(),
-}, { merge: true });
-
-const wasteSnapshot = await getDoc(wasteEntryRef);
-const wasteData = wasteSnapshot.data();
-const invoiceConfigRef = doc(db, 'settings', 'invoiceConfig');
-await setDoc(invoiceConfigRef, {
-  vatRate: 0.15,
-  updatedAt: serverTimestamp(),
-}, { merge: true });
-
-const ingredientRef = doc(db, 'ingredients', 'smoke_salmon');
-await setDoc(ingredientRef, {
-  id: 'smoke_salmon',
-  name: 'Smoke Salmon',
-  category: 'Meat',
-  unit: 'g',
-  parLevel: 5000,
-  reorderPoint: 1500,
-  preferredSupplier: 'Firebase smoke test',
-  lastPriceExVAT: 45,
-  lastPriceIncVAT: 51.75,
-  updatedAt: serverTimestamp(),
-}, { merge: true });
-
-await setDoc(doc(db, 'ingredients', 'smoke_salmon', 'priceHistory', 'firebase_smoke_invoice'), {
-  date: now.slice(0, 10),
-  supplier: 'Firebase smoke test',
-  priceExVAT: 45,
-  priceIncVAT: 51.75,
-  invoiceId: 'firebase_smoke_invoice',
-  createdAt: serverTimestamp(),
-}, { merge: true });
-
-await setDoc(doc(db, 'suppliers', 'firebase_smoke_test'), {
-  id: 'firebase_smoke_test',
-  name: 'Firebase smoke test',
-  lastInvoiceDate: now.slice(0, 10),
-  totalSpend: 45,
-  ingredientCount: 1,
-  updatedAt: serverTimestamp(),
-}, { merge: true });
-
-await setDoc(doc(db, 'invoices', 'firebase_smoke_invoice'), {
-  id: 'firebase_smoke_invoice',
-  invoiceDate: now.slice(0, 10),
-  supplier: 'Firebase smoke test',
-  supplierId: 'firebase_smoke_test',
-  totalExVAT: 45,
-  totalVAT: 6.75,
-  totalIncVAT: 51.75,
-  lineItems: [{
-    id: 'firebase_smoke_partial_waste',
-    itemName: 'Smoke Salmon',
-    quantity: 1,
-    unit: 'kg',
-    priceExVAT: 45,
-    priceIncVAT: 51.75,
-  }],
-  scannedAt: now,
-  status: 'confirmed',
-  vatRate: 0.15,
-  vatMode: 'exclusive',
-  updatedAt: serverTimestamp(),
-}, { merge: true });
-
-await setDoc(doc(db, 'stockLevels', 'smoke_salmon'), {
-  ingredientId: 'smoke_salmon',
-  currentQty: 1000,
-  unit: 'g',
-  lastUpdated: serverTimestamp(),
-  lastInvoiceId: 'firebase_smoke_invoice',
-  status: 'ok',
-  parLevel: 5000,
-  reorderPoint: 1500,
-}, { merge: true });
-
-const deleteIngredientRef = doc(db, 'ingredients', 'firebase_smoke_delete_me');
-const deleteHistoryRef = doc(db, 'ingredients', 'firebase_smoke_delete_me', 'priceHistory', 'firebase_smoke_delete_invoice');
-const deleteStockRef = doc(db, 'stockLevels', 'firebase_smoke_delete_me');
-
-await setDoc(deleteIngredientRef, {
-  id: 'firebase_smoke_delete_me',
-  name: 'Firebase Smoke Delete Me',
-  category: 'Other',
-  unit: 'each',
-  updatedAt: serverTimestamp(),
-}, { merge: true });
-await setDoc(deleteHistoryRef, {
-  date: now.slice(0, 10),
-  supplier: 'Firebase smoke test',
-  priceExVAT: 1,
-  priceIncVAT: 1,
-  invoiceId: 'firebase_smoke_delete_invoice',
-  createdAt: serverTimestamp(),
-}, { merge: true });
-await setDoc(deleteStockRef, {
-  ingredientId: 'firebase_smoke_delete_me',
-  currentQty: 1,
-  unit: 'each',
-  lastUpdated: serverTimestamp(),
-}, { merge: true });
-await setDoc(deleteIngredientRef, {
-  id: 'firebase_smoke_delete_me',
-  name: 'Firebase Smoke Delete Me',
-  category: 'Other',
-  unit: 'each',
-  isDeleted: true,
-  deletedAt: serverTimestamp(),
-  updatedAt: serverTimestamp(),
-}, { merge: true });
-
-const invoiceSnapshot = await getDoc(doc(db, 'invoices', 'firebase_smoke_invoice'));
-const stockSnapshot = await getDoc(doc(db, 'stockLevels', 'smoke_salmon'));
-const deletedIngredientSnapshot = await getDoc(deleteIngredientRef);
+  const accounts = Array.isArray(payload.staff) ? payload.staff : [];
+  directoryCheck = {
+    checked: true,
+    readable: true,
+    accountCount: accounts.length,
+    managerCount: accounts.filter((account) => account?.roleKey === 'manager' || account?.roleKey === 'owner').length,
+    credentialsExposed: accounts.some((account) => account?.staffCode || account?.managerPin),
+  };
+}
 
 console.log(JSON.stringify({
-  menuItem: {
-    ok: snapshot.exists(),
-    item: data?.name,
-    totalCost: data?.totalCost,
-    components: Array.isArray(data?.components)
-      ? data.components.map((component) => component.name)
-      : [],
-  },
-  wasteEntry: {
-    ok: wasteSnapshot.exists(),
-    id: wasteData?.localEntryId,
-    item: wasteData?.name,
-    foodCostLost: wasteData?.foodCostLost,
-    componentsWasted: wasteData?.componentsWasted || [],
-    notes: wasteData?.notes || '',
-  },
-  invoiceModule: {
-    invoiceSaved: invoiceSnapshot.exists(),
-    stockSaved: stockSnapshot.exists(),
-    ingredient: 'Smoke Salmon',
-    rawIngredientDeleteVerified: deletedIngredientSnapshot.data()?.isDeleted === true,
-  },
+  ok: true,
+  projectId: config.projectId,
+  anonymousAuth: Boolean(auth.currentUser?.uid),
+  restaurantDiscoveryReadable: true,
+  completedRestaurantFound: !restaurantSnapshot.empty,
+  productionDirectory: directoryCheck,
+  writesPerformed: false,
 }, null, 2));
 
 process.exit(0);
