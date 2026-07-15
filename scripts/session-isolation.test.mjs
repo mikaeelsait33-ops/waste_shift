@@ -20,8 +20,12 @@ assert.doesNotMatch(clientDatabaseId, /getClientDatabaseShareUrl/, 'Single-shop 
 assert.doesNotMatch(clientDatabaseId, /setClientDatabaseId/, 'Single-shop mode must not allow switching the active restaurant database.');
 assert.doesNotMatch(clientDatabaseId, /keepDatabaseIdInUrl/, 'Single-shop mode must not put internal database identifiers in the URL.');
 assert.match(clientDatabaseId, /removeLegacyDatabaseQuery/, 'Single-shop mode should clean old restaurant-sharing URLs after loading.');
+assert.match(clientDatabaseId, /persistClientDatabaseId/, 'Single-shop mode should be able to remember the one existing shop on a new device.');
 assert.match(apiHeaders, /getClientDatabaseHeaders/, 'Protected API calls must include the client database scope header.');
 assert.match(restaurantFirestore, /wasteShiftRestaurantProfiles/, 'Completed restaurant profiles should have a local reload fallback.');
+assert.match(restaurantFirestore, /where\('setupCompleted', '==', true\)/, 'A new device should discover the one completed shop in Firestore.');
+assert.match(restaurantFirestore, /limit\(2\)/, 'Automatic shop discovery must stop when more than one completed shop exists.');
+assert.match(appSource, /didAdoptSingleShop/, 'The app should restart its initial data loaders after a new device joins the one shop.');
 assert.match(appSource, /loadPersistedAuthSession/, 'App should restore a remembered local login.');
 
 for (const [name, source] of [

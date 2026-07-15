@@ -875,6 +875,12 @@ function App() {
         const result = await loadRestaurantProfile();
 
         if (!isCancelled) {
+          if (result.didAdoptSingleShop) {
+            // Restart the initial data loaders after a fresh device has joined the one shop.
+            window.location.reload();
+            return;
+          }
+
           setRestaurantProfile(result.profile || createDefaultRestaurantProfile());
           setRestaurantProfileStatus('ready');
         }

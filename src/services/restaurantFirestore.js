@@ -1,6 +1,6 @@
 import { getFirestoreDb, ensureFirebaseAuth } from './firestoreMenuItems';
 import { getAutomaticManagerApiHeaders } from '../utils/apiHeaders';
-import { getClientDatabaseId } from '../utils/clientDatabaseId';
+import { getClientDatabaseId, persistClientDatabaseId } from '../utils/clientDatabaseId';
 
 const getRestaurantProfileRef = () => ['restaurants', getClientDatabaseId() || 'local'];
 const getFirestoreApi = async () => {
@@ -12,8 +12,11 @@ const getFirestoreApi = async () => {
     doc: firestore.doc,
     getDoc: firestore.getDoc,
     getDocs: firestore.getDocs,
+    limit: firestore.limit,
+    query: firestore.query,
     serverTimestamp: firestore.serverTimestamp,
     setDoc: firestore.setDoc,
+    where: firestore.where,
   };
 };
 
@@ -82,6 +85,29 @@ export const cacheRestaurantProfile = (profile) => {
   return safeProfile;
 };
 
+const findSingleCompletedRestaurant = async (db) => {
+  const { collection, getDocs, limit, query, where } = await getFirestoreApi();
+  const completedRestaurants = await getDocs(query(
+    collection(db, 'restaurants'),
+    where('setupCompleted', '==', true),
+    limit(2),
+  ));
+
+  // A new device can join automatically only when this app has exactly one shop.
+  if (completedRestaurants.size !== 1) {
+    return null;
+  }
+
+  const restaurant = completedRestaurants.docs[0];
+  const databaseId = persistClientDatabaseId(restaurant.data()?.databaseId || restaurant.id);
+
+  if (!databaseId) {
+    return null;
+  }
+
+  return restaurant.data();
+};
+
 export const loadRestaurantProfile = async () => {
   const db = await getFirestoreDb();
 
@@ -94,6 +120,19 @@ export const loadRestaurantProfile = async () => {
   const snapshot = await getDoc(doc(db, ...getRestaurantProfileRef()));
 
   if (!snapshot.exists()) {
+    const singleRestaurant = await findSingleCompletedRestaurant(db);
+
+    if (singleRestaurant) {
+      const profile = cacheRestaurantProfile(singleRestaurant);
+      return {
+        ok: true,
+        exists: true,
+        source: 'firestore-single-shop-bootstrap',
+        didAdoptSingleShop: true,
+        profile,
+      };
+    }
+
     const cachedProfile = loadCachedRestaurantProfile();
     return {
       ok: true,

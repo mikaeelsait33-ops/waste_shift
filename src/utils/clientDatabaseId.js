@@ -34,6 +34,22 @@ const removeLegacyDatabaseQuery = () => {
   window.history.replaceState(window.history.state, '', url);
 };
 
+// This is used only by the automatic one-shop bootstrap. There is no UI for switching shops.
+export const persistClientDatabaseId = (value) => {
+  if (typeof localStorage === 'undefined') {
+    return '';
+  }
+
+  const databaseId = normalizeDatabaseId(value);
+
+  if (!databaseId) {
+    return '';
+  }
+
+  localStorage.setItem(CLIENT_DATABASE_ID_STORAGE_KEY, databaseId);
+  return databaseId;
+};
+
 export const getClientDatabaseId = () => {
   if (typeof localStorage === 'undefined') {
     return '';
@@ -48,8 +64,7 @@ export const getClientDatabaseId = () => {
   }
 
   const nextId = createClientDatabaseId();
-  localStorage.setItem(CLIENT_DATABASE_ID_STORAGE_KEY, nextId);
-  return nextId;
+  return persistClientDatabaseId(nextId);
 };
 
 export const getClientDatabaseHeaders = (extraHeaders = {}) => {
