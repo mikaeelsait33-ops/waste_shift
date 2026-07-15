@@ -86,19 +86,38 @@ export const cacheRestaurantProfile = (profile) => {
 };
 
 const findSingleCompletedRestaurant = async (db) => {
+  try {
+    const response = await fetch('/api/staff-session?action=restaurant', {
+      cache: 'no-store',
+      headers: await getAutomaticManagerApiHeaders(),
+    });
+    const payload = await response.json().catch(() => ({}));
+    const serverRestaurant = payload?.restaurant;
+
+    if (response.ok && payload?.ok !== false && serverRestaurant?.setupCompleted) {
+      const databaseId = persistClientDatabaseId(serverRestaurant.databaseId);
+      if (databaseId) return serverRestaurant;
+    }
+  } catch (error) {
+    console.warn('Canonical single-shop lookup unavailable; using direct Firestore discovery.', error);
+  }
+
   const { collection, getDocs, limit, query, where } = await getFirestoreApi();
   const completedRestaurants = await getDocs(query(
     collection(db, 'restaurants'),
     where('setupCompleted', '==', true),
-    limit(2),
+    limit(10),
   ));
 
-  // A new device can join automatically only when this app has exactly one shop.
-  if (completedRestaurants.size !== 1) {
-    return null;
-  }
+  if (completedRestaurants.empty) return null;
 
-  const restaurant = completedRestaurants.docs[0];
+  const restaurant = [...completedRestaurants.docs].sort((left, right) => {
+    const leftData = left.data();
+    const rightData = right.data();
+    const leftTime = new Date(leftData?.updatedAt || leftData?.setupCompletedAt || leftData?.createdAt || 0).getTime();
+    const rightTime = new Date(rightData?.updatedAt || rightData?.setupCompletedAt || rightData?.createdAt || 0).getTime();
+    return rightTime - leftTime || left.id.localeCompare(right.id);
+  })[0];
   const databaseId = persistClientDatabaseId(restaurant.data()?.databaseId || restaurant.id);
 
   if (!databaseId) {

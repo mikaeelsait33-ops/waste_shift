@@ -4,6 +4,7 @@ import { getHeaderValue, getRequestDatabaseId } from './_auth.js';
 import { createAccessSession, deleteAccessSession, loadValidAccessSession } from './_accessSession.js';
 import { checkPinAttemptAllowed, clearPinFailures, recordPinFailure } from './_loginThrottle.js';
 import { isPinRecord, verifyPinRecord } from './_pinVerification.js';
+import { createSafeRestaurantResponse, loadCanonicalRestaurant } from './_singleShop.js';
 
 const sendJson = (response, status, body) => {
   response.setHeader('cache-control', 'no-store');
@@ -176,12 +177,8 @@ const migrateLegacyStaffAccounts = async (firebaseAdmin, databaseId) => {
 };
 
 const migrateSingleShopLegacyAccess = async (firebaseAdmin, databaseId) => {
-  const restaurantsSnapshot = await firebaseAdmin.db.collection('restaurants').limit(2).get();
-  if (restaurantsSnapshot.size !== 1) return false;
-
-  const restaurantSnapshot = restaurantsSnapshot.docs[0];
-  const restaurantDatabaseId = String(restaurantSnapshot.data()?.databaseId || restaurantSnapshot.id || '').trim();
-  if (restaurantDatabaseId !== databaseId) return false;
+  const canonicalRestaurant = await loadCanonicalRestaurant(firebaseAdmin);
+  if (!canonicalRestaurant || canonicalRestaurant.databaseId !== databaseId) return false;
 
   const [staffSnapshot, managersSnapshot, appDataSnapshot] = await Promise.all([
     firebaseAdmin.db.collection('staffAccounts').limit(100).get(),
@@ -309,6 +306,16 @@ export default async function handler(request, response) {
     if (request.method === 'DELETE') {
       await deleteAccessSession(firebaseAdmin, identity.databaseId, identity.uid);
       sendJson(response, 200, { ok: true });
+      return;
+    }
+
+    if (request.method === 'GET' && String(request.query?.action || '') === 'restaurant') {
+      const canonicalRestaurant = await loadCanonicalRestaurant(firebaseAdmin);
+      sendJson(response, 200, {
+        ok: true,
+        restaurant: createSafeRestaurantResponse(canonicalRestaurant),
+        completedProfileCount: canonicalRestaurant?.completedProfileCount || 0,
+      });
       return;
     }
 

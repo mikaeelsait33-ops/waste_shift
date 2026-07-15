@@ -58,14 +58,35 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 
 await signInAnonymously(auth);
-const restaurantSnapshot = await getDocs(query(collection(db, 'restaurants'), limit(1)));
+const restaurantSnapshot = await getDocs(query(collection(db, 'restaurants'), limit(10)));
 const restaurantData = restaurantSnapshot.docs[0]?.data() || null;
-const databaseId = String(restaurantData?.databaseId || restaurantSnapshot.docs[0]?.id || '').trim();
+let databaseId = String(restaurantData?.databaseId || restaurantSnapshot.docs[0]?.id || '').trim();
 const productionBaseUrl = String(process.env.WASTESHIFT_SMOKE_BASE_URL || '').trim().replace(/\/$/, '');
 let directoryCheck = { checked: false, readable: false, accountCount: 0, managerCount: 0 };
+let canonicalShopCheck = { checked: false, selected: false, completedProfileCount: 0 };
 
 if (productionBaseUrl && databaseId) {
   const idToken = await auth.currentUser.getIdToken();
+  const commonHeaders = {
+    'x-wasteshift-database-id': databaseId,
+    'x-wasteshift-firebase-token': idToken,
+  };
+  const shopResponse = await fetch(`${productionBaseUrl}/api/staff-session?action=restaurant`, {
+    cache: 'no-store',
+    headers: commonHeaders,
+  });
+  const shopPayload = await shopResponse.json().catch(() => ({}));
+
+  if (!shopResponse.ok || shopPayload?.ok === false || !shopPayload?.restaurant?.databaseId) {
+    throw new Error(shopPayload?.message || `Canonical shop lookup returned HTTP ${shopResponse.status}.`);
+  }
+
+  databaseId = String(shopPayload.restaurant.databaseId).trim();
+  canonicalShopCheck = {
+    checked: true,
+    selected: Boolean(databaseId),
+    completedProfileCount: Number(shopPayload.completedProfileCount) || 0,
+  };
   const response = await fetch(`${productionBaseUrl}/api/staff-session?action=directory`, {
     cache: 'no-store',
     headers: {
@@ -95,6 +116,8 @@ console.log(JSON.stringify({
   anonymousAuth: Boolean(auth.currentUser?.uid),
   restaurantDiscoveryReadable: true,
   completedRestaurantFound: !restaurantSnapshot.empty,
+  completedRestaurantDocumentsRead: restaurantSnapshot.size,
+  canonicalShop: canonicalShopCheck,
   productionDirectory: directoryCheck,
   writesPerformed: false,
 }, null, 2));

@@ -3,6 +3,7 @@ import { verifyFirebaseIdToken } from './_firebaseIdentity.js';
 import { createAccessSession } from './_accessSession.js';
 import { createPinRecord } from './_pinVerification.js';
 import { getHeaderValue, getRequestDatabaseId, safeSecretEquals } from './_auth.js';
+import { loadCanonicalRestaurant } from './_singleShop.js';
 
 const SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
 
@@ -61,18 +62,16 @@ export default async function handler(request, response) {
     }
 
     const decodedToken = await verifyFirebaseIdToken(idToken);
-    const [restaurantsSnapshot, managersSnapshot] = await Promise.all([
-      firebaseAdmin.db.collection('restaurants').limit(2).get(),
+    const [canonicalRestaurant, managersSnapshot] = await Promise.all([
+      loadCanonicalRestaurant(firebaseAdmin),
       firebaseAdmin.db.collection('managers').where('databaseId', '==', databaseId).get(),
     ]);
-    const restaurantSnapshot = restaurantsSnapshot.size === 1 ? restaurantsSnapshot.docs[0] : null;
-    const restaurantDatabaseId = String(restaurantSnapshot?.data()?.databaseId || restaurantSnapshot?.id || '').trim();
     const activeManagerExists = managersSnapshot.docs.some((snapshot) => {
       const manager = snapshot.data();
       return manager?.active !== false && manager?.removed !== true;
     });
 
-    if (!restaurantSnapshot || restaurantDatabaseId !== databaseId || activeManagerExists) {
+    if (!canonicalRestaurant || canonicalRestaurant.databaseId !== databaseId || activeManagerExists) {
       sendJson(response, 409, {
         ok: false,
         code: 'manager_recovery_closed',
