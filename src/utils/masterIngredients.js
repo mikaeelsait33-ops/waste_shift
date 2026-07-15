@@ -223,6 +223,58 @@ export const normalizeMasterIngredientRecord = (ingredient = {}) => {
   };
 };
 
+export const mergeMasterIngredientSources = (...ingredientSources) => {
+  const ingredientsById = new Map();
+  const idByCanonicalName = new Map();
+
+  ingredientSources
+    .flatMap((source) => (Array.isArray(source) ? source : []))
+    .forEach((ingredient) => {
+      const normalizedIngredient = normalizeMasterIngredientRecord(ingredient);
+
+      if (!normalizedIngredient) {
+        return;
+      }
+
+      const canonicalKey = normalizeMasterIngredientName(
+        normalizedIngredient.canonicalName || normalizedIngredient.name
+      );
+      const existingId = ingredientsById.has(normalizedIngredient.id)
+        ? normalizedIngredient.id
+        : idByCanonicalName.get(canonicalKey);
+      const targetId = existingId || normalizedIngredient.id;
+      const existingIngredient = ingredientsById.get(targetId);
+      const mergedIngredient = normalizeMasterIngredientRecord({
+        ...(existingIngredient || {}),
+        ...normalizedIngredient,
+        id: targetId,
+        ingredientId: targetId,
+        key: targetId,
+        aliases: uniqueMasterStrings([
+          existingIngredient?.aliases,
+          existingIngredient?.previousRawNames,
+          normalizedIngredient.aliases,
+          normalizedIngredient.previousRawNames,
+        ]),
+        previousRawNames: uniqueMasterStrings([
+          existingIngredient?.previousRawNames,
+          normalizedIngredient.previousRawNames,
+        ]),
+      });
+
+      if (!mergedIngredient) {
+        return;
+      }
+
+      ingredientsById.set(targetId, mergedIngredient);
+      if (canonicalKey) {
+        idByCanonicalName.set(canonicalKey, targetId);
+      }
+    });
+
+  return [...ingredientsById.values()].sort((a, b) => a.name.localeCompare(b.name));
+};
+
 const tokenScore = (source, target) => {
   const sourceTokens = source.split(' ').filter(Boolean);
   const targetTokens = target.split(' ').filter(Boolean);

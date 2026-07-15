@@ -35,6 +35,7 @@ import {
   buildInvoiceIngredientPricing,
   getPriceChangeFromBaseCost,
   matchMasterIngredient,
+  mergeMasterIngredientSources,
   normalizeMasterIngredientName,
   normalizeMasterIngredientRecord,
   uniqueMasterStrings,
@@ -337,6 +338,7 @@ function InvoiceScanner({
   const [extractedTotals, setExtractedTotals] = useState(null);
   const [manualLineDraft, setManualLineDraft] = useState(EMPTY_MANUAL_LINE);
   const [manualIngredientLinks, setManualIngredientLinks] = useState({});
+  const [ingredientMatchSearches, setIngredientMatchSearches] = useState({});
   const [scanFile, setScanFile] = useState(null);
   const [scanFiles, setScanFiles] = useState([]);
   const [batchDrafts, setBatchDrafts] = useState([]);
@@ -379,15 +381,26 @@ function InvoiceScanner({
   const allMenuItems = useMemo(() => (
     mergeMenuItems(workspace.menuItems, localMenuItems)
   ), [localMenuItems, workspace.menuItems]);
+  const availableIngredients = useMemo(() => mergeMasterIngredientSources(
+    Object.values(itemPriceCatalog || {}).map((record) => ({
+      ...record,
+      id: record?.ingredientId || record?.key,
+      ingredientId: record?.ingredientId || record?.key,
+      latestCost: record?.price,
+      latestCostPerBaseUnit: record?.costPerBaseUnit,
+      defaultUnit: record?.baseUnit || record?.unit,
+    })),
+    workspace.ingredients
+  ), [itemPriceCatalog, workspace.ingredients]);
   const autoMatches = useMemo(() => {
     const lookup = new Map();
 
     lineItems.forEach((lineItem) => {
-      lookup.set(lineItem.id, matchMasterIngredient(lineItem.itemName, workspace.ingredients));
+      lookup.set(lineItem.id, matchMasterIngredient(lineItem.itemName, availableIngredients));
     });
 
     return lookup;
-  }, [lineItems, workspace.ingredients]);
+  }, [availableIngredients, lineItems]);
   const matches = useMemo(() => {
     const lookup = new Map();
 
@@ -400,7 +413,7 @@ function InvoiceScanner({
       }
 
       if (manualLink) {
-        const ingredient = workspace.ingredients.find((item) => item.id === manualLink);
+        const ingredient = availableIngredients.find((item) => item.id === manualLink);
 
         lookup.set(lineItem.id, ingredient
           ? { ingredient, score: 1, matchConfidence: 1, matchType: 'manual', source: 'manual', needsReview: false }
@@ -412,7 +425,7 @@ function InvoiceScanner({
     });
 
     return lookup;
-  }, [autoMatches, lineItems, manualIngredientLinks, workspace.ingredients]);
+  }, [autoMatches, availableIngredients, lineItems, manualIngredientLinks]);
   const matchedCount = [...matches.values()].filter((match) => match.ingredient).length;
   const newLineItems = lineItems.filter((lineItem) => !matches.get(lineItem.id)?.ingredient);
   const visibleLinePage = useMemo(() => getVisiblePage(lineItems, {
@@ -458,8 +471,8 @@ function InvoiceScanner({
   const recipeImpact = useMemo(() => calculateRecipeCostImpact({
     lineItems,
     menuItems: allMenuItems,
-    ingredients: workspace.ingredients,
-  }), [allMenuItems, lineItems, workspace.ingredients]);
+    ingredients: availableIngredients,
+  }), [allMenuItems, availableIngredients, lineItems]);
   const filteredInvoices = useMemo(() => {
     const search = historySearch.trim().toLowerCase();
     const start = historyStartDate ? new Date(historyStartDate) : null;
@@ -588,7 +601,7 @@ function InvoiceScanner({
       });
     });
 
-    const priceHistoryRows = workspace.ingredients.flatMap((ingredient) => (
+    const priceHistoryRows = availableIngredients.flatMap((ingredient) => (
       (Array.isArray(ingredient.priceHistory) ? ingredient.priceHistory : [])
         .filter((history) => {
           const historyDate = new Date(history.date || history.createdAt || 0);
@@ -607,7 +620,7 @@ function InvoiceScanner({
           invoiceId: history.invoiceId || '',
         }))
     ));
-    const priceChanges = workspace.ingredients
+    const priceChanges = availableIngredients
       .map((ingredient) => {
         const history = (Array.isArray(ingredient.priceHistory) ? ingredient.priceHistory : [])
           .filter((entry) => {
@@ -660,10 +673,10 @@ function InvoiceScanner({
       priceHistoryRows,
       priceChanges,
     };
-  }, [reportEndDate, reportStartDate, workspace.ingredients, workspace.invoices]);
+  }, [availableIngredients, reportEndDate, reportStartDate, workspace.invoices]);
   const ingredientSearchValue = ingredientSearch.trim().toLowerCase();
   const filteredIngredients = useMemo(() => (
-    [...workspace.ingredients]
+    [...availableIngredients]
       .filter((ingredient) => {
         if (!ingredientSearchValue) return true;
 
@@ -675,7 +688,7 @@ function InvoiceScanner({
         ].some((part) => String(part || '').toLowerCase().includes(ingredientSearchValue));
       })
       .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
-  ), [ingredientSearchValue, workspace.ingredients]);
+  ), [availableIngredients, ingredientSearchValue]);
   const visibleIngredientPage = useMemo(() => getVisiblePage(filteredIngredients, {
     limit: visibleIngredientLimit,
     fallbackLimit: INGREDIENT_LIBRARY_PAGE_SIZE,
@@ -713,10 +726,10 @@ function InvoiceScanner({
     };
   }, [filteredStockMovements]);
   const ingredientSummary = useMemo(() => ({
-    total: workspace.ingredients.length,
-    priced: workspace.ingredients.filter((ingredient) => Number(ingredient.latestCostPerBaseUnit || ingredient.costPerBaseUnitExVAT || ingredient.lastPriceExVAT || ingredient.latestCost || 0) > 0).length,
-    missingCost: workspace.ingredients.filter((ingredient) => Number(ingredient.latestCostPerBaseUnit || ingredient.costPerBaseUnitExVAT || ingredient.lastPriceExVAT || ingredient.latestCost || 0) <= 0).length,
-    newThisMonth: workspace.ingredients.filter((ingredient) => {
+    total: availableIngredients.length,
+    priced: availableIngredients.filter((ingredient) => Number(ingredient.latestCostPerBaseUnit || ingredient.costPerBaseUnitExVAT || ingredient.lastPriceExVAT || ingredient.latestCost || 0) > 0).length,
+    missingCost: availableIngredients.filter((ingredient) => Number(ingredient.latestCostPerBaseUnit || ingredient.costPerBaseUnitExVAT || ingredient.lastPriceExVAT || ingredient.latestCost || 0) <= 0).length,
+    newThisMonth: availableIngredients.filter((ingredient) => {
       const date = ingredient.lastInvoiceDate ? new Date(ingredient.lastInvoiceDate) : null;
       const now = new Date();
 
@@ -724,23 +737,23 @@ function InvoiceScanner({
         && date.getMonth() === now.getMonth()
         && date.getFullYear() === now.getFullYear();
     }).length,
-  }), [workspace.ingredients]);
+  }), [availableIngredients]);
   const costReviewQueue = useMemo(() => buildCostReviewQueue({
-    ingredients: workspace.ingredients,
+    ingredients: availableIngredients,
     invoiceLines: lineItems,
     recipes,
     itemPriceCatalog,
-  }), [itemPriceCatalog, lineItems, recipes, workspace.ingredients]);
+  }), [availableIngredients, itemPriceCatalog, lineItems, recipes]);
   const visibleCostReviewQueue = useMemo(() => costReviewQueue.slice(0, 6), [costReviewQueue]);
   const priceHistorySuppliers = useMemo(() => (
     [...new Set(
-      workspace.ingredients.flatMap((ingredient) => (
+      availableIngredients.flatMap((ingredient) => (
         (Array.isArray(ingredient.priceHistory) ? ingredient.priceHistory : [])
           .map((history) => history.supplier || history.supplierName || '')
           .filter(Boolean)
       ))
     )].sort((a, b) => a.localeCompare(b))
-  ), [workspace.ingredients]);
+  ), [availableIngredients]);
   const priceJumpCount = useMemo(() => (
     lineItems.filter((lineItem) => {
       const match = matches.get(lineItem.id);
@@ -752,11 +765,11 @@ function InvoiceScanner({
   ), [lineItems, matches]);
   const lowStockAlerts = useMemo(() => (
     createLowStockAlerts({
-      ingredients: workspace.ingredients,
+      ingredients: availableIngredients,
       stockLevels: workspace.stockLevels,
       inventoryMovements,
     })
-  ), [inventoryMovements, workspace.ingredients, workspace.stockLevels]);
+  ), [availableIngredients, inventoryMovements, workspace.stockLevels]);
 
   useEffect(() => {
     setVisibleLineLimit(INVOICE_REVIEW_PAGE_SIZE);
@@ -939,8 +952,48 @@ function InvoiceScanner({
       delete nextDrafts[lineId];
       return nextDrafts;
     });
+    setIngredientMatchSearches((currentSearches) => {
+      const nextSearches = { ...currentSearches };
+      delete nextSearches[lineId];
+      return nextSearches;
+    });
     setConfirmedInvoice(null);
     setStockUpdates([]);
+  };
+
+  const handleIngredientMatchChange = (lineItem, nextValue) => {
+    setManualIngredientLinks((currentLinks) => {
+      const nextLinks = { ...currentLinks };
+
+      if (nextValue === 'auto') {
+        delete nextLinks[lineItem.id];
+      } else {
+        nextLinks[lineItem.id] = nextValue;
+      }
+
+      return nextLinks;
+    });
+    setConfirmedInvoice(null);
+    setStockUpdates([]);
+
+    if (nextValue === 'auto') {
+      setMessage(`Automatic matching restored for ${lineItem.itemName}.`);
+      return;
+    }
+
+    if (nextValue === '__new__') {
+      setMessage(`${lineItem.itemName} will be created as a new raw ingredient.`);
+      return;
+    }
+
+    const ingredient = availableIngredients.find((item) => item.id === nextValue);
+    if (ingredient) {
+      setIngredientMatchSearches((currentSearches) => ({
+        ...currentSearches,
+        [lineItem.id]: '',
+      }));
+      setMessage(`Matched "${lineItem.itemName}" to ${ingredient.name}. Confirm the invoice to remember this supplier name for future scans.`);
+    }
   };
 
   const confirmSuggestedIngredientMatch = (lineItem) => {
@@ -964,6 +1017,7 @@ function InvoiceScanner({
     setLineItems([]);
     setExtractedTotals(null);
     setManualIngredientLinks({});
+    setIngredientMatchSearches({});
     setNewDrawerLineId('');
     setNewIngredientDrafts({});
     setConfirmedInvoice(null);
@@ -1100,6 +1154,7 @@ function InvoiceScanner({
     setExtractedTotals(draft.extractedTotals || null);
     setLineItems(draft.lineItems || []);
     setManualIngredientLinks({});
+    setIngredientMatchSearches({});
     setNewIngredientDrafts({});
     setNewDrawerLineId('');
     setConfirmedInvoice(null);
@@ -1999,11 +2054,28 @@ function InvoiceScanner({
                     <span>Unit price</span>
                     <span>Total</span>
                     <span>VAT</span>
-                    <span>Status</span>
+                    <span>Raw ingredient match</span>
                     <span>Action</span>
                   </div>
                   {visibleLinePage.records.map((lineItem) => {
                     const match = matches.get(lineItem.id);
+                    const matchSearchValue = String(ingredientMatchSearches[lineItem.id] || '').trim().toLowerCase();
+                    const selectedIngredientId = manualIngredientLinks[lineItem.id];
+                    const selectedIngredient = availableIngredients.find((ingredient) => ingredient.id === selectedIngredientId);
+                    const ingredientMatchOptions = availableIngredients
+                      .filter((ingredient) => (
+                        !matchSearchValue
+                        || [
+                          ingredient.name,
+                          ingredient.canonicalName,
+                          ingredient.category,
+                          ...(Array.isArray(ingredient.aliases) ? ingredient.aliases : []),
+                        ].some((part) => String(part || '').toLowerCase().includes(matchSearchValue))
+                      ));
+                    const visibleIngredientMatchOptions = selectedIngredient
+                      && !ingredientMatchOptions.some((ingredient) => ingredient.id === selectedIngredient.id)
+                        ? [selectedIngredient, ...ingredientMatchOptions]
+                        : ingredientMatchOptions;
                     const linePricing = buildInvoiceIngredientPricing(lineItem);
                     const priceHistory = match?.ingredient?.priceHistory || [];
                     const sparklineData = [
@@ -2047,34 +2119,39 @@ function InvoiceScanner({
                           </span>
                         </div>
                         <div className="invoice-match-cell">
-                          <span className="invoice-field-label">Status</span>
+                          <span className="invoice-field-label">Match to raw ingredient</span>
+                          <input
+                            type="search"
+                            value={ingredientMatchSearches[lineItem.id] || ''}
+                            onChange={(event) => setIngredientMatchSearches((currentSearches) => ({
+                              ...currentSearches,
+                              [lineItem.id]: event.target.value,
+                            }))}
+                            className="input invoice-ingredient-match-search"
+                            placeholder="Search raw ingredients"
+                            aria-label={`Search raw ingredients for ${lineItem.itemName}`}
+                          />
                           <select
                             value={manualIngredientLinks[lineItem.id] || 'auto'}
-                            onChange={(event) => {
-                              const nextValue = event.target.value;
-                              setManualIngredientLinks((currentLinks) => {
-                                const nextLinks = { ...currentLinks };
-
-                                if (nextValue === 'auto') {
-                                  delete nextLinks[lineItem.id];
-                                } else {
-                                  nextLinks[lineItem.id] = nextValue;
-                                }
-
-                                return nextLinks;
-                              });
-                              setConfirmedInvoice(null);
-                              setStockUpdates([]);
-                            }}
+                            onChange={(event) => handleIngredientMatchChange(lineItem, event.target.value)}
                             className="select"
                             aria-label={`Ingredient link for ${lineItem.itemName}`}
                           >
-                            <option value="auto">Auto match</option>
+                            <option value="auto">
+                              {autoMatches.get(lineItem.id)?.ingredient
+                                ? `Suggested: ${autoMatches.get(lineItem.id).ingredient.name}`
+                                : 'No automatic match'}
+                            </option>
                             <option value="__new__">Create new ingredient</option>
-                            {workspace.ingredients.map((ingredient) => (
-                              <option key={ingredient.id} value={ingredient.id}>{ingredient.name}</option>
+                            {visibleIngredientMatchOptions.map((ingredient) => (
+                              <option key={ingredient.id} value={ingredient.id}>
+                                {ingredient.name}{ingredient.category ? ` - ${ingredient.category}` : ''}
+                              </option>
                             ))}
                           </select>
+                          {matchSearchValue && visibleIngredientMatchOptions.length === 0 && (
+                            <span className="small-text">No raw ingredients match this search.</span>
+                          )}
                           {match?.ingredient ? (
                             <>
                               <span className="badge is-green">{match.ingredient.name}</span>
@@ -2083,6 +2160,11 @@ function InvoiceScanner({
                               </span>
                               {match.needsReview && <span className="badge is-yellow">Review</span>}
                               {match.source === 'manual' && <span className="badge is-blue">Manual link</span>}
+                              {match.source === 'manual' && (
+                                <span className="small-text">
+                                  "{lineItem.itemName}" will be remembered as an alias after confirmation.
+                                </span>
+                              )}
                               {!manualIngredientLinks[lineItem.id] && match.needsReview && (
                                 <button type="button" className="ghost-button compact-action" onClick={() => confirmSuggestedIngredientMatch(lineItem)}>
                                   Confirm match

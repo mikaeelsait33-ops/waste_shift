@@ -237,6 +237,8 @@ export const sanitizeItemPriceRecord = (record, fallbackKey = '') => {
     baseUnit,
     costPerBaseUnit: record.costPerBaseUnit ?? record.costPerBaseUnitExVAT ?? record.pricePerBaseUnit,
   });
+  const pricingStatus = String(record.pricingStatus || '').trim()
+    || (price > 0 || costPerBaseUnit > 0 ? 'priced' : 'needs_price');
 
   return {
     key,
@@ -257,6 +259,13 @@ export const sanitizeItemPriceRecord = (record, fallbackKey = '') => {
     invoiceQuantity: Number(record.invoiceQuantity) || null,
     invoiceUnit: String(record.invoiceUnit || '').trim(),
     invoiceLinePriceExVAT: parsePrice(record.invoiceLinePriceExVAT ?? record.linePriceExVAT ?? record.priceExVAT),
+    pricingStatus,
+    linkedRecipeKeys: Array.isArray(record.linkedRecipeKeys)
+      ? [...new Set(record.linkedRecipeKeys.map((value) => String(value || '').trim()).filter(Boolean))]
+      : [],
+    linkedRecipeNames: Array.isArray(record.linkedRecipeNames)
+      ? [...new Set(record.linkedRecipeNames.map((value) => String(value || '').trim()).filter(Boolean))]
+      : [],
   };
 };
 
@@ -303,6 +312,82 @@ export const findItemPriceRecord = (catalog, itemName) => {
   }) || null;
 };
 
+export const linkRecipeIngredientsToCatalog = ({
+  ingredients,
+  itemPriceCatalog,
+  recipeKey = '',
+  recipeName = '',
+  source = 'recipe-make-line',
+}) => {
+  const safeCatalog = sanitizeItemPriceCatalog(itemPriceCatalog);
+  const nextCatalog = { ...safeCatalog };
+  const createdRecords = [];
+  const safeRecipeKey = String(recipeKey || '').trim();
+  const safeRecipeName = String(recipeName || '').trim();
+
+  const linkedIngredients = (Array.isArray(ingredients) ? ingredients : [])
+    .map((ingredient) => {
+      const normalizedIngredient = normalizeRecipeIngredient(ingredient, ingredient?.category || 'Other');
+      const name = String(normalizedIngredient.name || '').trim();
+
+      if (!name) {
+        return null;
+      }
+
+      const requestedId = String(
+        normalizedIngredient.ingredientId
+        || normalizedIngredient.priceCatalogKey
+        || ''
+      ).trim();
+      let catalogRecord = findItemPriceRecord(nextCatalog, requestedId)
+        || findItemPriceRecord(nextCatalog, name);
+
+      if (!catalogRecord) {
+        const key = requestedId || createItemPriceKey(name);
+        const requestedUnit = normalizeItemPriceUnit(normalizedIngredient.unit || 'each');
+        const unit = UNIT_CONVERSIONS[requestedUnit] ? requestedUnit : 'each';
+
+        catalogRecord = sanitizeItemPriceRecord({
+          key,
+          ingredientId: key,
+          name,
+          category: normalizedIngredient.category || 'Other',
+          price: 0,
+          unit,
+          baseUnit: getBaseUnitForPriceUnit(unit),
+          costPerBaseUnit: 0,
+          pricingStatus: 'needs_price',
+          source,
+          updatedAt: new Date().toISOString(),
+          linkedRecipeKeys: safeRecipeKey ? [safeRecipeKey] : [],
+          linkedRecipeNames: safeRecipeName ? [safeRecipeName] : [],
+        });
+
+        if (catalogRecord) {
+          nextCatalog[catalogRecord.key] = catalogRecord;
+          createdRecords.push(catalogRecord);
+        }
+      }
+
+      if (!catalogRecord) {
+        return normalizedIngredient;
+      }
+
+      return {
+        ...normalizedIngredient,
+        ingredientId: catalogRecord.ingredientId || catalogRecord.key,
+        priceCatalogKey: catalogRecord.key,
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    ingredients: linkedIngredients,
+    itemPriceCatalog: nextCatalog,
+    createdRecords,
+  };
+};
+
 export const calculateItemPriceCost = ({
   priceRecord,
   quantity,
@@ -313,6 +398,10 @@ export const calculateItemPriceCost = ({
   const cleanRecord = sanitizeItemPriceRecord(priceRecord);
 
   if (!cleanRecord) {
+    return { canCalculate: false, cost: 0, quantityInPriceUnit: 0 };
+  }
+
+  if (cleanRecord.pricingStatus === 'needs_price' || (cleanRecord.price <= 0 && cleanRecord.costPerBaseUnit <= 0)) {
     return { canCalculate: false, cost: 0, quantityInPriceUnit: 0 };
   }
 

@@ -2328,7 +2328,7 @@ textarea.input {
 .invoice-edit-head,
 .invoice-edit-row {
   display: grid;
-  grid-template-columns: minmax(220px, 1.45fr) 84px 92px 112px 112px minmax(95px, 0.7fr) minmax(170px, 0.9fr) 92px;
+  grid-template-columns: minmax(220px, 1.35fr) 84px 92px 112px 112px minmax(95px, 0.65fr) minmax(250px, 1fr) 92px;
   gap: 8px;
   align-items: center;
   min-width: 1080px;
@@ -2373,6 +2373,11 @@ textarea.input {
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
+  min-width: 0;
+}
+
+.invoice-ingredient-match-search {
+  flex: 1 1 100%;
   min-width: 0;
 }
 

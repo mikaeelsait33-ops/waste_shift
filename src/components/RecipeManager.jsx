@@ -118,6 +118,7 @@ function RecipeManager({
   const [ingredientsOpen, setIngredientsOpen] = useState(false);
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [bulkMenuText, setBulkMenuText] = useState('');
+  const [isSavingRecipe, setIsSavingRecipe] = useState(false);
   const safeItemPriceCatalog = useMemo(() => sanitizeItemPriceCatalog(itemPriceCatalog), [itemPriceCatalog]);
   const ingredientPriceOptions = useMemo(() => (
     Object.values(safeItemPriceCatalog)
@@ -364,8 +365,12 @@ function RecipeManager({
     setMessage(statusParts.join(' '));
   };
 
-  const handleSubmitRecipe = (e) => {
+  const handleSubmitRecipe = async (e) => {
     e.preventDefault();
+
+    if (isSavingRecipe) {
+      return;
+    }
 
     const trimmedRecipeName = recipeName.trim();
     if (!trimmedRecipeName) {
@@ -424,29 +429,45 @@ function RecipeManager({
       cost: parsePriceValue(ingredient.cost) || 0,
     }, ingredient.category || 'Produce'));
 
-    if (formattedIngredients.length > 0 || safeRecipes[recipeKey]) {
-      onAddRecipe(recipeKey, {
-        name: trimmedRecipeName,
-        category: normalizeMenuCategory(recipeCategory),
-        ...(menuPrice !== null ? { menuPrice } : {}),
-        ingredients: formattedIngredients,
-      });
+    setIsSavingRecipe(true);
+    setMessage('Saving menu item and make-line guide...');
+
+    try {
+      let saveResult;
+
+      if (formattedIngredients.length > 0 || safeRecipes[recipeKey]) {
+        saveResult = await onAddRecipe?.(recipeKey, {
+          name: trimmedRecipeName,
+          category: normalizeMenuCategory(recipeCategory),
+          ...(menuPrice !== null ? { menuPrice } : {}),
+          ingredients: formattedIngredients,
+        });
+      } else {
+        saveResult = await onSaveMenuItem?.({
+          key: recipeKey,
+          name: trimmedRecipeName,
+          price: recipePrice,
+          category: normalizeMenuCategory(recipeCategory),
+        });
+      }
+
+      if (saveResult?.ok === false) {
+        setMessage(saveResult.message || 'Could not save this menu item.');
+        return;
+      }
+
+      setMessage(saveResult?.message || (editingKey ? 'Menu item updated.' : 'Menu item saved.'));
+      setEditingKey('');
+      setRecipeName('');
+      setRecipePrice('');
+      setRecipeCategory('Other');
+      setIngredients([createBlankIngredient()]);
+      setIngredientsOpen(false);
+    } catch (error) {
+      setMessage(error?.message || 'Could not save this menu item. Try again.');
+    } finally {
+      setIsSavingRecipe(false);
     }
-
-    onSaveMenuItem?.({
-      key: recipeKey,
-      name: trimmedRecipeName,
-      price: recipePrice,
-      category: normalizeMenuCategory(recipeCategory),
-    });
-
-    setMessage(editingKey ? 'Menu item updated.' : 'Menu item saved.');
-    setEditingKey('');
-    setRecipeName('');
-    setRecipePrice('');
-    setRecipeCategory('Other');
-    setIngredients([createBlankIngredient()]);
-    setIngredientsOpen(false);
   };
 
   return (
@@ -467,7 +488,7 @@ function RecipeManager({
             <div>
               <p className="eyebrow">Menu setup</p>
               <h2 className="title">{editingKey ? 'Edit Menu Item' : 'Menu Item Creator'}</h2>
-              <p className="subtitle">Save the basic item first, then add recipe costing only when needed.</p>
+              <p className="subtitle">Save the dish and make-line guide together for accurate costing and raw waste logging.</p>
             </div>
             {editingKey && (
               <button type="button" onClick={resetRecipeForm} className="ghost-button">
@@ -526,7 +547,7 @@ function RecipeManager({
               onClick={() => setIngredientsOpen((currentValue) => !currentValue)}
               className="suggestion-button"
             >
-              <span>{ingredientsOpen ? 'Hide recipe costs' : 'Add recipe costs'}</span>
+              <span>{ingredientsOpen ? 'Hide make-line guide' : 'Add make-line guide'}</span>
               <strong>{touchedIngredientCount}</strong>
             </button>
             <button
@@ -590,7 +611,7 @@ function RecipeManager({
                 </div>
               </div>
 
-              <h3 className="breakdown-title">Ingredient breakdown</h3>
+              <h3 className="breakdown-title">Make-line ingredients</h3>
               <div className="ingredient-list">
                 {ingredients.length === 0 ? (
                   <div className="muted-box">
@@ -635,7 +656,7 @@ function RecipeManager({
                           </select>
                           <input
                             type="text"
-                            placeholder="Quantity"
+                            placeholder="e.g. 10g, 50ml, 1 each"
                             value={ingredient.quantity}
                             onChange={(e) => handleIngredientChange(index, 'quantity', e.target.value)}
                             className="input"
@@ -681,13 +702,13 @@ function RecipeManager({
               </div>
 
               <button type="button" onClick={addIngredientRow} className="ghost-button" style={{ width: '100%', margin: '14px 0' }}>
-                Add ingredient
+                Add make-line ingredient
               </button>
             </>
           )}
 
-          <button type="submit" className="primary-button">
-            {editingKey ? 'Save changes' : 'Save menu item'}
+          <button type="submit" className="primary-button" disabled={isSavingRecipe} aria-busy={isSavingRecipe}>
+            {isSavingRecipe ? 'Saving...' : editingKey ? 'Save changes' : 'Save menu item'}
           </button>
 
           {message && (

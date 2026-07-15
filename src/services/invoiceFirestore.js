@@ -757,6 +757,10 @@ export const saveIngredientPriceRecord = async (priceRecord) => {
     lastPriceExVAT: latestCost,
     baseUnit,
     costPerBaseUnitExVAT: roundUnitPrice(costPerBaseUnitExVAT),
+    pricingStatus: sanitizeString(priceRecord?.pricingStatus)
+      || (latestCost > 0 || costPerBaseUnitExVAT > 0 ? 'priced' : 'needs_price'),
+    linkedRecipeKeys: uniqueStrings(priceRecord?.linkedRecipeKeys),
+    linkedRecipeNames: uniqueStrings(priceRecord?.linkedRecipeNames),
     updatedAt: serverTimestamp(),
     createdAt: priceRecord?.createdAt || serverTimestamp(),
   };

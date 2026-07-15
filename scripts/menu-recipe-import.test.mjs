@@ -90,15 +90,17 @@ const appSource = await readFile(new URL('../src/App.jsx', import.meta.url), 'ut
 const firestoreMenuSource = await readFile(new URL('../src/services/firestoreMenuItems.js', import.meta.url), 'utf8');
 const menuImportSource = await readFile(new URL('../src/components/MenuImport.jsx', import.meta.url), 'utf8');
 
-assert.match(recipeManagerSource, /Save the basic item first/);
+assert.match(recipeManagerSource, /make-line guide together/);
 assert.match(recipeManagerSource, /Bulk add menu items/);
 assert.match(recipeManagerSource, /Duplicate/);
 assert.match(recipeManagerSource, /field-grid field-grid--three/);
-assert.match(recipeManagerSource, /Add recipe costs/);
+assert.match(recipeManagerSource, /Add make-line guide/);
 assert.match(recipeManagerSource, /onSaveMenuItem\?\.\(\{/);
 assert.match(recipeManagerSource, /onCreateCatalogItems/);
 assert.match(appSource, /category: normalizedCategory/);
 assert.match(appSource, /handleCreateCatalogItems/);
+assert.match(appSource, /linkRecipeIngredientsToCatalog/);
+assert.match(appSource, /Make-line guide saved/);
 assert.match(appSource, /saveFirestoreMenuItem\(\{/);
 assert.match(firestoreMenuSource, /category: toSafeString\(category\)/);
 assert.match(menuImportSource, /Add make-line guide for exact grams/);

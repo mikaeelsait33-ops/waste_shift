@@ -11,6 +11,8 @@ import {
   calculateRecipeIngredientCost,
   createItemPriceCatalogFromInvoice,
   createItemPriceKey,
+  findItemPriceRecord,
+  linkRecipeIngredientsToCatalog,
   normalizeRecipeIngredient,
   sanitizeItemPriceCatalog,
   sanitizeItemPriceRecord,
@@ -2475,8 +2477,12 @@ function App() {
       }
     });
 
-    const records = [...candidates.values()].map((record) => existingCatalog[record.key] || record);
-    const newRecords = records.filter((record) => !existingCatalog[record.key]);
+    const records = [...candidates.values()].map((record) => (
+      findItemPriceRecord(existingCatalog, record.ingredientId)
+      || findItemPriceRecord(existingCatalog, record.name)
+      || record
+    ));
+    const newRecords = records.filter((record) => !findItemPriceRecord(existingCatalog, record.ingredientId || record.name));
 
     if (newRecords.length > 0) {
       setItemPriceCatalog((currentCatalog) => ({
@@ -3206,19 +3212,33 @@ function App() {
     }
   }, [saveApprovedMenuItems]);
 
-  const handleAddNewRecipe = (key, recipeObject) => {
+  const handleAddNewRecipe = async (key, recipeObject) => {
     const permission = requirePermission(accessProfile, 'canManageMenu', 'manage menu items and recipes');
     if (!permission.ok) {
       alert(permission.message);
-      return;
+      return { ok: false, message: permission.message };
     }
 
+    const recipeName = String(recipeObject?.name || key).trim();
+    const catalogLinks = linkRecipeIngredientsToCatalog({
+      ingredients: recipeObject?.ingredients,
+      itemPriceCatalog,
+      recipeKey: key,
+      recipeName,
+    });
+    const linkedRecipe = {
+      ...recipeObject,
+      name: recipeName,
+      ingredients: catalogLinks.ingredients,
+    };
+
+    setItemPriceCatalog(catalogLinks.itemPriceCatalog);
     setRecipes(prev => ({
       ...prev,
-      [key]: recipeObject
+      [key]: linkedRecipe,
     }));
 
-    const components = buildRecipeIngredientBreakdown(recipeObject, 1, itemPriceCatalog)
+    const components = buildRecipeIngredientBreakdown(linkedRecipe, 1, catalogLinks.itemPriceCatalog)
       .map((ingredient) => ({
         key: ingredient.componentKey,
         ingredientId: ingredient.ingredientId || ingredient.priceCatalogKey || '',
@@ -3233,60 +3253,111 @@ function App() {
         priceCatalogKey: ingredient.priceCatalogKey || ingredient.ingredientId || '',
       }));
     const totalCost = components.reduce((sum, component) => sum + component.cost, 0);
-
-    saveFirestoreMenuItem({
+    const nextItem = {
       key,
-      name: recipeObject?.name || key,
-      category: recipeObject?.category || '',
-      menuPrice: recipeObject?.menuPrice,
-      totalCost,
+      firestoreId: key,
+      name: recipeName,
+      category: linkedRecipe.category || '',
+      menuPrice: linkedRecipe.menuPrice ?? null,
+      totalCost: roundCurrency(totalCost),
       components,
-    })
-      .then((result) => {
-        if (result?.skipped) {
-          return;
-        }
+    };
 
-        const nextItem = {
-          key,
-          firestoreId: key,
-          name: recipeObject?.name || key,
-          category: recipeObject?.category || '',
-          menuPrice: recipeObject?.menuPrice ?? null,
+    setCustomMenuItems((prevItems) => {
+      const basicItem = {
+        key,
+        name: recipeName,
+        category: linkedRecipe.category || '',
+        menuPrice: linkedRecipe.menuPrice ?? null,
+      };
+      const existingIndex = prevItems.findIndex((item) => item.key === key);
+
+      if (existingIndex === -1) {
+        return [...prevItems, basicItem];
+      }
+
+      return prevItems.map((item, index) => (index === existingIndex ? { ...item, ...basicItem } : item));
+    });
+    setFirestoreMenuItems((prevItems) => {
+      const existingIndex = prevItems.findIndex((item) => item.key === key);
+
+      if (existingIndex === -1) {
+        return [...prevItems, nextItem].sort((a, b) => a.name.localeCompare(b.name));
+      }
+
+      return prevItems.map((item, index) => (index === existingIndex ? { ...item, ...nextItem } : item));
+    });
+
+    const saveResults = await Promise.allSettled([
+      ...catalogLinks.createdRecords.map((record) => saveIngredientPriceRecord(record)),
+      saveFirestoreMenuItem({
+        key,
+        name: recipeName,
+        category: linkedRecipe.category || '',
+        menuPrice: linkedRecipe.menuPrice,
+        totalCost,
+        components,
+      }),
+      saveFirestoreRecipe({
+        key,
+        name: recipeName,
+        category: linkedRecipe.category || '',
+        menuPrice: linkedRecipe.menuPrice,
+        ingredients: components,
+        instructions: linkedRecipe.instructions || '',
+      }),
+    ]);
+    const failedSaves = saveResults.filter((result) => result.status === 'rejected');
+    const ingredientCount = catalogLinks.createdRecords.length;
+    const ingredientMessage = ingredientCount > 0
+      ? ` ${ingredientCount} new raw ingredient${ingredientCount === 1 ? '' : 's'} added.`
+      : '';
+
+    setAuditLog((prevLog) => [
+      createAuditLogEntry({
+        action: 'Make-line guide saved',
+        user: activeStaffMember?.name || 'System',
+        relatedItem: recipeName,
+        afterValue: {
+          ingredientCount: components.length,
+          rawIngredientsCreated: ingredientCount,
           totalCost: roundCurrency(totalCost),
-          components,
-        };
-        const nextMenuItemCount = firestoreMenuItems.some((item) => item.key === key)
-          ? firestoreMenuItems.length
-          : firestoreMenuItems.length + 1;
+        },
+      }),
+      ...prevLog,
+    ].slice(0, 500));
 
-        setFirestoreMenuItems(prevItems => {
-          const existingIndex = prevItems.findIndex((item) => item.key === key);
+    if (failedSaves.length > 0) {
+      const firstError = failedSaves[0].reason;
+      console.warn('Could not fully sync recipe to Firestore.', firstError);
+      setFirebaseSync((prev) => ({
+        ...prev,
+        status: 'error',
+        message: `${firstError?.message || 'Could not fully sync this recipe.'} Local recipe is still saved.`,
+      }));
+      return {
+        ok: true,
+        syncWarning: true,
+        createdIngredientCount: ingredientCount,
+        message: `Menu item saved on this device.${ingredientMessage} Firebase sync needs retry.`,
+      };
+    }
 
-          if (existingIndex === -1) {
-            return [...prevItems, nextItem].sort((a, b) => a.name.localeCompare(b.name));
-          }
+    setFirebaseSync((prev) => ({
+      ...prev,
+      status: 'synced',
+      message: `${recipeName} and its make-line guide saved to Firebase.`,
+      lastSavedAt: new Date().toISOString(),
+      menuItemCount: firestoreMenuItems.some((item) => item.key === key)
+        ? firestoreMenuItems.length
+        : firestoreMenuItems.length + 1,
+    }));
 
-          return prevItems.map((item, index) => (
-            index === existingIndex ? { ...item, ...nextItem } : item
-          ));
-        });
-        setFirebaseSync(prev => ({
-          ...prev,
-          status: 'synced',
-          message: `${nextItem.name} saved to Firebase menu items.`,
-          lastSavedAt: new Date().toISOString(),
-          menuItemCount: nextMenuItemCount,
-        }));
-      })
-      .catch((error) => {
-        console.warn('Could not save menu item to Firestore.', error);
-        setFirebaseSync(prev => ({
-          ...prev,
-          status: 'error',
-          message: `${error?.message || 'Could not save menu item to Firebase.'} Local recipe is still saved.`,
-        }));
-      });
+    return {
+      ok: true,
+      createdIngredientCount: ingredientCount,
+      message: `Menu item and make-line guide saved.${ingredientMessage}`,
+    };
   };
 
   const handleUpsertMenuItem = ({ key: requestedKey, name, price, category = '' }) => {

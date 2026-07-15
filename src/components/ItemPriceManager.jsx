@@ -30,6 +30,8 @@ function ItemPriceManager({
       ))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [safeCatalog, searchValue]);
+  const pricedCount = priceRows.filter((record) => record.pricingStatus !== 'needs_price').length;
+  const needsPriceCount = priceRows.length - pricedCount;
 
   const resetForm = () => {
     setName('');
@@ -94,7 +96,10 @@ function ItemPriceManager({
             <h2 className="title">Raw Ingredient Library</h2>
             <p className="subtitle">Set raw ingredient and drink prices from invoices or manual entries. These records do not create menu recipes.</p>
           </div>
-          <span className="badge">{priceRows.length} priced</span>
+          <div className="manager-row">
+            <span className="badge">{pricedCount} priced</span>
+            {needsPriceCount > 0 && <span className="badge is-yellow">{needsPriceCount} need price</span>}
+          </div>
         </div>
 
         <form onSubmit={handleSubmit}>
@@ -198,8 +203,12 @@ function ItemPriceManager({
                 <div>
                   <strong>{record.name}</strong>
                   <span className="badge">{record.category}</span>
-                  <span className="badge">R{Number(record.price || 0).toFixed(2)} / {record.unit}</span>
-                  {record.baseUnit && record.baseUnit !== record.unit && (
+                  {record.pricingStatus === 'needs_price' ? (
+                    <span className="badge is-yellow">Needs price</span>
+                  ) : (
+                    <span className="badge">R{Number(record.price || 0).toFixed(2)} / {record.unit}</span>
+                  )}
+                  {record.pricingStatus !== 'needs_price' && record.baseUnit && record.baseUnit !== record.unit && (
                     <span className="badge is-green">
                       R{Number(record.costPerBaseUnit || 0).toFixed(4)} / {record.baseUnit}
                     </span>

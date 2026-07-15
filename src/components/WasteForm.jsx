@@ -313,6 +313,20 @@ function WasteForm({
     measuredUnit: unit === 'portion' ? portionUnit : unit,
   });
   const canEditManualCost = Boolean(accessProfile?.canViewFinancials || accessProfile?.canManageMenu);
+  const handleIngredientNameChange = (nextName) => {
+    setName(nextName);
+    const matchedRecord = findItemPriceRecord(safeItemPriceCatalog, nextName);
+
+    if (!matchedRecord || createWasteItemKey(matchedRecord.name) !== createWasteItemKey(nextName)) {
+      return;
+    }
+
+    setCategory(matchedRecord.category || 'Produce');
+    setUnit(matchedRecord.baseUnit || matchedRecord.unit || 'each');
+    if (matchedRecord.pricingStatus === 'needs_price') {
+      setCost('');
+    }
+  };
   const recentSingleItemProfiles = useMemo(() => {
     const seenNames = new Set();
 
@@ -662,7 +676,7 @@ function WasteForm({
       return;
     }
 
-    if (!canEditManualCost) {
+    if (!canEditManualCost || activeItemPriceRecord?.pricingStatus === 'needs_price') {
       setCost('');
     }
   }, [activeItemPriceRecord, activePriceCalculation.canCalculate, activePriceCalculation.cost, canEditManualCost, formType]);
@@ -802,11 +816,6 @@ function WasteForm({
 
     if (formType === 'single' && !name.trim()) {
       setFormMessage('Enter the ingredient or stock item before saving.');
-      return;
-    }
-
-    if (formType === 'single' && cost === '' && canEditManualCost) {
-      setFormMessage('Add an item price in Settings or enter the total cost loss.');
       return;
     }
 
@@ -1075,7 +1084,7 @@ function WasteForm({
                 id="food-name"
                 type="text"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => handleIngredientNameChange(e.target.value)}
                 placeholder="e.g. Tomato, cheddar block, coffee beans"
                 list="known-waste-items"
                 className="input"

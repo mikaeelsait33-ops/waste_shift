@@ -4,6 +4,7 @@ import {
   buildInvoiceIngredientPricing,
   convertQuantityToBaseUnit,
   matchMasterIngredient,
+  mergeMasterIngredientSources,
   normalizeMasterIngredientName,
   normalizeMasterIngredientRecord,
 } from '../src/utils/masterIngredients.js';
@@ -36,6 +37,28 @@ assert.equal(match.needsReview, false);
 match = matchMasterIngredient('Breakfast garnish', [macon]);
 assert.equal(match.ingredient, null);
 assert.equal(match.needsReview, true);
+
+const mergedRocketIngredients = mergeMasterIngredientSources(
+  [{
+    id: 'rocket',
+    name: 'Rocket',
+    category: 'Produce',
+    baseUnit: 'g',
+    latestCostPerBaseUnit: 0,
+  }],
+  [{
+    id: 'rocket',
+    name: 'Rocket',
+    category: 'Produce',
+    baseUnit: 'g',
+    aliases: ['RCKT P/P 1KG'],
+    latestCostPerBaseUnit: 0.1179,
+  }]
+);
+assert.equal(mergedRocketIngredients.length, 1);
+assert.equal(mergedRocketIngredients[0].latestCostPerBaseUnit, 0.1179);
+assert.equal(matchMasterIngredient('RCKT P/P 1KG', mergedRocketIngredients).ingredient.id, 'rocket');
+assert.equal(matchMasterIngredient('RCKT P/P 1KG', mergedRocketIngredients).matchType, 'exact_alias');
 
 assert.deepEqual(
   convertQuantityToBaseUnit({ quantity: 2, unit: 'kg' }),

@@ -11,6 +11,7 @@ import {
   calculateRecipeIngredientCost,
   createItemPriceCatalogFromInvoice,
   findItemPriceRecord,
+  linkRecipeIngredientsToCatalog,
   normalizeRecipeIngredient,
   parseIngredientQuantity,
   sanitizeItemPriceCatalog,
@@ -159,6 +160,31 @@ assert.equal(
   }).canCalculate,
   false
 );
+
+const makeLineCatalogResult = linkRecipeIngredientsToCatalog({
+  recipeKey: 'rocket_salad',
+  recipeName: 'Rocket Salad',
+  ingredients: [
+    { name: 'Rocket', quantity: '10g', category: 'Produce' },
+    { name: 'Pickled Onion', quantity: '15g', category: 'Produce' },
+  ],
+  itemPriceCatalog: sanitizeItemPriceCatalog({
+    rocket: { name: 'Rocket', price: 117.9, unit: 'kg', category: 'Produce', source: 'invoice' },
+  }),
+});
+assert.equal(makeLineCatalogResult.createdRecords.length, 1);
+assert.equal(makeLineCatalogResult.itemPriceCatalog.rocket.price, 117.9);
+assert.equal(makeLineCatalogResult.itemPriceCatalog.rocket.source, 'invoice');
+assert.equal(makeLineCatalogResult.itemPriceCatalog.pickled_onion.unit, 'g');
+assert.equal(makeLineCatalogResult.itemPriceCatalog.pickled_onion.pricingStatus, 'needs_price');
+assert.equal(makeLineCatalogResult.ingredients[0].ingredientId, 'rocket');
+assert.equal(makeLineCatalogResult.ingredients[1].priceCatalogKey, 'pickled_onion');
+assert.equal(calculateItemPriceCost({
+  priceRecord: makeLineCatalogResult.itemPriceCatalog.pickled_onion,
+  quantity: 15,
+  unit: 'g',
+}).canCalculate, false);
+
 assert.deepEqual(parseIngredientQuantity('10g'), { quantity: 10, unit: 'g' });
 assert.deepEqual(parseIngredientQuantity('1/2 kg'), { quantity: 0.5, unit: 'kg' });
 assert.deepEqual(parseIngredientQuantity('1 punnet'), { quantity: 1, unit: 'punnet' });

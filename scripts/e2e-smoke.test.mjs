@@ -67,5 +67,8 @@ assert.doesNotMatch(apiHeaders, /wasteShiftSyncAccessKey/);
 assert.match(managerSession, /\/api\/manager-session/);
 assert.match(invoiceScanner, /Load more invoice lines/);
 assert.match(invoiceScanner, /Cost review queue/);
+assert.match(invoiceScanner, /Match to raw ingredient/);
+assert.match(invoiceScanner, /remember this supplier name for future scans/);
+assert.match(invoiceScanner, /mergeMasterIngredientSources/);
 
 console.log('E2E smoke checks passed');
