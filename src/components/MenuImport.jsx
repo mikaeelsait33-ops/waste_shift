@@ -22,7 +22,7 @@ import {
 const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
   reader.onload = () => resolve(String(reader.result || ''));
-  reader.onerror = () => reject(new Error('Could not prepare this menu file.'));
+  reader.onerror = () => reject(new Error('Could not prepare this make-line guide file.'));
   reader.readAsDataURL(file);
 });
 
@@ -33,13 +33,9 @@ const createFilePayload = async (file) => {
   return {
     name: file.name,
     mimeType: file.type || 'application/octet-stream',
-    data: base64,
+    base64,
   };
 };
-
-const shouldTryGeminiVisionFallback = (response) => (
-  response?.status === 422 || Number(response?.status) >= 500
-);
 
 const normalizeDishesFromPayload = (payload) => {
   if (Array.isArray(payload?.dishes)) {
@@ -61,7 +57,7 @@ const normalizeDishesFromPayload = (payload) => {
       sellingPrice: item.sellingPrice,
       instructions: item.description || '',
       confidence: item.confidence,
-      warnings: item.needsReview ? ['Review OCR menu item before saving.'] : [],
+      warnings: item.needsReview ? ['Review imported make-line item before saving.'] : [],
       ingredients: (item.possibleIngredients || []).map((ingredient) => ({
         name: ingredient.ingredientName,
         quantity: ingredient.quantity || 1,
@@ -84,12 +80,9 @@ function MenuImport({
   compact = false,
 }) {
   const fileInputRef = useRef(null);
-  const makeLineFileInputRef = useRef(null);
   const [inputMode, setInputMode] = useState('text');
   const [rawText, setRawText] = useState('');
-  const [makeLineGuideText, setMakeLineGuideText] = useState('');
-  const [makeLineGuideFile, setMakeLineGuideFile] = useState(null);
-  const [sourceName, setSourceName] = useState('Pasted menu');
+  const [sourceName, setSourceName] = useState('Pasted make-line guide');
   const [reviewDishes, setReviewDishes] = useState([]);
   const [message, setMessage] = useState('');
   const [isExtracting, setIsExtracting] = useState(false);
@@ -100,14 +93,6 @@ function MenuImport({
   const canUseAiImports = !accessProfile || Boolean(accessProfile?.canUseAiImports);
   const canManageMenu = !accessProfile || Boolean(accessProfile?.canManageMenu);
   const operatorName = accessProfile?.operatorName || activeStaffMember?.name || 'Current operator';
-
-  const clearMakeLineGuide = () => {
-    setMakeLineGuideText('');
-    setMakeLineGuideFile(null);
-    if (makeLineFileInputRef.current) {
-      makeLineFileInputRef.current.value = '';
-    }
-  };
 
   const refreshReview = (dishes) => {
     const existingNames = new Set(existingMenuItems.map((item) => String(item?.name || '').trim().toLowerCase()));
@@ -122,24 +107,23 @@ function MenuImport({
     setReviewDishes(reviewed);
     setMessage(reviewed.length > 0
       ? `${reviewed.length} dish${reviewed.length === 1 ? '' : 'es'} ready for review.`
-      : 'No dishes were found. Try clearer text or a better menu photo.');
+      : 'No dishes were found. Try clearer make-line guide text or a better guide photo.');
   };
 
-  const requestGeminiMenuParse = async (text, nextSourceName, file = null, guideFile = null) => {
+  const requestGeminiMakeLineGuideParse = async ({ text = '', nextSourceName, file = null }) => {
     const response = await fetch('/api/gemini-menu', {
       method: 'POST',
       headers: await getAutomaticManagerApiHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({
         text,
         file,
-        makeLineGuide: makeLineGuideText.trim(),
-        guideFile,
+        sourceType: 'make-line-guide',
       }),
     });
     const payload = await response.json().catch(() => ({}));
 
     if (!response.ok || payload.ok === false) {
-      throw new Error(getManagerApiErrorMessage(payload, 'Gemini could not parse this menu.'));
+      throw new Error(getManagerApiErrorMessage(payload, 'Gemini could not parse this make-line guide.'));
     }
 
     setSourceName(nextSourceName);
@@ -155,20 +139,20 @@ function MenuImport({
     }
 
     if (!text) {
-      setMessage('Paste the menu text first.');
+      setMessage('Paste the make-line guide text first.');
       return;
     }
 
     setIsExtracting(true);
-    setMessage(makeLineGuideText.trim() || makeLineGuideFile
-      ? 'Matching the dish to its make-line guide...'
-      : 'Asking Gemini to extract dishes and ingredients...');
+    setMessage('Reading make-line guide with Gemini...');
 
     try {
-      const guideFile = makeLineGuideFile ? await createFilePayload(makeLineGuideFile) : null;
-      await requestGeminiMenuParse(text, sourceName || 'Pasted menu', null, guideFile);
+      await requestGeminiMakeLineGuideParse({
+        text,
+        nextSourceName: sourceName || 'Pasted make-line guide',
+      });
     } catch (error) {
-      setMessage(error?.message || 'Menu text import failed.');
+      setMessage(error?.message || 'Make-line guide text import failed.');
     } finally {
       setIsExtracting(false);
     }
@@ -176,60 +160,23 @@ function MenuImport({
 
   const extractFromFile = async (file) => {
     if (!canUseAiImports) {
-      setMessage(`${operatorName} cannot upload menu files for Gemini/OCR. Use a manager account.`);
+      setMessage(`${operatorName} cannot upload make-line guides for Gemini. Use a manager account.`);
       return;
     }
 
     setIsExtracting(true);
-    setMessage('Reading menu file with OCR, then structuring recipes with Gemini...');
+    setMessage('Reading make-line guide with Gemini...');
 
     try {
       const filePayload = await createFilePayload(file);
-      const guideFile = makeLineGuideFile ? await createFilePayload(makeLineGuideFile) : null;
-      const ocrResponse = await fetch('/api/scan-document', {
-        method: 'POST',
-        headers: await getAutomaticManagerApiHeaders({ 'content-type': 'application/json' }),
-        body: JSON.stringify({
-          documentType: 'menu',
-          preferredEngine: 2,
-          file: filePayload,
-        }),
+      await requestGeminiMakeLineGuideParse({
+        text: '',
+        nextSourceName: file.name,
+        file: filePayload,
       });
-      const ocrPayload = await ocrResponse.json().catch(() => ({}));
-
-      if (!ocrResponse.ok || ocrPayload.ok === false || ocrPayload.success === false) {
-        if (!shouldTryGeminiVisionFallback(ocrResponse)) {
-          throw new Error(getManagerApiErrorMessage(ocrPayload, 'OCR could not read this menu file.'));
-        }
-
-        setMessage('OCR could not read this file. Asking Gemini to inspect the original file...');
-        await requestGeminiMenuParse('', file.name, {
-          name: filePayload.name,
-          mimeType: filePayload.mimeType,
-          base64: filePayload.data,
-        }, guideFile);
-        setMessage('Gemini read the menu and make-line guide. Review the exact portions before saving.');
-        return;
-      }
-
-      const ocrText = String(ocrPayload?.ocr?.rawText || '').trim();
-
-      if (ocrText) {
-        setRawText(ocrText);
-        await requestGeminiMenuParse(ocrText, file.name, null, guideFile);
-      } else if (makeLineGuideText.trim() || guideFile) {
-        setMessage('OCR found limited text. Asking Gemini to compare the original menu and make-line guide...');
-        await requestGeminiMenuParse('', file.name, {
-          name: filePayload.name,
-          mimeType: filePayload.mimeType,
-          base64: filePayload.data,
-        }, guideFile);
-      } else {
-        setSourceName(file.name);
-        refreshReview(normalizeDishesFromPayload(ocrPayload));
-      }
+      setMessage('Gemini read the make-line guide. Review exact portions before saving.');
     } catch (error) {
-      setMessage(`${error?.message || 'Menu OCR failed.'} Try pasting the menu text instead.`);
+      setMessage(`${error?.message || 'Make-line guide import failed.'} Try a clearer guide photo or paste the guide text.`);
     } finally {
       setIsExtracting(false);
       if (fileInputRef.current) {
@@ -361,7 +308,7 @@ function MenuImport({
     try {
       const items = buildMenuImportSaveItems(reviewDishes, safeCatalog);
       const historyRecord = createImportHistoryRecord({
-        importType: inputMode === 'file' ? 'menu-recipe-ocr-gemini' : 'menu-recipe-gemini',
+        importType: inputMode === 'file' ? 'make-line-guide-file-gemini' : 'make-line-guide-text-gemini',
         sourceName,
         importedBy: activeStaffMember?.name || 'Manager',
         reviewedItems: reviewDishes.map((dish) => ({
@@ -382,7 +329,6 @@ function MenuImport({
 
       setReviewDishes([]);
       setRawText('');
-      clearMakeLineGuide();
       setMessage(result.message || `${items.length} recipe${items.length === 1 ? '' : 's'} saved.`);
     } catch (error) {
       setMessage(error?.message || 'Could not save reviewed recipes.');
@@ -464,7 +410,7 @@ function MenuImport({
       }));
       const items = buildMenuImportSaveItems(linkedDishes, nextCatalog);
       const historyRecord = createImportHistoryRecord({
-        importType: inputMode === 'file' ? 'menu-recipe-ocr-gemini' : 'menu-recipe-gemini',
+        importType: inputMode === 'file' ? 'make-line-guide-file-gemini' : 'make-line-guide-text-gemini',
         sourceName,
         importedBy: activeStaffMember?.name || 'Manager',
         reviewedItems: linkedDishes.map((dish) => ({ ...dish, approved: true })),
@@ -479,7 +425,6 @@ function MenuImport({
       setReviewDishes(smartImportPlan.reviewOnlyDishes);
       if (smartImportPlan.reviewOnlyDishes.length === 0) {
         setRawText('');
-        clearMakeLineGuide();
       }
 
       const ingredientMessage = smartImportPlan.unmatchedIngredients.length > 0
@@ -503,14 +448,14 @@ function MenuImport({
       <div className={compact ? '' : 'panel-body'}>
         <div className="section-header">
           <div>
-            <p className="eyebrow">Menu import</p>
+            <p className="eyebrow">Make-line guide</p>
             <h2 className="title">Import Recipes With Gemini</h2>
-            <p className="subtitle">Import the sellable dish, then add its make-line guide so recipe costs use the real grams and millilitres.</p>
+            <p className="subtitle">Upload or paste a make-line guide. Gemini extracts dishes and exact portions from the guide only.</p>
           </div>
           <span className="badge">{saveableCount} ready</span>
         </div>
 
-        <div className="segmented-control" aria-label="Menu import input mode">
+        <div className="segmented-control" aria-label="Make-line guide input mode">
           <button type="button" className={`segment-button${inputMode === 'text' ? ' is-active' : ''}`} onClick={() => setInputMode('text')}>
             Paste text
           </button>
@@ -521,24 +466,24 @@ function MenuImport({
 
         {inputMode === 'text' ? (
           <div className="field">
-            <label htmlFor="menu-import-recipe-text">Menu or dish text</label>
+            <label htmlFor="menu-import-recipe-text">Make-line guide text</label>
             <textarea
               id="menu-import-recipe-text"
               value={rawText}
               onChange={(event) => setRawText(event.target.value)}
-              placeholder="Paste a menu or dish name, for example: Salmon Benedict R145."
+              placeholder="Example: Salmon Benedict - 120g salmon, 1 English muffin, 35ml hollandaise, 2 poached eggs."
               className="input note-textarea"
               rows={compact ? 4 : 7}
             />
             <button type="button" className="primary-button" onClick={extractFromText} disabled={isExtracting || isSaving || !canUseAiImports}>
-              {isExtracting ? 'Extracting...' : (makeLineGuideText.trim() || makeLineGuideFile ? 'Build recipes with guide' : 'Extract recipes')}
+              {isExtracting ? 'Extracting...' : 'Build recipes'}
             </button>
           </div>
         ) : (
           <div className="notice-panel">
             <div>
-              <h3 className="breakdown-title">Upload menu or dish scan</h3>
-              <p className="small-text">PDF, JPG, PNG, or WebP. Add the separate make-line guide below when you need exact portions.</p>
+              <h3 className="breakdown-title">Upload make-line guide</h3>
+              <p className="small-text">PDF, JPG, PNG, or WebP. Use the guide or prep sheet that lists actual portions.</p>
             </div>
             <button type="button" className="primary-button" onClick={() => fileInputRef.current?.click()} disabled={isExtracting || isSaving || !canUseAiImports}>
               {isExtracting ? 'Reading...' : 'Choose file'}
@@ -559,47 +504,9 @@ function MenuImport({
           </div>
         )}
 
-        <details className="notice-panel">
-          <summary className="breakdown-title">Add make-line guide for exact grams</summary>
-          <div className="field" style={{ marginTop: 14 }}>
-            <label htmlFor="menu-import-make-line-text">Make-line guide text</label>
-            <textarea
-              id="menu-import-make-line-text"
-              value={makeLineGuideText}
-              onChange={(event) => setMakeLineGuideText(event.target.value)}
-              placeholder="Example: Salmon Benedict - 120g salmon, 1 English muffin, 35ml hollandaise, 2 poached eggs."
-              className="input note-textarea"
-              rows={compact ? 3 : 5}
-            />
-          </div>
-          <div className="manager-row">
-            <button type="button" className="ghost-button" onClick={() => makeLineFileInputRef.current?.click()} disabled={isExtracting || isSaving || !canUseAiImports}>
-              {makeLineGuideFile ? 'Replace guide file' : 'Upload guide photo/PDF'}
-            </button>
-            {makeLineGuideFile && (
-              <>
-                <span className="badge is-green">{makeLineGuideFile.name}</span>
-                <button type="button" className="ghost-button compact-action" onClick={clearMakeLineGuide} disabled={isExtracting || isSaving}>
-                  Clear
-                </button>
-              </>
-            )}
-          </div>
-          <input
-            ref={makeLineFileInputRef}
-            type="file"
-            accept="application/pdf,image/png,image/jpeg,image/webp"
-            onChange={(event) => {
-              const file = event.target.files?.[0] || null;
-              setMakeLineGuideFile(file);
-            }}
-            style={{ display: 'none' }}
-          />
-        </details>
-
         {!canUseAiImports && (
           <div className="notice-panel notice-panel--warning">
-            This account does not have manager access for Gemini/OCR menu import.
+            This account does not have manager access for Gemini make-line guide import.
           </div>
         )}
 

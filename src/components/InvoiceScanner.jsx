@@ -151,6 +151,149 @@ const groupInvoicesByDate = (invoices) => {
   ));
 };
 
+const getInvoiceStatusFromStockPosting = (stockPostingStatus) => {
+  const status = String(stockPostingStatus || '');
+
+  if (status === 'prices_only') return 'prices_only';
+  if (status === 'historical') return 'historical';
+  if (status === 'pending_stock_post') return 'pending_stock_post';
+  if (status === 'historical_posted') return 'historical_stock';
+  if (status === 'posted') return 'posted_to_stock';
+  return 'confirmed';
+};
+
+const createConfirmedInvoiceRecord = ({
+  invoiceId,
+  invoiceNumber,
+  supplierName,
+  invoiceDate,
+  lineItems,
+  ingredientRows,
+  totals,
+  extractedTotals,
+  vatRate,
+  vatMode,
+  stockPostingStatus,
+  stockMovementIds = [],
+  scannerMetadata,
+  confirmedBy,
+}) => {
+  const safeInvoiceId = String(invoiceId || createRecordId('invoice')).trim();
+  const safeSupplierName = String(supplierName || '').trim() || 'Unknown supplier';
+  const safeInvoiceDate = String(invoiceDate || '').trim() || new Date().toISOString().slice(0, 10);
+  const safeInvoiceNumber = String(invoiceNumber || '').trim() || safeInvoiceId;
+  const timestamp = new Date().toISOString();
+  const totalExVAT = roundMoney(totals?.totalExVAT);
+  const totalVAT = roundMoney(totals?.totalVAT);
+  const totalIncVAT = roundMoney(totals?.totalIncVAT);
+
+  return {
+    id: safeInvoiceId,
+    invoiceId: safeInvoiceId,
+    invoiceDate: safeInvoiceDate,
+    receivedDate: safeInvoiceDate,
+    date: safeInvoiceDate,
+    invoiceNumber: safeInvoiceNumber,
+    supplier: safeSupplierName,
+    supplierId: createInvoiceKey(safeSupplierName) || 'unknown_supplier',
+    totalExVAT,
+    subtotal: totalExVAT,
+    totalVAT,
+    vat: totalVAT,
+    totalIncVAT,
+    total: totalIncVAT,
+    extractedTotals: extractedTotals || null,
+    totalsSource: 'reviewed-line-items',
+    lineItems: (Array.isArray(lineItems) ? lineItems : []).map((item) => ({ ...item })),
+    ingredientRows: (Array.isArray(ingredientRows) ? ingredientRows : []).map((row) => ({ ...row })),
+    scannedAt: timestamp,
+    status: getInvoiceStatusFromStockPosting(stockPostingStatus),
+    confirmedAt: timestamp,
+    confirmedBy: String(confirmedBy || '').trim() || 'WasteShift user',
+    stockPostingStatus,
+    stockMovementIds: Array.isArray(stockMovementIds) ? stockMovementIds : [],
+    vatRate: Number(vatRate) || DEFAULT_VAT_RATE,
+    vatMode: String(vatMode || '').trim() || 'inclusive',
+    scannerMetadata: scannerMetadata && typeof scannerMetadata === 'object' ? { ...scannerMetadata } : null,
+  };
+};
+
+const mergeConfirmedInvoiceRecord = (invoices, invoiceRecord) => (
+  [
+    invoiceRecord,
+    ...(Array.isArray(invoices) ? invoices : []).filter((invoice) => (invoice.id || invoice.invoiceId) !== invoiceRecord.id),
+  ].sort((a, b) => (
+    new Date(b.invoiceDate || b.scannedAt || 0).getTime() - new Date(a.invoiceDate || a.scannedAt || 0).getTime()
+  ))
+);
+
+const mergeSupplierRecord = (suppliers, invoiceRecord, ingredientRows, includeSpend) => {
+  const supplierId = invoiceRecord.supplierId || createInvoiceKey(invoiceRecord.supplier) || 'unknown_supplier';
+  const supplierName = getInvoiceSupplierName(invoiceRecord);
+  const existingSupplier = (Array.isArray(suppliers) ? suppliers : []).find((supplier) => (
+    String(supplier?.id || '').trim() === supplierId
+    || createInvoiceKey(supplier?.name || supplier?.supplier || '') === supplierId
+  ));
+  const ingredientCount = new Set(
+    (Array.isArray(ingredientRows) ? ingredientRows : [])
+      .map((row) => row?.ingredientId)
+      .filter(Boolean)
+  ).size;
+  const currentLastInvoiceDate = String(existingSupplier?.lastInvoiceDate || '').slice(0, 10);
+  const nextLastInvoiceDate = !currentLastInvoiceDate || new Date(invoiceRecord.invoiceDate || 0) > new Date(currentLastInvoiceDate || 0)
+    ? invoiceRecord.invoiceDate
+    : currentLastInvoiceDate;
+  const nextSupplier = {
+    ...(existingSupplier || {}),
+    id: supplierId,
+    name: supplierName,
+    lastInvoiceDate: nextLastInvoiceDate,
+    totalSpend: roundMoney(Number(existingSupplier?.totalSpend || 0) + (includeSpend ? Number(invoiceRecord.totalExVAT || 0) : 0)),
+    ingredientCount: Math.max(Number(existingSupplier?.ingredientCount || 0), ingredientCount),
+  };
+
+  return [
+    nextSupplier,
+    ...(Array.isArray(suppliers) ? suppliers : []).filter((supplier) => (
+      String(supplier?.id || '').trim() !== supplierId
+      && createInvoiceKey(supplier?.name || supplier?.supplier || '') !== supplierId
+    )),
+  ].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+};
+
+const mergeStockLevelUpdates = (stockLevels, updates, invoiceId) => {
+  if (!Array.isArray(updates) || updates.length === 0) {
+    return Array.isArray(stockLevels) ? stockLevels : [];
+  }
+
+  const stockByIngredientId = new Map(
+    (Array.isArray(stockLevels) ? stockLevels : []).map((stockLevel) => [
+      stockLevel.ingredientId || stockLevel.id,
+      stockLevel,
+    ])
+  );
+
+  updates.forEach((update) => {
+    const ingredientId = String(update?.ingredientId || '').trim();
+    if (!ingredientId) {
+      return;
+    }
+
+    const existingStock = stockByIngredientId.get(ingredientId) || {};
+    stockByIngredientId.set(ingredientId, {
+      ...existingStock,
+      id: ingredientId,
+      ingredientId,
+      currentQty: Number(update.currentQty) || 0,
+      unit: update.unit || existingStock.unit || 'each',
+      lastInvoiceId: invoiceId,
+      status: update.status || existingStock.status || 'ok',
+    });
+  });
+
+  return [...stockByIngredientId.values()];
+};
+
 const createLocalMenuItems = (recipes, menuItems) => (
   (Array.isArray(menuItems) ? menuItems : []).map((menuItem) => {
     const recipe = recipes?.[menuItem.key] || {};
@@ -425,6 +568,7 @@ function InvoiceScanner({
   const [visibleStockMovementLimit, setVisibleStockMovementLimit] = useState(DEFAULT_PAGE_SIZE);
   const [deletingIngredientId, setDeletingIngredientId] = useState('');
   const [deletingInvoiceId, setDeletingInvoiceId] = useState('');
+  const [postingInvoiceId, setPostingInvoiceId] = useState('');
   const [loadingOlderInvoices, setLoadingOlderInvoices] = useState(false);
   const [loadingOlderStockMovements, setLoadingOlderStockMovements] = useState(false);
 
@@ -879,6 +1023,141 @@ function InvoiceScanner({
     const data = await loadInvoiceWorkspaceData();
     setWorkspace(data);
     onInvoiceSaved?.();
+  };
+
+  const refreshWorkspaceInBackground = () => {
+    refreshWorkspace().catch((error) => {
+      console.warn('Could not refresh invoice workspace.', error);
+    });
+  };
+
+  const applyConfirmedInvoiceToWorkspace = (invoiceRecord, stockLevelUpdates = []) => {
+    if (!invoiceRecord?.id) {
+      return;
+    }
+
+    setWorkspace((currentWorkspace) => {
+      const invoiceAlreadyLoaded = currentWorkspace.invoices.some((invoice) => (
+        (invoice.id || invoice.invoiceId) === invoiceRecord.id
+      ));
+
+      return {
+        ...currentWorkspace,
+        invoices: mergeConfirmedInvoiceRecord(currentWorkspace.invoices, invoiceRecord),
+        suppliers: mergeSupplierRecord(
+          currentWorkspace.suppliers,
+          invoiceRecord,
+          invoiceRecord.ingredientRows,
+          !invoiceAlreadyLoaded
+        ),
+        stockLevels: mergeStockLevelUpdates(currentWorkspace.stockLevels, stockLevelUpdates, invoiceRecord.id),
+      };
+    });
+  };
+
+  const postInvoiceStock = async ({ invoiceRecord, postingMode = 'posted', successMessage }) => {
+    const invoiceId = invoiceRecord?.id || invoiceRecord?.invoiceId;
+
+    if (!invoiceId) {
+      throw new Error('This invoice is missing an invoice ID.');
+    }
+
+    const safeLineItems = Array.isArray(invoiceRecord.lineItems) ? invoiceRecord.lineItems : [];
+    const safeIngredientRows = Array.isArray(invoiceRecord.ingredientRows) ? invoiceRecord.ingredientRows : [];
+
+    if (safeLineItems.length === 0 || safeIngredientRows.length === 0) {
+      throw new Error('This invoice has no matched ingredient rows to post to stock.');
+    }
+
+    setPostingInvoiceId(invoiceId);
+    const stockResult = await updateStockFromInvoice({
+      invoiceId,
+      lineItems: safeLineItems,
+      ingredientRows: safeIngredientRows,
+      postingMode,
+      postedBy: accessProfile?.operatorName || 'WasteShift user',
+    });
+
+    if (!stockResult?.ok) {
+      throw new Error('Invoice was saved, but stock posting could not be completed. Open Scanned invoices to retry it.');
+    }
+
+    const nextStockPostingStatus = postingMode === 'historical_posted' ? 'historical_posted' : 'posted';
+    const postedInvoiceRecord = {
+      ...invoiceRecord,
+      stockPostingStatus: nextStockPostingStatus,
+      status: getInvoiceStatusFromStockPosting(nextStockPostingStatus),
+      stockMovementIds: stockResult.stockMovementIds || invoiceRecord.stockMovementIds || [],
+    };
+
+    setStockUpdates(stockResult.updates || []);
+    setConfirmedInvoice((currentInvoice) => (
+      !currentInvoice || currentInvoice.invoiceId === invoiceId
+        ? {
+            ...(currentInvoice || {}),
+            invoiceId,
+            invoiceNumber: postedInvoiceRecord.invoiceNumber,
+            lineItems: postedInvoiceRecord.lineItems,
+            ingredientRows: postedInvoiceRecord.ingredientRows,
+            stockPostingStatus: nextStockPostingStatus,
+            stockMovementIds: postedInvoiceRecord.stockMovementIds,
+          }
+        : currentInvoice
+    ));
+    applyConfirmedInvoiceToWorkspace(postedInvoiceRecord, stockResult.updates || []);
+    const resolvedSuccessMessage = typeof successMessage === 'function'
+      ? successMessage(stockResult)
+      : successMessage;
+
+    setMessage(resolvedSuccessMessage || (stockResult.alreadyPosted
+      ? 'Invoice confirmed. Stock was already updated earlier.'
+      : `Stock posted for ${stockResult.updates?.length || 0} ingredient${stockResult.updates?.length === 1 ? '' : 's'}.`));
+    refreshWorkspaceInBackground();
+    return stockResult;
+  };
+
+  const postInvoiceStockInBackground = ({ invoiceRecord, postingMode = 'posted', successMessage }) => {
+    postInvoiceStock({ invoiceRecord, postingMode, successMessage })
+      .catch((error) => {
+        setMessage(error?.message || 'Invoice was saved, but stock posting could not be completed. Open Scanned invoices to retry it.');
+      })
+      .finally(() => {
+        setPostingInvoiceId((currentId) => (
+          currentId === (invoiceRecord?.id || invoiceRecord?.invoiceId) ? '' : currentId
+        ));
+      });
+  };
+
+  const handlePostSavedInvoiceStock = async (invoice) => {
+    if (!canManageInvoices) {
+      setMessage('Only an owner or manager can post invoice stock.');
+      return;
+    }
+
+    if (!firebaseReady) {
+      setMessage('Firebase is not configured, so stock cannot be posted yet.');
+      return;
+    }
+
+    setMessage('Posting stock for this invoice...');
+    try {
+      await postInvoiceStock({
+        invoiceRecord: {
+          ...invoice,
+          id: invoice.id || invoice.invoiceId,
+          invoiceId: invoice.id || invoice.invoiceId,
+          stockPostingStatus: invoice.stockPostingStatus || 'pending_stock_post',
+        },
+        postingMode: invoice.stockPostingStatus === 'historical' ? 'historical_posted' : 'posted',
+        successMessage: 'Invoice stock posted. The scanned invoice library is up to date.',
+      });
+    } catch (error) {
+      setMessage(error?.message || 'Could not post stock for this invoice.');
+    } finally {
+      setPostingInvoiceId((currentId) => (
+        currentId === (invoice.id || invoice.invoiceId) ? '' : currentId
+      ));
+    }
   };
 
   const loadOlderInvoices = async () => {
@@ -1599,6 +1878,7 @@ function InvoiceScanner({
     const manualSourceText = lineItems
       .map((item) => `${item.itemName} | ${item.quantity} ${item.unit} | ${formatMoney(item.unitPrice)} | ${formatMoney(item.lineTotal)}`)
       .join('\n');
+    const confirmedBy = accessProfile?.operatorName || 'WasteShift user';
 
     try {
       confirmInvoiceInFlightRef.current = true;
@@ -1615,7 +1895,7 @@ function InvoiceScanner({
         extractedTotals,
         vatRate,
         vatMode,
-        confirmedBy: accessProfile?.operatorName || 'WasteShift user',
+        confirmedBy,
         stockPostingStatus,
         scannerMetadata,
         rawText: [
@@ -1632,16 +1912,36 @@ function InvoiceScanner({
         throw new Error('Invoice save was skipped.');
       }
 
+      const savedInvoiceRecord = createConfirmedInvoiceRecord({
+        invoiceId: result.invoiceId,
+        invoiceNumber,
+        supplierName,
+        invoiceDate,
+        lineItems,
+        ingredientRows,
+        totals,
+        extractedTotals,
+        vatRate,
+        vatMode,
+        stockPostingStatus: shouldPostStock ? 'pending_stock_post' : stockPostingStatus,
+        scannerMetadata,
+        confirmedBy,
+      });
+
+      applyConfirmedInvoiceToWorkspace(savedInvoiceRecord);
+      onInvoiceSaved?.();
       setConfirmedInvoice({
         invoiceId: result.invoiceId,
         invoiceNumber,
         lineItems,
         ingredientRows,
-        stockPostingStatus: shouldPostStock ? 'pending_stock_post' : stockPostingStatus,
+        stockPostingStatus: savedInvoiceRecord.stockPostingStatus,
       });
-      if (shouldPostStock) {
-        setMessage('Invoice saved. Posting stock movements...');
-      }
+      setMessage(shouldPostStock
+        ? 'Invoice saved in Scanned invoices. Posting stock in the background...'
+        : stockMode === 'historical'
+          ? 'Historical invoice confirmed. Prices and ingredient history were updated, and current stock was not changed.'
+          : 'Invoice confirmed without changing stock. Prices and ingredient history were updated.');
       setScanStage('saved');
       setBatchDrafts((currentDrafts) => currentDrafts.map((draft) => (
         draft.id === activeBatchDraftId
@@ -1655,42 +1955,19 @@ function InvoiceScanner({
         lineItems,
         ingredientRows,
       });
+      setActiveView('history');
       if (shouldPostStock) {
-        const stockResult = await updateStockFromInvoice({
-          invoiceId: result.invoiceId,
-          lineItems,
-          ingredientRows,
-          postingMode: stockMode === 'historical' ? 'historical_posted' : 'posted',
-          postedBy: accessProfile?.operatorName || 'WasteShift user',
+        postInvoiceStockInBackground({
+          invoiceRecord: savedInvoiceRecord,
+          postingMode: 'posted',
+          successMessage: (stockResult) => (stockResult.alreadyPosted
+            ? 'Invoice confirmed. Stock was already updated earlier.'
+            : `Invoice confirmed and stock updated for ${stockResult.updates?.length || 0} ingredient${stockResult.updates?.length === 1 ? '' : 's'}.`),
         });
-
-        if (!stockResult?.ok) {
-          await refreshWorkspace();
-          setActiveView('history');
-          throw new Error('Invoice was saved, but stock posting could not be completed. Open Scanned invoices to review it.');
-        }
-
-        setStockUpdates(stockResult.updates || []);
-        setConfirmedInvoice((currentInvoice) => ({
-          ...(currentInvoice || {}),
-          invoiceId: result.invoiceId,
-          invoiceNumber,
-          lineItems,
-          ingredientRows,
-          stockPostingStatus: stockMode === 'historical' ? 'historical_posted' : 'posted',
-          stockMovementIds: stockResult.stockMovementIds || [],
-        }));
-        setMessage(stockResult.alreadyPosted
-          ? 'Invoice confirmed. Stock was already updated earlier.'
-          : `Invoice confirmed and stock ${stockMode === 'historical' ? 'historically ' : ''}updated for ${stockResult.updates?.length || 0} ingredient${stockResult.updates?.length === 1 ? '' : 's'}.`);
       } else {
         setStockUpdates([]);
-        setMessage(stockMode === 'historical'
-          ? 'Historical invoice confirmed. Prices and ingredient history were updated, and current stock was not changed.'
-          : 'Invoice confirmed without changing stock. Prices and ingredient history were updated.');
+        refreshWorkspaceInBackground();
       }
-      await refreshWorkspace();
-      setActiveView('history');
     } catch (error) {
       setMessage(error?.message || 'Could not confirm this invoice.');
     } finally {
@@ -2710,6 +2987,16 @@ function InvoiceScanner({
                                 <span className="small-text">
                                   {invoice.invoiceNumber ? `Invoice #${invoice.invoiceNumber}` : 'No invoice number'} | {invoice.lineItems?.length || 0} line{invoice.lineItems?.length === 1 ? '' : 's'}
                                 </span>
+                                {['pending_stock_post', 'not_posted'].includes(String(invoice.stockPostingStatus || '')) && (
+                                  <button
+                                    type="button"
+                                    className="ghost-button compact-action"
+                                    onClick={() => handlePostSavedInvoiceStock(invoice)}
+                                    disabled={!canManageInvoices || postingInvoiceId === (invoice.id || invoice.invoiceId)}
+                                  >
+                                    {postingInvoiceId === (invoice.id || invoice.invoiceId) ? 'Posting stock...' : 'Post stock'}
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   className="ghost-button compact-action is-danger"

@@ -64,7 +64,8 @@ assert.match(recipeManager, /Wipe menu/);
 assert.match(menuImportPanel, /canUseAiImports/);
 assert.match(menuImportPanel, /getManagerApiErrorMessage/);
 assert.match(menuImport, /getAutomaticManagerApiHeaders/);
-assert.match(menuImport, /shouldTryGeminiVisionFallback/);
+assert.match(menuImport, /make-line-guide-file-gemini/);
+assert.doesNotMatch(menuImport, /scan-document/);
 assert.doesNotMatch(menuImport, /Gemini access key/);
 assert.match(apiHeaders, /getAutomaticManagerApiHeaders/);
 assert.doesNotMatch(apiHeaders, /wasteShiftSyncAccessKey/);
@@ -77,5 +78,7 @@ assert.match(invoiceScanner, /mergeMasterIngredientSources/);
 assert.match(invoiceScanner, /Scanned invoices/);
 assert.match(invoiceScanner, /Supplier Invoice Library/);
 assert.match(invoiceScanner, /pending_stock_post/);
+assert.match(invoiceScanner, /Post stock/);
+assert.match(invoiceScanner, /refreshWorkspaceInBackground/);
 
 console.log('E2E smoke checks passed');

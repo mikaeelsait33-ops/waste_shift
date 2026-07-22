@@ -107,7 +107,8 @@ assert.match(appSource, /linkRecipeIngredientsToCatalog/);
 assert.match(appSource, /Make-line guide saved/);
 assert.match(appSource, /saveFirestoreMenuItem\(\{/);
 assert.match(firestoreMenuSource, /category: toSafeString\(category\)/);
-assert.match(menuImportSource, /Add make-line guide for exact grams/);
-assert.match(menuImportSource, /makeLineGuide/);
+assert.match(menuImportSource, /Upload make-line guide/);
+assert.match(menuImportSource, /make-line-guide-file-gemini/);
+assert.doesNotMatch(menuImportSource, /scan-document/);
 
 console.log('Menu recipe import tests passed');

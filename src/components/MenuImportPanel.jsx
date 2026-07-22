@@ -12,14 +12,14 @@ import { getAutomaticManagerApiHeaders, getManagerApiErrorMessage } from '../uti
 const readFileAsText = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
   reader.onload = () => resolve(String(reader.result || ''));
-  reader.onerror = () => reject(new Error('Could not read this menu file.'));
+  reader.onerror = () => reject(new Error('Could not read this make-line guide file.'));
   reader.readAsText(file);
 });
 
 const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
   reader.onload = () => resolve(String(reader.result || ''));
-  reader.onerror = () => reject(new Error('Could not prepare this menu file.'));
+  reader.onerror = () => reject(new Error('Could not prepare this make-line guide file.'));
   reader.readAsDataURL(file);
 });
 
@@ -33,10 +33,6 @@ const createFilePayload = async (file) => {
     base64,
   };
 };
-
-const shouldTryGeminiVisionFallback = (response) => (
-  response?.status === 422 || Number(response?.status) >= 500
-);
 
 function MenuImportPanel({
   existingMenuItems = [],
@@ -70,7 +66,7 @@ function MenuImportPanel({
     setSourceName(nextSourceName);
     setMessage(normalizedItems.length > 0
       ? `${normalizedItems.length} menu item${normalizedItems.length === 1 ? '' : 's'} ready for review.`
-      : 'No usable menu items were found.');
+      : 'No usable items were found.');
   };
 
   const extractFromText = () => {
@@ -88,98 +84,45 @@ function MenuImportPanel({
 
   const extractWithGemini = async (file = null) => {
     if (!canUseAiImports) {
-      setMessage(`${operatorLabel} is not allowed to use Gemini menu import. Use a manager login, or paste text/CSV for review.`);
+      setMessage(`${operatorLabel} is not allowed to use Gemini make-line guide import. Use a manager login, or paste text/CSV for review.`);
       return;
     }
 
     if (!file && !sourceText.trim()) {
-      setMessage('Paste menu text or upload a menu PDF/image before using Gemini.');
+      setMessage('Paste make-line guide text or upload a guide PDF/image before using Gemini.');
       return;
     }
 
     setIsExtracting(true);
-    setMessage(file ? 'Running OCR.space and cleaning menu text with Gemini...' : 'Extracting menu items with Gemini...');
+    setMessage(file ? 'Reading make-line guide with Gemini...' : 'Extracting make-line guide with Gemini...');
 
     try {
       const filePayload = file ? await createFilePayload(file) : null;
-      let response = await fetch(file ? '/api/scan-document' : '/api/gemini-menu', {
+      const response = await fetch('/api/gemini-menu', {
         method: 'POST',
         headers: await getAutomaticManagerApiHeaders({ 'content-type': 'application/json' }),
-        body: JSON.stringify(file
-          ? {
-              documentType: 'menu',
-              preferredEngine: 2,
-              file: {
-                name: filePayload.name,
-                mimeType: filePayload.mimeType,
-                data: filePayload.base64,
-              },
-            }
-          : {
-              text: sourceText,
-              file: null,
-            }),
+        body: JSON.stringify({
+          text: file ? '' : sourceText,
+          file: filePayload,
+          sourceType: 'make-line-guide',
+        }),
       });
-      let payload = await response.json().catch(() => ({}));
-      let usedGeminiVisionFallback = false;
+      const payload = await response.json().catch(() => ({}));
 
       if (!response.ok || payload.ok === false || payload.success === false) {
-        if (file && shouldTryGeminiVisionFallback(response)) {
-          setMessage('OCR could not read this file. Asking Gemini to inspect the original file...');
-          response = await fetch('/api/gemini-menu', {
-            method: 'POST',
-            headers: await getAutomaticManagerApiHeaders({ 'content-type': 'application/json' }),
-            body: JSON.stringify({
-              text: '',
-              file: {
-                name: filePayload.name,
-                mimeType: filePayload.mimeType,
-                base64: filePayload.base64,
-              },
-            }),
-          });
-          payload = await response.json().catch(() => ({}));
-          usedGeminiVisionFallback = true;
-        }
-
-        if (!response.ok || payload.ok === false || payload.success === false) {
-          if (file && payload?.ocr?.rawText) {
-            setSourceText(payload.ocr.rawText);
-          }
-          const protectedApiMessage = getManagerApiErrorMessage(payload, 'Menu import failed.');
-          throw new Error(protectedApiMessage);
-        }
-
-        if (file && payload?.ocr?.rawText) {
-          setSourceText(payload.ocr.rawText);
-        }
+        const protectedApiMessage = getManagerApiErrorMessage(payload, 'Make-line guide import failed.');
+        throw new Error(protectedApiMessage);
       }
 
-      const extractedMenuItems = file
-        ? (usedGeminiVisionFallback ? (payload.items || []) : (payload.extracted?.menuItems || []).map((item) => ({
-            name: item.name,
-            category: item.category || '',
-            sellingPrice: item.sellingPrice,
-            description: [
-              item.description || '',
-              (item.possibleIngredients || []).length > 0
-                ? `Suggested ingredients for review: ${(item.possibleIngredients || []).map((ingredient) => ingredient.ingredientName).join(', ')}`
-                : '',
-            ].filter(Boolean).join(' '),
-            components: [],
-            confidence: item.confidence,
-            warnings: [],
-            source: 'ocr-gemini',
-          })))
-        : (payload.items || []);
+      const extractedMenuItems = payload.items || [];
 
       loadReviewItems(
         extractedMenuItems,
-        file ? (usedGeminiVisionFallback ? 'gemini-file' : 'ocr-gemini-menu') : 'gemini-text',
-        file?.name || sourceName || 'Menu import'
+        file ? 'make-line-guide-file-gemini' : 'make-line-guide-text-gemini',
+        file?.name || sourceName || 'Make-line guide import'
       );
     } catch (error) {
-      setMessage(`${error?.message || 'Scanner is unavailable.'} You can still use manual text or CSV import.`);
+      setMessage(`${error?.message || 'Gemini scanner is unavailable.'} You can still use manual text or CSV import.`);
     } finally {
       setIsExtracting(false);
     }
@@ -211,7 +154,7 @@ function MenuImportPanel({
 
       await extractWithGemini(file);
     } catch (error) {
-      setMessage(error?.message || 'Could not import this menu file.');
+      setMessage(error?.message || 'Could not import this make-line guide file.');
     } finally {
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
@@ -291,19 +234,19 @@ function MenuImportPanel({
       <div className={compact ? '' : 'panel-body'}>
         <div className="section-header">
           <div>
-            <p className="eyebrow">Menu import</p>
+            <p className="eyebrow">Make-line guide import</p>
             <h2 className="title">Import With Review</h2>
-            <p className="subtitle">Paste text, upload CSV, or use Gemini for PDF/image menus. Nothing saves until you approve it.</p>
+            <p className="subtitle">Paste text, upload CSV, or use Gemini for PDF/image make-line guides. Nothing saves until you approve it.</p>
           </div>
         </div>
 
         <div className="field">
-          <label htmlFor="menu-import-text">Menu text</label>
+          <label htmlFor="menu-import-text">Make-line guide text</label>
           <textarea
             id="menu-import-text"
             value={sourceText}
             onChange={(event) => setSourceText(event.target.value)}
-            placeholder="Paste menu rows, for example: Breakfast: Salmon Benedict R85"
+            placeholder="Example: Salmon Benedict - 120g salmon, 1 English muffin, 35ml hollandaise"
             className="input"
             rows={compact ? 4 : 6}
           />
@@ -321,14 +264,14 @@ function MenuImportPanel({
             className="ghost-button"
             onClick={() => {
               if (!canUseAiImports) {
-                setMessage(`${operatorLabel} is not allowed to upload menu files for Gemini/OCR. Use a manager login.`);
+                setMessage(`${operatorLabel} is not allowed to upload make-line guides for Gemini. Use a manager login.`);
                 return;
               }
               fileInputRef.current?.click();
             }}
             disabled={isExtracting || isSaving || !canUseAiImports}
           >
-            Upload file
+            Upload guide
           </button>
           <input
             ref={fileInputRef}
@@ -344,7 +287,7 @@ function MenuImportPanel({
         {!canUseAiImports && (
           <div className="notice-panel notice-panel--warning">
             <p className="small-text" style={{ margin: 0 }}>
-              Manager access is required for Gemini/OCR menu imports. Text review is still available.
+              Manager access is required for Gemini make-line guide imports. Text review is still available.
             </p>
           </div>
         )}

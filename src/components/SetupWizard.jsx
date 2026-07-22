@@ -507,7 +507,7 @@ function SetupWizard({
             <div>
               <p className="eyebrow">Menu setup</p>
               <h2 className="title">Create Or Import Menu</h2>
-              <p className="subtitle">Optional. You can add menu items manually, import text/CSV, or use Gemini for PDF/image menus.</p>
+              <p className="subtitle">Optional. You can add menu items manually, import text/CSV, or use Gemini for PDF/image make-line guides.</p>
             </div>
             <div className="field-grid">
               <input className="input" value={menuDraft.name} onChange={(event) => setMenuDraft({ ...menuDraft, name: event.target.value })} placeholder="Menu item" />

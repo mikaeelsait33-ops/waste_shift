@@ -176,24 +176,27 @@ const createGeminiParts = ({ text, file, makeLineGuide, guideFile }) => {
     .reduce((total, candidate) => total + Buffer.byteLength(candidate.base64, 'base64'), 0);
 
   if (combinedFileBytes > MAX_FILE_BYTES) {
-    throw new Error('The menu and make-line guide together are too large. Use smaller files or paste one as text.');
+    throw new Error('The make-line guide files are too large. Use smaller files or paste the guide as text.');
   }
 
+  const guideText = [
+    String(text || '').trim(),
+    String(makeLineGuide || '').trim(),
+  ].filter(Boolean).join('\n\n');
+
   const parts = [{
-    text: `Extract restaurant recipes for WasteShift from the customer-facing menu/dish source and, when provided, its make-line guide.
+    text: `Extract restaurant recipes for WasteShift from a make-line or prep guide.
 Return strict JSON only. The top-level shape must be {"dishes":[...],"warnings":[]}.
 Each dish must include: name, category, ingredients, optional instructions, optional sellingPrice, confidence, warnings.
 Each ingredient must include: name, quantity, unit.
 Use units like g, kg, ml, l, each, doz, slice, bun, bottle, packet where visible.
-The make-line guide is the source of truth for portions. Match its recipes to dishes by name and use its explicit quantities exactly, especially grams and millilitres.
+The make-line guide is the source of truth for portions. Use visible dish or build names as dish names, then use its explicit quantities exactly, especially grams and millilitres.
+Do not treat the document as a customer-facing menu. Do not infer dishes from marketing descriptions.
 Do not invent gram or millilitre amounts. When an exact amount is not visible in the make-line guide, set quantity to 1, unit to "each", and add a warning for human review.
-If a make-line guide conflicts with the menu, keep the menu's dish name and price but use the guide's ingredients and quantities.
-Do not invent selling prices. Do not include markdown.
-Customer-facing menu or dish text:
-${String(text || '').slice(0, 20000)}
+Do not invent selling prices. Only return sellingPrice when it is explicitly visible in the guide or pasted text. Do not include markdown.
 
 Make-line guide text:
-${String(makeLineGuide || '').slice(0, 20000)}`,
+${guideText.slice(0, 30000)}`,
   }];
 
   const appendFilePart = (nextFile, label) => {
@@ -208,7 +211,7 @@ ${String(makeLineGuide || '').slice(0, 20000)}`,
     }
 
     if (!ALLOWED_MIME_TYPES.has(nextFile.mimeType)) {
-      throw new Error(`Gemini menu import supports PDF, JPG, PNG, and WebP ${label} files.`);
+      throw new Error(`Gemini make-line guide import supports PDF, JPG, PNG, and WebP ${label} files.`);
     }
 
     parts.push({
@@ -219,8 +222,8 @@ ${String(makeLineGuide || '').slice(0, 20000)}`,
     });
   };
 
-  appendFilePart(file, 'menu');
-  appendFilePart(guideFile, 'make-line guide');
+  appendFilePart(file, 'make-line guide');
+  appendFilePart(guideFile, 'supplementary make-line guide');
 
   return parts;
 };
@@ -251,7 +254,7 @@ const callGemini = async ({ apiKey, model, text, file, makeLineGuide, guideFile 
 
 export default async function handler(request, response) {
   if (request.method !== 'POST') {
-    sendJson(response, 405, { ok: false, message: 'Use POST for menu import.' });
+    sendJson(response, 405, { ok: false, message: 'Use POST for make-line guide import.' });
     return;
   }
 
@@ -279,8 +282,8 @@ export default async function handler(request, response) {
     const makeLineGuide = String(body?.makeLineGuide || '');
     const guideFile = body?.guideFile && isPlainObject(body.guideFile) ? body.guideFile : null;
 
-    if (!text.trim() && !file?.base64) {
-      sendJson(response, 400, { ok: false, message: 'Provide pasted menu/dish text or a menu file.' });
+    if (!text.trim() && !file?.base64 && !makeLineGuide.trim() && !guideFile?.base64) {
+      sendJson(response, 400, { ok: false, message: 'Provide pasted make-line guide text or a make-line guide file.' });
       return;
     }
 
@@ -296,7 +299,7 @@ export default async function handler(request, response) {
   } catch (error) {
     sendJson(response, 422, {
       ok: false,
-      message: error?.message || 'Could not import this menu with Gemini.',
+      message: error?.message || 'Could not import this make-line guide with Gemini.',
     });
   }
 }
