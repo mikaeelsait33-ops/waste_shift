@@ -55,6 +55,14 @@ assert.equal(guideParts.length, 2);
 assert.match(guideParts[0].text, /make-line guide is the source of truth/i);
 assert.match(guideParts[0].text, /120g salmon/);
 
+const multiPageGuideParts = createGeminiParts({
+  files: [
+    { mimeType: 'image/jpeg', base64: 'aGVsbG8=' },
+    { mimeType: 'image/jpeg', base64: 'd29ybGQ=' },
+  ],
+});
+assert.equal(multiPageGuideParts.length, 3);
+
 const review = createMenuRecipeReview(normalized.dishes, catalog);
 assert.equal(review[0].ingredients[0].catalogKey, 'rocket');
 assert.equal(review[0].ingredients[0].unitMismatch, false);
@@ -109,6 +117,7 @@ assert.match(appSource, /saveFirestoreMenuItem\(\{/);
 assert.match(firestoreMenuSource, /category: toSafeString\(category\)/);
 assert.match(menuImportSource, /Upload make-line guide/);
 assert.match(menuImportSource, /make-line-guide-file-gemini/);
+assert.match(menuImportSource, /prepareMakeLineGuideFilePayloads/);
 assert.doesNotMatch(menuImportSource, /scan-document/);
 
 console.log('Menu recipe import tests passed');

@@ -170,8 +170,17 @@ export const normalizeGeminiMenuPayload = (payload) => {
   };
 };
 
-const createGeminiParts = ({ text, file, makeLineGuide, guideFile }) => {
-  const combinedFileBytes = [file, guideFile]
+const normalizeGeminiFiles = ({ file, guideFile, files }) => (
+  [
+    ...(Array.isArray(files) ? files : []),
+    file,
+    guideFile,
+  ].filter((candidate) => candidate?.base64)
+);
+
+const createGeminiParts = ({ text, file, makeLineGuide, guideFile, files }) => {
+  const fileParts = normalizeGeminiFiles({ file, guideFile, files });
+  const combinedFileBytes = fileParts
     .filter((candidate) => candidate?.base64)
     .reduce((total, candidate) => total + Buffer.byteLength(candidate.base64, 'base64'), 0);
 
@@ -222,20 +231,21 @@ ${guideText.slice(0, 30000)}`,
     });
   };
 
-  appendFilePart(file, 'make-line guide');
-  appendFilePart(guideFile, 'supplementary make-line guide');
+  fileParts.forEach((nextFile, index) => {
+    appendFilePart(nextFile, fileParts.length === 1 ? 'make-line guide' : `make-line guide page ${index + 1}`);
+  });
 
   return parts;
 };
 
 export { createGeminiParts };
 
-const callGemini = async ({ apiKey, model, text, file, makeLineGuide, guideFile }) => {
+const callGemini = async ({ apiKey, model, text, file, makeLineGuide, guideFile, files }) => {
   const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      contents: [{ role: 'user', parts: createGeminiParts({ text, file, makeLineGuide, guideFile }) }],
+      contents: [{ role: 'user', parts: createGeminiParts({ text, file, makeLineGuide, guideFile, files }) }],
       generationConfig: {
         temperature: 0.1,
         responseMimeType: 'application/json',
@@ -279,16 +289,17 @@ export default async function handler(request, response) {
     const body = await readJsonBody(request);
     const text = String(body?.text || '');
     const file = body?.file && isPlainObject(body.file) ? body.file : null;
+    const files = Array.isArray(body?.files) ? body.files.filter(isPlainObject) : [];
     const makeLineGuide = String(body?.makeLineGuide || '');
     const guideFile = body?.guideFile && isPlainObject(body.guideFile) ? body.guideFile : null;
 
-    if (!text.trim() && !file?.base64 && !makeLineGuide.trim() && !guideFile?.base64) {
+    if (!text.trim() && !file?.base64 && files.every((nextFile) => !nextFile?.base64) && !makeLineGuide.trim() && !guideFile?.base64) {
       sendJson(response, 400, { ok: false, message: 'Provide pasted make-line guide text or a make-line guide file.' });
       return;
     }
 
     const model = process.env.GEMINI_MENU_MODEL || process.env.GEMINI_MODEL || DEFAULT_MODEL;
-    const geminiResponse = await callGemini({ apiKey, model, text, file, makeLineGuide, guideFile });
+    const geminiResponse = await callGemini({ apiKey, model, text, file, makeLineGuide, guideFile, files });
     const normalized = normalizeGeminiMenuPayload(parseGeminiJsonText(getTextFromGeminiResponse(geminiResponse)));
 
     sendJson(response, 200, {

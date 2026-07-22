@@ -18,24 +18,7 @@ import {
   normalizeItemPriceUnit,
   sanitizeItemPriceCatalog,
 } from '../utils/itemPriceCatalog';
-
-const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
-  const reader = new FileReader();
-  reader.onload = () => resolve(String(reader.result || ''));
-  reader.onerror = () => reject(new Error('Could not prepare this make-line guide file.'));
-  reader.readAsDataURL(file);
-});
-
-const createFilePayload = async (file) => {
-  const dataUrl = await readFileAsDataUrl(file);
-  const [, base64 = ''] = dataUrl.split(',');
-
-  return {
-    name: file.name,
-    mimeType: file.type || 'application/octet-stream',
-    base64,
-  };
-};
+import { prepareMakeLineGuideFilePayloads } from '../utils/makeLineGuideFiles';
 
 const normalizeDishesFromPayload = (payload) => {
   if (Array.isArray(payload?.dishes)) {
@@ -110,19 +93,30 @@ function MenuImport({
       : 'No dishes were found. Try clearer make-line guide text or a better guide photo.');
   };
 
-  const requestGeminiMakeLineGuideParse = async ({ text = '', nextSourceName, file = null }) => {
-    const response = await fetch('/api/gemini-menu', {
-      method: 'POST',
-      headers: await getAutomaticManagerApiHeaders({ 'content-type': 'application/json' }),
-      body: JSON.stringify({
-        text,
-        file,
-        sourceType: 'make-line-guide',
-      }),
-    });
+  const requestGeminiMakeLineGuideParse = async ({ text = '', nextSourceName, files = [] }) => {
+    let response;
+
+    try {
+      response = await fetch('/api/gemini-menu', {
+        method: 'POST',
+        headers: await getAutomaticManagerApiHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify({
+          text,
+          files,
+          sourceType: 'make-line-guide',
+        }),
+      });
+    } catch {
+      throw new Error('The guide upload did not reach the server. Use a smaller PDF, upload guide photos, or paste the guide text.');
+    }
+
     const payload = await response.json().catch(() => ({}));
 
     if (!response.ok || payload.ok === false) {
+      if (response.status === 413) {
+        throw new Error('This make-line guide upload is too large. Split the PDF, upload guide photos, or paste the guide text.');
+      }
+
       throw new Error(getManagerApiErrorMessage(payload, 'Gemini could not parse this make-line guide.'));
     }
 
@@ -165,16 +159,26 @@ function MenuImport({
     }
 
     setIsExtracting(true);
-    setMessage('Reading make-line guide with Gemini...');
+    setMessage(file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+      ? 'Preparing PDF make-line guide...'
+      : 'Preparing make-line guide photo...');
 
     try {
-      const filePayload = await createFilePayload(file);
+      const preparedGuide = await prepareMakeLineGuideFilePayloads(file);
+      if (preparedGuide.notice) {
+        setMessage(`${preparedGuide.notice} Reading with Gemini...`);
+      } else {
+        setMessage('Reading make-line guide with Gemini...');
+      }
+
       await requestGeminiMakeLineGuideParse({
         text: '',
         nextSourceName: file.name,
-        file: filePayload,
+        files: preparedGuide.files,
       });
-      setMessage('Gemini read the make-line guide. Review exact portions before saving.');
+      setMessage(preparedGuide.notice
+        ? `Gemini read the make-line guide. ${preparedGuide.notice} Review exact portions before saving.`
+        : 'Gemini read the make-line guide. Review exact portions before saving.');
     } catch (error) {
       setMessage(`${error?.message || 'Make-line guide import failed.'} Try a clearer guide photo or paste the guide text.`);
     } finally {
