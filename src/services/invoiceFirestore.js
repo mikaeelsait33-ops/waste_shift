@@ -836,7 +836,7 @@ export const saveConfirmedInvoice = async ({
   const safeInvoiceNumber = sanitizeString(invoiceNumber) || safeInvoiceId;
   const supplierId = createSupplierId(safeSupplierName);
   const confirmedAt = new Date().toISOString();
-  const safeStockPostingStatus = ['not_posted', 'posted', 'prices_only', 'historical', 'historical_posted'].includes(stockPostingStatus)
+  const safeStockPostingStatus = ['not_posted', 'pending_stock_post', 'posted', 'prices_only', 'historical', 'historical_posted'].includes(stockPostingStatus)
     ? stockPostingStatus
     : 'not_posted';
 
@@ -873,6 +873,8 @@ export const saveConfirmedInvoice = async ({
       ? 'prices_only'
       : safeStockPostingStatus === 'historical'
         ? 'historical'
+        : safeStockPostingStatus === 'pending_stock_post'
+          ? 'pending_stock_post'
         : 'confirmed',
     confirmedAt,
     confirmedBy: sanitizeString(confirmedBy) || 'WasteShift user',

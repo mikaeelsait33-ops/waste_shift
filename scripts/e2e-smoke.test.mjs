@@ -74,5 +74,8 @@ assert.match(invoiceScanner, /Cost review queue/);
 assert.match(invoiceScanner, /Match to raw ingredient/);
 assert.match(invoiceScanner, /remember this supplier name for future scans/);
 assert.match(invoiceScanner, /mergeMasterIngredientSources/);
+assert.match(invoiceScanner, /Scanned invoices/);
+assert.match(invoiceScanner, /Supplier Invoice Library/);
+assert.match(invoiceScanner, /pending_stock_post/);
 
 console.log('E2E smoke checks passed');

@@ -2532,12 +2532,30 @@ textarea.input {
   border-top: 1px solid var(--border-soft);
 }
 
+.invoice-date-group {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.invoice-date-heading {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) auto auto auto;
+  gap: 10px;
+  align-items: center;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
 .invoice-supplier-invoice {
   background: rgba(255, 255, 255, 0.045);
 }
 
 .invoice-supplier-invoice summary {
-  grid-template-columns: minmax(140px, 1fr) auto auto auto auto;
+  grid-template-columns: minmax(140px, 1fr) auto auto auto;
 }
 
 .raw-ingredient-card {
@@ -2863,6 +2881,7 @@ textarea.input {
   .raw-ingredient-card,
   .ingredient-history-row,
   .invoice-history-row summary,
+  .invoice-date-heading,
   .invoice-importer,
   .invoice-result-row,
   .store-room-actions,

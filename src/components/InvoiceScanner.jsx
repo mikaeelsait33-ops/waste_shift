@@ -96,6 +96,61 @@ const getInvoiceSupplierName = (invoice) => (
   String(invoice?.supplier || invoice?.supplierName || '').trim() || 'Unknown supplier'
 );
 
+const getInvoiceDateKey = (invoice) => (
+  String(invoice?.invoiceDate || invoice?.scannedAt || '').slice(0, 10) || 'No date'
+);
+
+const STOCK_POSTING_LABELS = {
+  pending_stock_post: 'Posting stock',
+  posted: 'Posted to stock',
+  prices_only: 'Prices only',
+  historical: 'Historical only',
+  historical_posted: 'Historical stock posted',
+  not_posted: 'Not posted',
+};
+
+const getStockPostingLabel = (status) => (
+  STOCK_POSTING_LABELS[String(status || '')] || STOCK_POSTING_LABELS.not_posted
+);
+
+const getStockPostingBadgeClass = (status) => {
+  const value = String(status || '');
+
+  if (['posted', 'historical_posted'].includes(value)) return 'badge is-green';
+  if (value === 'pending_stock_post') return 'badge is-blue';
+  if (value === 'not_posted') return 'badge is-yellow';
+  return 'badge';
+};
+
+const groupInvoicesByDate = (invoices) => {
+  const groups = new Map();
+
+  (Array.isArray(invoices) ? invoices : []).forEach((invoice) => {
+    const date = getInvoiceDateKey(invoice);
+    const currentGroup = groups.get(date) || {
+      date,
+      invoiceCount: 0,
+      lineCount: 0,
+      totalExVAT: 0,
+      totalIncVAT: 0,
+      invoices: [],
+    };
+
+    groups.set(date, {
+      ...currentGroup,
+      invoiceCount: currentGroup.invoiceCount + 1,
+      lineCount: currentGroup.lineCount + (Array.isArray(invoice.lineItems) ? invoice.lineItems.length : 0),
+      totalExVAT: roundMoney(currentGroup.totalExVAT + Number(invoice.totalExVAT || 0)),
+      totalIncVAT: roundMoney(currentGroup.totalIncVAT + Number(invoice.totalIncVAT || 0)),
+      invoices: [...currentGroup.invoices, invoice],
+    });
+  });
+
+  return [...groups.values()].sort((a, b) => (
+    new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
+  ));
+};
+
 const createLocalMenuItems = (recipes, menuItems) => (
   (Array.isArray(menuItems) ? menuItems : []).map((menuItem) => {
     const recipe = recipes?.[menuItem.key] || {};
@@ -481,7 +536,11 @@ function InvoiceScanner({
       if (String(invoice.status || '').toLowerCase() === 'deleted') return false;
 
       const invoiceDateValue = new Date(invoice.invoiceDate || invoice.scannedAt || 0);
-      const matchesSearch = !search || String(invoice.supplier || '').toLowerCase().includes(search);
+      const matchesSearch = !search || [
+        invoice.supplier,
+        invoice.supplierName,
+        invoice.invoiceNumber,
+      ].some((part) => String(part || '').toLowerCase().includes(search));
 
       if (!matchesSearch) return false;
       if (start && invoiceDateValue < start) return false;
@@ -523,11 +582,16 @@ function InvoiceScanner({
       });
     });
 
-    return [...groupedSuppliers.values()].sort((a, b) => (
-      new Date(b.latestInvoiceDate || 0).getTime() - new Date(a.latestInvoiceDate || 0).getTime()
-      || b.totalExVAT - a.totalExVAT
-      || a.supplier.localeCompare(b.supplier)
-    ));
+    return [...groupedSuppliers.values()]
+      .map((group) => ({
+        ...group,
+        dateGroups: groupInvoicesByDate(group.invoices),
+      }))
+      .sort((a, b) => (
+        new Date(b.latestInvoiceDate || 0).getTime() - new Date(a.latestInvoiceDate || 0).getTime()
+        || b.totalExVAT - a.totalExVAT
+        || a.supplier.localeCompare(b.supplier)
+      ));
   }, [filteredInvoices]);
   const visibleInvoiceSupplierPage = useMemo(() => getVisiblePage(invoiceSupplierGroups, {
     limit: visibleInvoiceLimit,
@@ -1531,7 +1595,7 @@ function InvoiceScanner({
       ? 'prices_only'
       : stockMode === 'historical'
         ? 'historical'
-      : 'not_posted';
+        : 'pending_stock_post';
     const manualSourceText = lineItems
       .map((item) => `${item.itemName} | ${item.quantity} ${item.unit} | ${formatMoney(item.unitPrice)} | ${formatMoney(item.lineTotal)}`)
       .join('\n');
@@ -1573,8 +1637,11 @@ function InvoiceScanner({
         invoiceNumber,
         lineItems,
         ingredientRows,
-        stockPostingStatus,
+        stockPostingStatus: shouldPostStock ? 'pending_stock_post' : stockPostingStatus,
       });
+      if (shouldPostStock) {
+        setMessage('Invoice saved. Posting stock movements...');
+      }
       setScanStage('saved');
       setBatchDrafts((currentDrafts) => currentDrafts.map((draft) => (
         draft.id === activeBatchDraftId
@@ -1597,6 +1664,12 @@ function InvoiceScanner({
           postedBy: accessProfile?.operatorName || 'WasteShift user',
         });
 
+        if (!stockResult?.ok) {
+          await refreshWorkspace();
+          setActiveView('history');
+          throw new Error('Invoice was saved, but stock posting could not be completed. Open Scanned invoices to review it.');
+        }
+
         setStockUpdates(stockResult.updates || []);
         setConfirmedInvoice((currentInvoice) => ({
           ...(currentInvoice || {}),
@@ -1617,6 +1690,7 @@ function InvoiceScanner({
           : 'Invoice confirmed without changing stock. Prices and ingredient history were updated.');
       }
       await refreshWorkspace();
+      setActiveView('history');
     } catch (error) {
       setMessage(error?.message || 'Could not confirm this invoice.');
     } finally {
@@ -1670,7 +1744,7 @@ function InvoiceScanner({
             Ingredients
           </button>
           <button type="button" className={`segment-button${activeView === 'history' ? ' is-active' : ''}`} onClick={() => setActiveView('history')}>
-            History
+            Scanned invoices
           </button>
           <button type="button" className={`segment-button${activeView === 'stock' ? ' is-active' : ''}`} onClick={() => setActiveView('stock')}>
             Stock
@@ -2298,8 +2372,8 @@ function InvoiceScanner({
                   {lowStockAlerts.length} low-stock alert{lowStockAlerts.length === 1 ? '' : 's'}
                 </span>
                 {confirmedInvoice?.stockPostingStatus && (
-                  <span className={`badge${['posted', 'historical_posted'].includes(confirmedInvoice.stockPostingStatus) ? ' is-green' : ''}`}>
-                    Stock status: {confirmedInvoice.stockPostingStatus}
+                  <span className={getStockPostingBadgeClass(confirmedInvoice.stockPostingStatus)}>
+                    Stock status: {getStockPostingLabel(confirmedInvoice.stockPostingStatus)}
                   </span>
                 )}
               </div>
@@ -2544,8 +2618,9 @@ function InvoiceScanner({
           <div className="panel-body">
             <div className="section-header">
               <div>
-                <p className="eyebrow">History</p>
-                <h2 className="title">Invoice History</h2>
+                <p className="eyebrow">Scanned invoices</p>
+                <h2 className="title">Supplier Invoice Library</h2>
+                <p className="subtitle">Confirmed scans are grouped by supplier and invoice date for quick lookup.</p>
               </div>
               <span className="badge">{filteredInvoices.length} invoices</span>
             </div>
@@ -2567,14 +2642,14 @@ function InvoiceScanner({
 
             <div className="invoice-history-filter-grid">
               <div className="field invoice-history-filter-search">
-                <label htmlFor="invoice-history-search">Supplier</label>
+                <label htmlFor="invoice-history-search">Supplier or invoice no.</label>
                 <input
                   id="invoice-history-search"
                   type="search"
                   value={historySearch}
                   onChange={(event) => setHistorySearch(event.target.value)}
                   className="input"
-                  placeholder="Search supplier"
+                  placeholder="Search supplier or invoice number"
                 />
               </div>
               <div className="field">
@@ -2612,39 +2687,50 @@ function InvoiceScanner({
                     <span className="badge">{supplierGroup.lineCount} lines</span>
                   </summary>
                   <div className="invoice-history-lines invoice-supplier-invoices">
-                    {supplierGroup.invoices.map((invoice) => (
-                      <details key={invoice.id} className="invoice-history-row invoice-supplier-invoice">
-                        <summary>
-                          <strong>{invoice.invoiceNumber ? `#${invoice.invoiceNumber}` : 'No invoice no.'}</strong>
-                          <span>{invoice.invoiceDate || 'No date'}</span>
-                          <span>{formatMoney(invoice.totalExVAT)} ex VAT</span>
-                          <span>{formatMoney(invoice.totalIncVAT)} incl VAT</span>
-                          <span className="badge">{invoice.status || 'confirmed'}</span>
-                        </summary>
-                        <div className="invoice-history-lines">
-                          <div className="stock-movement-row">
-                            <span className="small-text">
-                              {invoice.invoiceNumber ? `Invoice #${invoice.invoiceNumber}` : 'No invoice number'} | {invoice.lineItems?.length || 0} line{invoice.lineItems?.length === 1 ? '' : 's'}
-                            </span>
-                            <button
-                              type="button"
-                              className="ghost-button compact-action is-danger"
-                              onClick={() => handleDeleteInvoice(invoice)}
-                              disabled={!canManageInvoices || deletingInvoiceId === invoice.id}
-                            >
-                              {deletingInvoiceId === invoice.id ? 'Deleting...' : 'Delete invoice'}
-                            </button>
-                          </div>
-                          {(Array.isArray(invoice.lineItems) ? invoice.lineItems : []).map((item) => (
-                            <div key={item.id || item.itemName} className="stock-movement-row">
-                              <strong>{item.itemName}</strong>
-                              <span className="small-text">{item.quantity} {item.unit}</span>
-                              <span>{formatMoney(item.priceExVAT)} ex</span>
-                              <span>{formatMoney(item.priceIncVAT)} incl</span>
-                            </div>
-                          ))}
+                    {supplierGroup.dateGroups.map((dateGroup) => (
+                      <div key={`${supplierGroup.supplier}-${dateGroup.date}`} className="invoice-date-group">
+                        <div className="invoice-date-heading">
+                          <strong>{dateGroup.date}</strong>
+                          <span>{dateGroup.invoiceCount} invoice{dateGroup.invoiceCount === 1 ? '' : 's'}</span>
+                          <span>{formatMoney(dateGroup.totalExVAT)} ex VAT</span>
+                          <span className="badge">{dateGroup.lineCount} lines</span>
                         </div>
-                      </details>
+                        {dateGroup.invoices.map((invoice) => (
+                          <details key={invoice.id} className="invoice-history-row invoice-supplier-invoice">
+                            <summary>
+                              <strong>{invoice.invoiceNumber ? `#${invoice.invoiceNumber}` : 'No invoice no.'}</strong>
+                              <span>{formatMoney(invoice.totalExVAT)} ex VAT</span>
+                              <span>{formatMoney(invoice.totalIncVAT)} incl VAT</span>
+                              <span className={getStockPostingBadgeClass(invoice.stockPostingStatus)}>
+                                {getStockPostingLabel(invoice.stockPostingStatus)}
+                              </span>
+                            </summary>
+                            <div className="invoice-history-lines">
+                              <div className="stock-movement-row">
+                                <span className="small-text">
+                                  {invoice.invoiceNumber ? `Invoice #${invoice.invoiceNumber}` : 'No invoice number'} | {invoice.lineItems?.length || 0} line{invoice.lineItems?.length === 1 ? '' : 's'}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="ghost-button compact-action is-danger"
+                                  onClick={() => handleDeleteInvoice(invoice)}
+                                  disabled={!canManageInvoices || deletingInvoiceId === invoice.id}
+                                >
+                                  {deletingInvoiceId === invoice.id ? 'Deleting...' : 'Delete invoice'}
+                                </button>
+                              </div>
+                              {(Array.isArray(invoice.lineItems) ? invoice.lineItems : []).map((item) => (
+                                <div key={item.id || item.itemName} className="stock-movement-row">
+                                  <strong>{item.itemName}</strong>
+                                  <span className="small-text">{item.quantity} {item.unit}</span>
+                                  <span>{formatMoney(item.priceExVAT)} ex</span>
+                                  <span>{formatMoney(item.priceIncVAT)} incl</span>
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        ))}
+                      </div>
                     ))}
                   </div>
                 </details>
