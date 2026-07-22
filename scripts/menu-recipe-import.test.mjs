@@ -86,7 +86,11 @@ assert.equal(smartReadyPlan.unmatchedIngredients[0].name, 'New Dressing');
 assert.equal(smartReadyPlan.unmatchedIngredients[0].price, 0);
 
 const recipeManagerSource = await readFile(new URL('../src/components/RecipeManager.jsx', import.meta.url), 'utf8');
-const appSource = await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8');
+const appSource = [
+  await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8'),
+  await readFile(new URL('../src/hooks/useInvoicePricing.js', import.meta.url), 'utf8'),
+  await readFile(new URL('../src/hooks/useMenuRecipes.js', import.meta.url), 'utf8'),
+].join('\n');
 const firestoreMenuSource = await readFile(new URL('../src/services/firestoreMenuItems.js', import.meta.url), 'utf8');
 const menuImportSource = await readFile(new URL('../src/components/MenuImport.jsx', import.meta.url), 'utf8');
 

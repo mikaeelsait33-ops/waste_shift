@@ -3,7 +3,11 @@ import { readFile } from 'node:fs/promises';
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
-const app = await read('../src/App.jsx');
+const app = [
+  await read('../src/App.jsx'),
+  await read('../src/components/AppWorkspace.jsx'),
+  await read('../src/hooks/useMenuRecipes.js'),
+].join('\n');
 const setupWizard = await read('../src/components/SetupWizard.jsx');
 const authGate = await read('../src/components/AuthGate.jsx');
 const wasteForm = await read('../src/components/WasteForm.jsx');

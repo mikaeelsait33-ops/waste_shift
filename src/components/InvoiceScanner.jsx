@@ -54,8 +54,7 @@ const INGREDIENT_LIBRARY_PAGE_SIZE = 30;
 const SCAN_STAGE_LABELS = {
   idle: 'Ready',
   uploading: 'Uploading',
-  ocr: 'Running OCR',
-  gemini: 'Cleaning data',
+  gemini: 'Reading with Gemini',
   needs_review: 'Needs review',
   ready_to_save: 'Ready to save',
   saved: 'Saved',
@@ -1040,33 +1039,30 @@ function InvoiceScanner({
     setMessage(`${nextLine.itemName} added as a manual invoice line.`);
   };
 
-  const scanFileWithOcrPipeline = async (file) => {
+  const scanFileWithGeminiVision = async (file) => {
     const scanPayload = await createScanPayload(file);
-    const response = await fetch('/api/scan-document', {
-        method: 'POST',
-        headers: await getAutomaticManagerApiHeaders({ 'content-type': 'application/json' }),
-        body: JSON.stringify({
-          file: scanPayload,
-          documentType: 'invoice',
-          preferredEngine: 2,
-          supplierHint: supplierName,
-          vatMode,
-          vatRate,
-        }),
-      });
+    const response = await fetch('/api/gemini-invoice', {
+      method: 'POST',
+      headers: await getAutomaticManagerApiHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        file: scanPayload,
+        vatMode,
+        vatRate,
+      }),
+    });
     const body = await response.json().catch(() => ({}));
 
-    if (!response.ok || body?.success === false) {
-      throw new Error(body?.message || body?.errors?.[0] || 'OCR scanner could not read this invoice.');
+    if (!response.ok || body?.ok === false) {
+      throw new Error(body?.message || 'Gemini could not read this invoice.');
     }
 
-    const invoice = body.extracted || {};
-    const nextVatMode = vatMode;
-    const nextVatRate = vatRate;
+    const invoice = body.invoice || {};
+    const nextVatMode = invoice.vatMode || vatMode;
+    const nextVatRate = Number.isFinite(Number(invoice.vatRate)) ? Number(invoice.vatRate) : vatRate;
     const scanId = createRecordId('scan');
-    const scannedLines = (Array.isArray(invoice.lineItems) ? invoice.lineItems : [])
+    const scannedLines = (Array.isArray(invoice.items) ? invoice.items : [])
       .map((item, index) => {
-        const itemName = String(item?.description || item?.itemName || '').trim();
+        const itemName = String(item?.itemName || item?.description || '').trim();
         const quantity = Number(item?.quantity) > 0 ? Number(item.quantity) : 1;
         const lineTotal = Number(item?.lineTotal) > 0 ? Number(item.lineTotal) : getScannedLineTotal(item, nextVatMode);
         const unitPrice = Number(item?.unitPrice) > 0
@@ -1083,12 +1079,12 @@ function InvoiceScanner({
           id: `${scanId}_${index}_${createInvoiceKey(itemName) || 'line'}`,
           itemName,
           quantity,
-          unit: normalizeInvoiceUnit(item?.purchaseUnit || item?.unit || 'each'),
+          unit: normalizeInvoiceUnit(item?.unit || item?.purchaseUnit || 'each'),
           unitPrice: roundMoney(unitPrice),
           lineTotal: roundMoney(lineTotal),
           vatMode: nextVatMode,
           vatRate: nextVatRate,
-          rawLine: item?.rawLine || `OCR scan: ${itemName}`,
+          rawLine: item?.rawLine || `Gemini scan: ${itemName}`,
           confidence: Number(item?.confidence) || 0.82,
           needsReview: Boolean(item?.needsReview),
         }, { vatMode: nextVatMode, vatRate: nextVatRate });
@@ -1096,8 +1092,16 @@ function InvoiceScanner({
       .filter(Boolean);
 
     if (scannedLines.length === 0) {
-      throw new Error('OCR scan did not find usable invoice line items. Try a clearer, flatter photo.');
+      throw new Error('Gemini did not find usable invoice line items. Try a clearer, flatter photo.');
     }
+
+    const confidence = scannedLines.reduce((sum, item) => sum + Number(item.confidence || 0), 0) / scannedLines.length;
+    const needsReview = confidence < 0.86 || scannedLines.some((item) => item.needsReview);
+    const scannedTotals = {
+      totalExVAT: Number(invoice.totals?.totalExVAT || 0),
+      totalVAT: Number(invoice.totals?.totalVAT || 0),
+      totalIncVAT: Number(invoice.totals?.totalIncVAT || 0),
+    };
 
     return {
       file,
@@ -1107,35 +1111,28 @@ function InvoiceScanner({
       invoiceDate: /^\d{4}-\d{2}-\d{2}$/.test(invoice.invoiceDate || '') ? invoice.invoiceDate : '',
       vatMode: nextVatMode,
       vatRate: nextVatRate,
-      extractedTotals: {
-        totalExVAT: Number(invoice.subtotal || 0),
-        totalVAT: Number(invoice.vatAmount || 0),
-        totalIncVAT: Number(invoice.totalAmount || 0),
-      },
+      extractedTotals: scannedTotals,
       lineItems: scannedLines,
-      rawText: body.ocr?.rawText || '',
-      scannerMetadata: body.scannerMetadata || {
-        ocrEngineUsed: body.ocr?.engineUsed,
-        confidence: body.confidence,
-        reviewStatus: body.needsReview ? 'needs_review' : 'ready_to_save',
+      rawText: invoice.notes || '',
+      scannerMetadata: {
+        geminiModel: body.model || 'gemini',
+        confidence,
+        reviewStatus: needsReview ? 'needs_review' : 'ready_to_save',
+        scanDateTime: new Date().toISOString(),
+        documentType: 'invoice',
       },
       summary: {
         fileName: file.name,
         lineCount: scannedLines.length,
         supplierName: invoice.supplierName || '',
         invoiceNumber: invoice.invoiceNumber || '',
-        totals: {
-          totalExVAT: Number(invoice.subtotal || 0),
-          totalVAT: Number(invoice.vatAmount || 0),
-          totalIncVAT: Number(invoice.totalAmount || 0),
-        },
-        model: `OCR.space Engine ${body.ocr?.engineUsed || 2} -> Gemini Flash-Lite`,
-        confidence: body.confidence,
-        needsReview: body.needsReview,
+        totals: scannedTotals,
+        model: body.model || 'Gemini invoice vision',
+        confidence,
+        needsReview,
         warnings: [
-          ...(body.ocr?.warnings || []),
+          ...(invoice.notes ? [invoice.notes] : []),
           ...(invoice.warnings || []),
-          ...(body.errors || []),
         ],
       },
     };
@@ -1203,7 +1200,7 @@ function InvoiceScanner({
     }
 
     setMessage(files.length === 1
-      ? `${files[0].name} selected for OCR + Gemini scanning.`
+      ? `${files[0].name} selected for Gemini scanning.`
       : `${files.length} invoices selected. Scan all or review them one at a time.`);
   };
 
@@ -1217,11 +1214,11 @@ function InvoiceScanner({
       setIsScanningInvoice(true);
       setScanSummary(null);
       setScanStage('uploading');
-      setMessage('Uploading invoice for OCR...');
+      setMessage('Uploading invoice for Gemini...');
 
-      setScanStage('ocr');
-      setMessage('Running OCR.space, then cleaning data with Gemini...');
-      const scannedDraft = await scanFileWithOcrPipeline(scanFile);
+      setScanStage('gemini');
+      setMessage('Asking Gemini to read the invoice file...');
+      const scannedDraft = await scanFileWithGeminiVision(scanFile);
 
       if (scannedDraft.supplierName) setSupplierName(scannedDraft.supplierName);
       if (scannedDraft.invoiceNumber) setInvoiceNumber(scannedDraft.invoiceNumber);
@@ -1247,10 +1244,10 @@ function InvoiceScanner({
             }
           : draft
       )));
-      setMessage(`OCR + Gemini added ${scannedDraft.lineItems.length} invoice line${scannedDraft.lineItems.length === 1 ? '' : 's'} for review.`);
+      setMessage(`Gemini added ${scannedDraft.lineItems.length} invoice line${scannedDraft.lineItems.length === 1 ? '' : 's'} for review.`);
     } catch (error) {
       setScanStage('failed');
-      setMessage(error?.message || 'Could not scan this invoice with OCR + Gemini.');
+      setMessage(error?.message || 'Could not scan this invoice with Gemini.');
     } finally {
       setIsScanningInvoice(false);
     }
@@ -1264,8 +1261,8 @@ function InvoiceScanner({
 
     try {
       setIsBatchScanning(true);
-      setScanStage('ocr');
-      setMessage(`Scanning ${batchDrafts.length} invoice${batchDrafts.length === 1 ? '' : 's'} with OCR + Gemini...`);
+      setScanStage('gemini');
+      setMessage(`Scanning ${batchDrafts.length} invoice${batchDrafts.length === 1 ? '' : 's'} with Gemini...`);
 
       const readyDrafts = [];
 
@@ -1275,7 +1272,7 @@ function InvoiceScanner({
         )));
 
         try {
-          const scannedDraft = await scanFileWithOcrPipeline(draft.file);
+          const scannedDraft = await scanFileWithGeminiVision(draft.file);
           const readyDraft = {
             ...draft,
             ...scannedDraft,
@@ -1558,7 +1555,7 @@ function InvoiceScanner({
         stockPostingStatus,
         scannerMetadata,
         rawText: [
-          scannerRawText ? `OCR raw text:\n${scannerRawText}` : '',
+          scannerRawText ? `Gemini scan notes:\n${scannerRawText}` : '',
           scannerMetadata ? `Scanner metadata: ${JSON.stringify(scannerMetadata)}` : '',
           `Supplier: ${supplierName || 'Unknown supplier'}`,
           `Invoice number: ${invoiceNumber || invoiceId}`,
@@ -1822,7 +1819,7 @@ function InvoiceScanner({
                   <div>
                     <p className="eyebrow">Capture</p>
                     <h2 className="title">Scan or Add Lines</h2>
-                    <p className="subtitle">OCR.space reads the file first, Gemini cleans the text into editable lines, and nothing saves until you confirm.</p>
+                    <p className="subtitle">Gemini reads the invoice file into editable lines, and nothing saves until you confirm.</p>
                   </div>
                   <span className="badge">{lineItems.length} lines</span>
                 </div>
@@ -1879,7 +1876,7 @@ function InvoiceScanner({
                             <span className="small-text">
                               {draft.status === 'ready' && `${draft.lineCount} lines ready`}
                               {draft.status === 'queued' && 'Waiting to scan'}
-                              {draft.status === 'scanning' && 'OCR + Gemini scanning...'}
+                              {draft.status === 'scanning' && 'Gemini scanning...'}
                               {draft.status === 'saved' && `Saved${draft.savedInvoiceId ? ` as ${draft.savedInvoiceId}` : ''}`}
                               {draft.status === 'error' && (draft.error || 'Could not scan')}
                             </span>

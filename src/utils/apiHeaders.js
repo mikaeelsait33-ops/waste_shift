@@ -12,6 +12,10 @@ export const getManagerApiErrorMessage = (payload, fallback = 'The protected req
     return 'Your sign-in session needs to be refreshed. Lock the app and sign in again.';
   }
 
+  if (code === 'restaurant_session_required' || code === 'restaurant_session_rejected' || code === 'access_session_expired') {
+    return 'Your restaurant session has expired. Lock the app and sign in again.';
+  }
+
   if (code === 'firebase_manager_session_not_configured') {
     return 'Gemini is almost ready. An owner still needs to add Firebase Admin credentials in Vercel once; no key is needed in this app.';
   }

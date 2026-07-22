@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { getFirebaseAdmin } from './_firebaseAdmin.js';
 import { verifyFirebaseIdToken } from './_firebaseIdentity.js';
+import { loadValidAccessSession } from './_accessSession.js';
 
 export const apiIsProductionRuntime = () => (
   process.env.VERCEL_ENV === 'production'
@@ -123,6 +124,8 @@ const managerSessionError = (status, code, message) => ({
   body: { ok: false, code, message },
 });
 
+const DEFAULT_RESTAURANT_ACCESS_ROLES = ['owner', 'manager', 'chef', 'barista', 'waiter'];
+
 // Gemini/OCR requests prove a manager PIN once, then use a Firebase-authenticated,
 // server-only session. Local development retains the existing protected-route helper.
 export const authorizeManagerSessionRequest = async (request) => {
@@ -186,6 +189,64 @@ export const authorizeManagerSessionRequest = async (request) => {
   } catch (error) {
     console.error('Could not verify manager session.', error);
     return managerSessionError(503, 'manager_session_unavailable', 'Manager access is temporarily unavailable. Please try again.');
+  }
+};
+
+export const authorizeRestaurantSessionRequest = async (request, options = {}) => {
+  const firebaseAdmin = getFirebaseAdmin();
+
+  if (!firebaseAdmin) {
+    if (!apiIsProductionRuntime()) {
+      return authorizeManagerApiRequest(request);
+    }
+
+    return managerSessionError(
+      503,
+      'firebase_access_not_configured',
+      'Restaurant access is not configured on the server. Add Firebase Admin credentials in Vercel.',
+    );
+  }
+
+  const databaseId = getRequestDatabaseId(request);
+  const idToken = getFirebaseIdToken(request);
+
+  if (!databaseId) {
+    return managerSessionError(400, 'database_id_required', 'Restaurant data link is missing. Re-open this restaurant link and try again.');
+  }
+
+  if (!idToken) {
+    return managerSessionError(401, 'restaurant_session_required', 'Sign in before saving shared waste photos.');
+  }
+
+  let decodedToken;
+
+  try {
+    decodedToken = await verifyFirebaseIdToken(idToken);
+  } catch {
+    return managerSessionError(401, 'firebase_token_invalid', 'Your sign-in session has expired. Lock and sign in again.');
+  }
+
+  try {
+    const session = await loadValidAccessSession(firebaseAdmin, databaseId, decodedToken.uid);
+    const allowedRoles = Array.isArray(options.allowedRoles) && options.allowedRoles.length > 0
+      ? options.allowedRoles
+      : DEFAULT_RESTAURANT_ACCESS_ROLES;
+
+    if (!session || !allowedRoles.includes(session.roleKey)) {
+      return managerSessionError(403, 'restaurant_session_rejected', 'Sign in to this restaurant before saving shared waste photos.');
+    }
+
+    return {
+      ok: true,
+      mode: 'firebase-restaurant-session',
+      databaseId,
+      staffId: String(session.staffId || ''),
+      roleKey: String(session.roleKey || ''),
+      uid: decodedToken.uid,
+    };
+  } catch (error) {
+    console.error('Could not verify restaurant session.', error);
+    return managerSessionError(503, 'restaurant_session_unavailable', 'Restaurant access is temporarily unavailable. Please try again.');
   }
 };
 

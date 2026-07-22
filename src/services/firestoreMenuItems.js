@@ -157,6 +157,14 @@ const toSafeNumber = (value, fallback = 0) => {
 
 const toSafeCurrency = (value, fallback = 0) => roundCurrency(toSafeNumber(value, fallback));
 
+const isLocalPhotoDataUrl = (value) => /^data:image\//i.test(String(value || ''));
+
+const getSharedPhotoUrl = (value) => {
+  const photoUrl = toSafeString(value);
+
+  return photoUrl && !isLocalPhotoDataUrl(photoUrl) ? photoUrl : '';
+};
+
 const removeUndefinedValues = (value) => {
   if (Array.isArray(value)) {
     return value.map(removeUndefinedValues);
@@ -211,6 +219,7 @@ const createFirestoreAppDataPayload = (databaseData) => {
 
 const createFirestoreWasteEntryPayload = (entry, authUser = null) => {
   const createdAt = toSafeString(entry?.createdAt) || new Date().toISOString();
+  const photoUrl = getSharedPhotoUrl(entry?.photoUrl);
   const wastedComponents = (Array.isArray(entry?.wastedComponents) ? entry.wastedComponents : [])
     .map(sanitizeWasteComponent)
     .filter(Boolean);
@@ -242,7 +251,7 @@ const createFirestoreWasteEntryPayload = (entry, authUser = null) => {
     time: toSafeString(entry?.time),
     timestamp: createdAt,
     createdAt,
-    createdByUid: toSafeString(authUser?.uid || entry?.createdByUid),
+    createdByUid: toSafeString(entry?.createdByUid || authUser?.uid),
     createdBy: toSafeString(entry?.createdBy),
     lastEditedBy: toSafeString(entry?.lastEditedBy),
     status: toSafeString(entry?.status) || 'logged',
@@ -270,9 +279,15 @@ const createFirestoreWasteEntryPayload = (entry, authUser = null) => {
       ? entry.componentsWasted.map(toSafeString).filter(Boolean)
       : wastedComponents.map((component) => component.name),
     wastedComponents,
-    hasPhoto: Boolean(entry?.photoUrl),
+    hasPhoto: Boolean(photoUrl || entry?.hasPhoto || isLocalPhotoDataUrl(entry?.photoUrl)),
+    photoUrl,
+    photoStoragePath: toSafeString(entry?.photoStoragePath),
     photoName: toSafeString(entry?.photoName),
     photoCapturedAt: toSafeString(entry?.photoCapturedAt),
+    photoUploadedAt: toSafeString(entry?.photoUploadedAt),
+    photoMimeType: toSafeString(entry?.photoMimeType),
+    photoSizeBytes: toSafeNumber(entry?.photoSizeBytes),
+    photoUploadStatus: toSafeString(entry?.photoUploadStatus || (photoUrl ? 'uploaded' : '')),
   });
 };
 
@@ -286,9 +301,17 @@ const normalizeFirestoreWasteEntry = (docSnapshot) => {
     quantity: toSafeNumber(data?.quantity, 1),
     cost: toSafeCurrency(data?.cost ?? data?.foodCostLost),
     foodCostLost: toSafeCurrency(data?.foodCostLost ?? data?.cost),
-    photoUrl: '',
+    syncStatus: toSafeString(data?.syncStatus) || 'synced',
+    syncError: toSafeString(data?.syncError),
+    photoUrl: getSharedPhotoUrl(data?.photoUrl),
+    hasPhoto: Boolean(data?.hasPhoto || data?.photoUrl),
+    photoStoragePath: toSafeString(data?.photoStoragePath),
     photoName: toSafeString(data?.photoName),
     photoCapturedAt: toSafeString(data?.photoCapturedAt),
+    photoUploadedAt: toSafeString(data?.photoUploadedAt),
+    photoMimeType: toSafeString(data?.photoMimeType),
+    photoSizeBytes: toSafeNumber(data?.photoSizeBytes),
+    photoUploadStatus: toSafeString(data?.photoUploadStatus),
   });
 };
 

@@ -69,7 +69,11 @@ const generatedId = createRecordId('Waste Entry');
 assert.match(generatedId, /^waste_entry_/);
 assert.doesNotMatch(generatedId, /\d{13}$/);
 
-const appSource = await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8');
+const appSource = [
+  await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8'),
+  await readFile(new URL('../src/hooks/useStaffAccess.js', import.meta.url), 'utf8'),
+  await readFile(new URL('../src/hooks/useRestaurantPersistence.js', import.meta.url), 'utf8'),
+].join('\n');
 const firestoreSource = await readFile(new URL('../src/services/firestoreMenuItems.js', import.meta.url), 'utf8');
 const managerAccountsSource = await readFile(new URL('../src/services/managerAccounts.js', import.meta.url), 'utf8');
 const settingsSource = await readFile(new URL('../src/components/Settings.jsx', import.meta.url), 'utf8');
@@ -103,7 +107,7 @@ assert.match(appSource, /stripStaffCredentialsForStorage/);
 assert.match(appSource, /managementPin: _managementPin/);
 assert.doesNotMatch(appSource, /localStorage\.setItem\('customStaffList', JSON\.stringify\(customStaffList\)\)/);
 assert.equal(idsSource.includes('Date.now'), false);
-assert.match(firestoreSource, /photoUrl:\s*''/);
+assert.match(firestoreSource, /photoUrl:\s*getSharedPhotoUrl\(data\?\.photoUrl\)/);
 assert.match(firestoreSource, /hasPhoto:/);
 
 console.log('auth and permissions tests passed');

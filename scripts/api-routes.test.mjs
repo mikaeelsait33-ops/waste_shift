@@ -64,6 +64,10 @@ const importManagerRecoveryHandler = async () => (
   (await import(`../api/manager-recovery.js?case=${importCounter++}`)).default
 );
 
+const importWastePhotoHandler = async () => (
+  (await import(`../api/waste-photo.js?case=${importCounter++}`)).default
+);
+
 const managerSessionHelpers = await import(`../api/manager-session.js?case=${importCounter++}`);
 const firebaseIdentityHelpers = await import(`../api/_firebaseIdentity.js?case=${importCounter++}`);
 const testManagerPinRecord = {
@@ -220,6 +224,7 @@ delete process.env.OCR_SPACE_API_KEY;
 const menuHandler = (await import(`../api/gemini-menu.js?case=${importCounter++}`)).default;
 const invoiceHandler = (await import(`../api/gemini-invoice.js?case=${importCounter++}`)).default;
 const scanDocumentHandler = (await import(`../api/scan-document.js?case=${importCounter++}`)).default;
+const wastePhotoHandler = await importWastePhotoHandler();
 
 response = await callHandler(menuHandler, { method: 'GET' });
 assert.equal(response.statusCode, 405);
@@ -250,6 +255,16 @@ response = await callHandler(scanDocumentHandler, {
 });
 assert.equal(response.statusCode, 503);
 assert.match(response.body.message, /OCR\.space API key/);
+
+response = await callHandler(wastePhotoHandler, { method: 'GET' });
+assert.equal(response.statusCode, 405);
+
+response = await callHandler(wastePhotoHandler, {
+  method: 'POST',
+  body: JSON.stringify({ entryId: 'waste_1', dataUrl: 'data:text/plain;base64,abc' }),
+});
+assert.equal(response.statusCode, 400);
+assert.match(response.body.message, /JPG, PNG, or WEBP/);
 
 process.env.VERCEL_ENV = 'production';
 const productionMenuHandler = (await import(`../api/gemini-menu.js?case=${importCounter++}`)).default;
