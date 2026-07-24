@@ -6,7 +6,6 @@ import {
 } from '../utils/itemPriceCatalog';
 import { buildRecipeIngredientBreakdown, roundCurrency } from '../utils/wasteCalculations';
 import {
-  DEFAULT_RECIPE_SEED_VERSION,
   createAuditLogEntry,
   createMenuItemKey,
   parsePriceValue,
@@ -530,7 +529,7 @@ export function useMenuRecipes({
         setFirebaseSync(prev => ({
           ...prev,
           status: 'error',
-          message: `${menuItem.name} was archived locally, but Firebase did not update yet.`,
+          message: `${menuItem.name} was archived in this session, but Firebase did not update yet.`,
         }));
       }
     }
@@ -590,7 +589,7 @@ export function useMenuRecipes({
         setFirebaseSync(prev => ({
           ...prev,
           status: 'error',
-          message: 'Menu item restored locally, but Firebase did not update yet.',
+          message: 'Menu item restored in this session, but Firebase did not update yet.',
         }));
       }
     }
@@ -627,9 +626,6 @@ export function useMenuRecipes({
     setRecipes({});
     setCustomMenuItems([]);
     setFirestoreMenuItems([]);
-    localStorage.setItem('customRecipes', JSON.stringify({}));
-    localStorage.setItem('customMenuItems', JSON.stringify([]));
-    localStorage.setItem('defaultRecipeSeedVersion', DEFAULT_RECIPE_SEED_VERSION);
     setAuditLog(prevLog => [
       createAuditLogEntry({
         action: 'Menu wiped',
@@ -649,7 +645,7 @@ export function useMenuRecipes({
       setFirebaseSync(prev => ({
         ...prev,
         status: 'local',
-        message: 'Menu wiped locally. Firebase is not configured.',
+        message: 'Firebase is not configured. Menu changes are not durable until Firebase is available.',
         menuItemCount: 0,
       }));
       return;

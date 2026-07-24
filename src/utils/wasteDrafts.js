@@ -1,6 +1,3 @@
-const DB_NAME = 'wasteshift-drafts';
-const STORE_NAME = 'drafts';
-const DB_VERSION = 1;
 export const WASTE_FORM_DRAFT_ID = 'waste-form';
 
 export const createWasteDraftPayload = (fields) => ({
@@ -42,56 +39,8 @@ export const wasteDraftHasContent = (fields) => {
   );
 };
 
-const openDraftDb = () => new Promise((resolve, reject) => {
-  if (!globalThis.indexedDB) {
-    resolve(null);
-    return;
-  }
+export const saveWasteFormDraft = async () => null;
 
-  const request = globalThis.indexedDB.open(DB_NAME, DB_VERSION);
+export const loadWasteFormDraft = async () => null;
 
-  request.onupgradeneeded = () => {
-    const db = request.result;
-
-    if (!db.objectStoreNames.contains(STORE_NAME)) {
-      db.createObjectStore(STORE_NAME, { keyPath: 'id' });
-    }
-  };
-  request.onsuccess = () => resolve(request.result);
-  request.onerror = () => reject(new Error('Could not open draft storage.'));
-});
-
-const withDraftStore = async (mode, action) => {
-  const db = await openDraftDb();
-
-  if (!db) {
-    return null;
-  }
-
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(STORE_NAME, mode);
-    const store = transaction.objectStore(STORE_NAME);
-    const request = action(store);
-
-    request.onsuccess = () => resolve(request.result || null);
-    request.onerror = () => reject(new Error('Could not update draft storage.'));
-    transaction.oncomplete = () => db.close();
-    transaction.onerror = () => {
-      db.close();
-      reject(new Error('Could not update draft storage.'));
-    };
-  });
-};
-
-export const saveWasteFormDraft = async (fields) => (
-  withDraftStore('readwrite', (store) => store.put(createWasteDraftPayload(fields)))
-);
-
-export const loadWasteFormDraft = async () => (
-  withDraftStore('readonly', (store) => store.get(WASTE_FORM_DRAFT_ID))
-);
-
-export const deleteWasteFormDraft = async () => (
-  withDraftStore('readwrite', (store) => store.delete(WASTE_FORM_DRAFT_ID))
-);
-
+export const deleteWasteFormDraft = async () => null;

@@ -19,7 +19,7 @@ import {
 import { loadInvoiceDashboardStats } from './services/invoiceFirestore';
 import {
   createDefaultRestaurantProfile,
-  loadCachedRestaurantProfile,
+  loadDefaultRestaurantProfile,
   loadRestaurantProfile,
   resetRestaurantFirestoreData,
   saveRestaurantProfile,
@@ -27,7 +27,7 @@ import {
 import { saveCurrentUserStaffProfile } from './services/firebaseAccess';
 import { loadManagerAccounts, saveManagerAccount } from './services/managerAccounts';
 import { establishManagerSession } from './services/managerSession';
-import { saveStaffAccessAccount } from './services/staffSession';
+import { saveStaffAccessAccount, validateRestaurantSession } from './services/staffSession';
 import { useRestaurantAccess } from './hooks/useRestaurantAccess';
 import { useRestaurantData } from './hooks/useRestaurantData';
 import { useRestaurantPersistence } from './hooks/useRestaurantPersistence';
@@ -39,15 +39,12 @@ import { useWasteEntries } from './hooks/useWasteEntries';
 import { useWasteHistoryPagination } from './hooks/useWasteHistoryPagination';
 import {
   createEmptyRestaurantData,
-  getRestaurantResetStorageKeys,
   validateRestaurantResetConfirmation,
 } from './utils/restaurantReset';
 import { getActiveWasteEntries } from './utils/wasteSync';
 import { getClientDatabaseHeaders, getClientDatabaseId } from './utils/clientDatabaseId';
 import {
   clearPersistedAuthSession,
-  loadPersistedAuthSession,
-  savePersistedAuthSession,
 } from './utils/sessionPersistence';
 import {
   DEFAULT_SETTINGS,
@@ -58,8 +55,6 @@ import {
   createSessionStaffFallback,
   createStaffMemberId,
   isRecipeMap,
-  markServerStaffFreshStartComplete,
-  markStaffFreshStartComplete,
   mergeManagerAccountsIntoStaffList,
   mergeMenuItems,
   mergeStaffMembers,
@@ -69,7 +64,6 @@ import {
   sanitizeStaffMembers,
   sanitizeStoreRoomItems,
   sanitizeStoreRoomMovements,
-  staffFreshStartIsPending,
 } from './utils/appData';
 import {
   FIRESTORE_CONFIGURED,
@@ -98,7 +92,7 @@ function App() {
   const [serverSync, setServerSync] = useState({
     status: FIRESTORE_CONFIGURED ? 'ready' : 'checking',
     message: FIRESTORE_CONFIGURED
-      ? 'Firebase is the primary database. Local browser storage is only a fallback.'
+      ? 'Firebase is the primary database.'
       : 'Checking for Vercel backup database...',
     lastSavedAt: '',
   });
@@ -111,27 +105,13 @@ function App() {
     menuItemCount: 0,
     projectId: FIRESTORE_RUNTIME_INFO.projectId,
   });
-  const [restaurantProfile, setRestaurantProfile] = useState(loadCachedRestaurantProfile);
+  const [restaurantProfile, setRestaurantProfile] = useState(loadDefaultRestaurantProfile);
   const [restaurantProfileStatus, setRestaurantProfileStatus] = useState(FIRESTORE_CONFIGURED ? 'loading' : 'missing-config');
   const [isOnline, setIsOnline] = useState(() => (
     typeof navigator === 'undefined' ? true : navigator.onLine
   ));
-  const [syncAccessKey, setSyncAccessKey] = useState(() => {
-    localStorage.removeItem('wasteShiftSyncAccessKey');
-    return '';
-  });
-  const [authSession, setAuthSession] = useState(() => {
-    try {
-      if (staffFreshStartIsPending()) {
-        clearPersistedAuthSession();
-        return null;
-      }
-
-      return loadPersistedAuthSession(getClientDatabaseId());
-    } catch {
-      return null;
-    }
-  });
+  const [syncAccessKey, setSyncAccessKey] = useState('');
+  const [authSession, setAuthSession] = useState(null);
   const [isPreparingAuth, setIsPreparingAuth] = useState(false);
 
   const {
@@ -238,19 +218,48 @@ function App() {
   });
 
   useEffect(() => {
-    if (!staffFreshStartIsPending()) {
-      return;
+    if (
+      !FIRESTORE_CONFIGURED
+      || !restaurantProfile.setupCompleted
+      || restaurantProfileStatus !== 'ready'
+      || authSession
+    ) {
+      return undefined;
     }
 
-    localStorage.removeItem('customStaffList');
-    localStorage.removeItem('staffList');
-    localStorage.removeItem('activeStaffId');
-    clearPersistedAuthSession();
-    setCustomStaffList([]);
-    setActiveStaffId('');
-    setAuthSession(null);
-    markStaffFreshStartComplete();
-  }, [setActiveStaffId, setCustomStaffList]);
+    let isCancelled = false;
+    setIsPreparingAuth(true);
+
+    validateRestaurantSession()
+      .then((result) => {
+        if (isCancelled || !result?.ok || !result.session?.staffId) {
+          return;
+        }
+
+        const serverSession = result.session;
+        const roleKey = String(serverSession.roleKey || '').trim().toLowerCase();
+        const nextSession = {
+          mode: ['owner', 'manager'].includes(roleKey) ? 'management' : 'staff',
+          staffId: String(serverSession.staffId || '').trim(),
+          staffName: String(serverSession.staffName || '').trim(),
+          roleKey,
+          startedAt: String(serverSession.issuedAt || serverSession.updatedAt || new Date().toISOString()),
+          databaseId: String(serverSession.databaseId || getClientDatabaseId()).trim(),
+        };
+
+        setAuthSession(nextSession);
+        setActiveStaffId(nextSession.staffId);
+      })
+      .finally(() => {
+        if (!isCancelled) {
+          setIsPreparingAuth(false);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [authSession, restaurantProfile.setupCompleted, restaurantProfileStatus, setActiveStaffId]);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -269,7 +278,7 @@ function App() {
 
     const loadProfile = async () => {
       if (!FIRESTORE_CONFIGURED) {
-        setRestaurantProfile(loadCachedRestaurantProfile());
+        setRestaurantProfile(loadDefaultRestaurantProfile());
         setRestaurantProfileStatus('missing-config');
         return;
       }
@@ -293,9 +302,8 @@ function App() {
         console.warn('Restaurant profile unavailable.', error);
 
         if (!isCancelled) {
-          const cachedProfile = loadCachedRestaurantProfile();
-          setRestaurantProfile(cachedProfile);
-          setRestaurantProfileStatus(cachedProfile.setupCompleted ? 'offline' : 'error');
+          setRestaurantProfile(loadDefaultRestaurantProfile());
+          setRestaurantProfileStatus('error');
           setFirebaseSync(prev => ({
             ...prev,
             status: 'error',
@@ -513,10 +521,9 @@ function App() {
     storeRoomMovements,
     settings,
     authSettings,
-    activeStaffId,
     inventoryMovements,
     auditLog,
-  }), [wasteItems, budget, recipes, staffList, customStaffList, customMenuItems, portionProfiles, itemPriceCatalog, storeRoomItems, storeRoomMovements, settings, authSettings, activeStaffId, inventoryMovements, auditLog]);
+  }), [wasteItems, budget, recipes, staffList, customStaffList, customMenuItems, portionProfiles, itemPriceCatalog, storeRoomItems, storeRoomMovements, settings, authSettings, inventoryMovements, auditLog]);
   const latestDatabaseDataRef = useRef(null);
 
   useEffect(() => {
@@ -537,11 +544,9 @@ function App() {
     if (databaseData.authSettings !== undefined) {
       setAuthSettings(sanitizeAuthSettings(databaseData.authSettings));
     }
-    setActiveStaffId(String(databaseData.activeStaffId || ''));
     setInventoryMovements(Array.isArray(databaseData.inventoryMovements) ? databaseData.inventoryMovements : []);
     setAuditLog(Array.isArray(databaseData.auditLog) ? databaseData.auditLog : []);
   }, [
-    setActiveStaffId,
     setAuditLog,
     setAuthSettings,
     setBudget,
@@ -626,7 +631,7 @@ function App() {
     } catch (error) {
       setServerSync({
         status: 'error',
-        message: `${error?.message || (FIRESTORE_CONFIGURED ? 'Firebase save failed.' : 'Server save failed.')} Local browser copy is still saved.`,
+        message: error?.message || (FIRESTORE_CONFIGURED ? 'Firebase save failed.' : 'Server save failed.'),
         lastSavedAt: '',
       });
 
@@ -636,12 +641,13 @@ function App() {
 
   useEffect(() => {
     if (authSession) {
-      savePersistedAuthSession(authSession, getClientDatabaseId());
+      setActiveStaffId(authSession.staffId || '');
       return;
     }
 
     clearPersistedAuthSession();
-  }, [authSession]);
+    setActiveStaffId('');
+  }, [authSession, setActiveStaffId]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -680,20 +686,20 @@ function App() {
           const hasSnapshot = Boolean(firebaseSnapshot?.exists);
           const hasWasteEntries = firebaseWasteItems.length > 0;
           const hasManagerAccounts = firebaseManagers.length > 0;
-          const localFallbackData = latestDatabaseDataRef.current || {};
+          const defaultDatabaseData = latestDatabaseDataRef.current || {};
           const mergedCustomStaffList = mergeManagerAccountsIntoStaffList(
-            snapshotData.customStaffList ?? snapshotData.staffList ?? localFallbackData.customStaffList ?? localFallbackData.staffList ?? [],
+            snapshotData.customStaffList ?? snapshotData.staffList ?? defaultDatabaseData.customStaffList ?? defaultDatabaseData.staffList ?? [],
             firebaseManagers,
           );
           const firebaseDatabaseData = {
-            ...localFallbackData,
+            ...defaultDatabaseData,
             ...snapshotData,
             customStaffList: mergedCustomStaffList,
             wasteItems: hasWasteEntries
               ? firebaseWasteItems
               : Array.isArray(snapshotData.wasteItems)
                 ? snapshotData.wasteItems
-                : localFallbackData.wasteItems,
+                : defaultDatabaseData.wasteItems,
           };
 
           setServerSyncEnabled(true);
@@ -723,7 +729,7 @@ function App() {
           setFirebaseSync(prev => ({
             ...prev,
             status: 'ready',
-            message: 'Firebase is connected. Current local data will sync to Firebase on the next save.',
+            message: 'Firebase is connected. New changes will save to Firebase.',
             lastSavedAt: '',
           }));
           return;
@@ -732,19 +738,19 @@ function App() {
             return;
           }
 
-          console.warn('Firebase primary database unavailable. Using local fallback.', error);
+          console.warn('Firebase primary database unavailable.', error);
           setManagerAccountsLoaded(true);
           setServerSyncEnabled(false);
           setServerLoadComplete(false);
           setServerSync({
             status: 'error',
-            message: `${error?.message || 'Firebase database is unavailable.'} Local browser data is still available.`,
+            message: error?.message || 'Firebase database is unavailable.',
             lastSavedAt: '',
           });
           setFirebaseSync(prev => ({
             ...prev,
             status: 'error',
-            message: `${error?.message || 'Firebase database is unavailable.'} Local browser data is still available.`,
+            message: error?.message || 'Firebase database is unavailable.',
           }));
           return;
         }
@@ -777,7 +783,6 @@ function App() {
         setServerLoadComplete(true);
 
         if (payload?.snapshot?.data) {
-          markServerStaffFreshStartComplete();
           applyDatabaseData(payload.snapshot.data);
           setServerSync({
             status: 'synced',
@@ -799,7 +804,7 @@ function App() {
 
         setServerSyncEnabled(false);
         setServerLoadComplete(false);
-        const message = error?.message || 'Using browser storage. Deploy to Vercel with Blob storage to enable server sync.';
+        const message = error?.message || 'Firebase database is unavailable.';
         setServerSync({
           status: /protected|access key|unauthorized|forbidden/i.test(message) ? 'locked' : 'local',
           message,
@@ -875,7 +880,7 @@ function App() {
     }, 900);
 
     return () => window.clearTimeout(timeoutId);
-  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, itemPriceCatalog, storeRoomItems, storeRoomMovements, settings, authSettings, activeStaffId, inventoryMovements, auditLog, serverSyncEnabled, serverLoadComplete, saveDatabaseToServer]);
+  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, itemPriceCatalog, storeRoomItems, storeRoomMovements, settings, authSettings, inventoryMovements, auditLog, serverSyncEnabled, serverLoadComplete, saveDatabaseToServer]);
 
   const {
     handleAddStaff,
@@ -1179,11 +1184,6 @@ function App() {
       if (FIRESTORE_CONFIGURED) {
         await resetRestaurantFirestoreData();
       }
-
-      getRestaurantResetStorageKeys().forEach((key) => {
-        localStorage.removeItem(key);
-        sessionStorage.removeItem(key);
-      });
 
       const emptyData = createEmptyRestaurantData();
       setWasteItems(emptyData.wasteItems);

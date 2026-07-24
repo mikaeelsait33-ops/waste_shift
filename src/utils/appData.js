@@ -43,16 +43,14 @@ export const createSessionStaffFallback = (session) => {
   };
 };
 
-export const staffFreshStartIsPending = () => (
-  localStorage.getItem('wasteShiftStaffFreshStartVersion') !== STAFF_FRESH_START_VERSION
-);
+export const staffFreshStartIsPending = () => false;
 
 export const markStaffFreshStartComplete = () => {
-  localStorage.setItem('wasteShiftStaffFreshStartVersion', STAFF_FRESH_START_VERSION);
+  void STAFF_FRESH_START_VERSION;
 };
 
 export const markServerStaffFreshStartComplete = () => {
-  localStorage.setItem('wasteShiftServerStaffFreshStartVersion', STAFF_FRESH_START_VERSION);
+  void STAFF_FRESH_START_VERSION;
 };
 
 export const createAuditLogEntry = ({ action, user, relatedItem, beforeValue = null, afterValue = null }) => ({
@@ -179,19 +177,9 @@ const removeOldSeededRecipes = (savedRecipeMap) => Object.fromEntries(
 );
 
 export const buildInitialRecipes = () => {
-  const savedRecipes = localStorage.getItem('customRecipes');
-  const savedSeedVersion = localStorage.getItem('defaultRecipeSeedVersion');
-  const savedRecipeMap = savedRecipes ? JSON.parse(savedRecipes) : {};
-
-  if (!isRecipeMap(savedRecipeMap) || !savedRecipes) {
-    return cloneRecipeMap(DEFAULT_RECIPES);
-  }
-
-  if (savedSeedVersion !== DEFAULT_RECIPE_SEED_VERSION) {
-    return removeOldSeededRecipes(savedRecipeMap);
-  }
-
-  return cloneRecipeMap(savedRecipeMap);
+  void DEFAULT_RECIPE_SEED_VERSION;
+  void removeOldSeededRecipes;
+  return cloneRecipeMap(DEFAULT_RECIPES);
 };
 
 export const createMenuItemKey = (name) => String(name || '')

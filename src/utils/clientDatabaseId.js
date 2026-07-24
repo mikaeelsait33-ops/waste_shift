@@ -1,6 +1,7 @@
 export const CLIENT_DATABASE_ID_STORAGE_KEY = 'wasteShiftClientDatabaseId';
 
 const LEGACY_DATABASE_QUERY_KEYS = ['restaurant', 'restaurantId', 'databaseId', 'db'];
+let activeDatabaseId = '';
 
 export const normalizeDatabaseId = (value) => (
   String(value || '')
@@ -36,31 +37,21 @@ const removeLegacyDatabaseQuery = () => {
 
 // This is used only by the automatic one-shop bootstrap. There is no UI for switching shops.
 export const persistClientDatabaseId = (value) => {
-  if (typeof localStorage === 'undefined') {
-    return '';
-  }
-
   const databaseId = normalizeDatabaseId(value);
 
   if (!databaseId) {
     return '';
   }
 
-  localStorage.setItem(CLIENT_DATABASE_ID_STORAGE_KEY, databaseId);
-  return databaseId;
+  activeDatabaseId = databaseId;
+  return activeDatabaseId;
 };
 
 export const getClientDatabaseId = () => {
-  if (typeof localStorage === 'undefined') {
-    return '';
-  }
-
   removeLegacyDatabaseQuery();
 
-  const existingId = normalizeDatabaseId(localStorage.getItem(CLIENT_DATABASE_ID_STORAGE_KEY));
-
-  if (existingId) {
-    return existingId;
+  if (activeDatabaseId) {
+    return activeDatabaseId;
   }
 
   const nextId = createClientDatabaseId();

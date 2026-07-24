@@ -40,7 +40,8 @@ export function useWasteEntries({
 
   const syncWasteEntryToFirestore = useCallback(async (entry) => {
     if (!FIRESTORE_CONFIGURED) {
-      return { ok: true, syncStatus: 'local', message: 'Firebase is not configured.' };
+      updateWasteEntrySyncStatus(entry.id, 'failed', 'Firebase is not configured.');
+      return { ok: false, syncStatus: 'failed', message: 'Firebase is not configured. This entry is only visible until the app reloads.' };
     }
 
     if (!isOnline) {
@@ -79,7 +80,7 @@ export function useWasteEntries({
       setFirebaseSync(prev => ({
         ...prev,
         status: 'error',
-        message: `${message} Local copy is still saved.`,
+        message: `${message} The entry is only visible in this session until sync succeeds.`,
       }));
       return { ok: false, syncStatus: 'failed', message };
     }
@@ -242,7 +243,7 @@ export function useWasteEntries({
 
     return syncWasteEntryToFirestore(voidedEntry)
       .then((result) => ({ ...result, entry: voidedEntry }))
-      .catch((error) => ({ ok: false, entry: voidedEntry, message: error?.message || 'Void saved locally but did not sync yet.' }));
+      .catch((error) => ({ ok: false, entry: voidedEntry, message: error?.message || 'Void is only visible in this session until Firebase sync succeeds.' }));
   };
 
   const handleRestoreEntry = async (entryToRestore) => {
@@ -289,7 +290,7 @@ export function useWasteEntries({
 
     return syncWasteEntryToFirestore(restoredEntry)
       .then((result) => ({ ...result, entry: restoredEntry }))
-      .catch((error) => ({ ok: false, entry: restoredEntry, message: error?.message || 'Restore saved locally but did not sync yet.' }));
+      .catch((error) => ({ ok: false, entry: restoredEntry, message: error?.message || 'Restore is only visible in this session until Firebase sync succeeds.' }));
   };
 
   const handleClearAll = async () => {

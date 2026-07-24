@@ -82,6 +82,7 @@ assert.equal(managerSessionHelpers.verifyManagerPin('bad', testManagerPinRecord)
 assert.equal(typeof firebaseIdentityHelpers.verifyFirebaseIdToken, 'function');
 
 const databaseHelpers = await import(`../api/database.js?case=${importCounter++}`);
+const cleanupHelpers = await import(`../api/admin-cleanup-duplicates.js?case=${importCounter++}`);
 
 assert.equal(databaseHelpers.normalizeDatabaseId('restaurant one!'), 'restaurant_one_');
 assert.equal(databaseHelpers.createDatabaseFolderPrefix('tenant_a'), 'wasteshift/databases/tenant_a/');
@@ -89,6 +90,55 @@ assert.notEqual(
   databaseHelpers.createDatabaseFolderPrefix('tenant_a'),
   databaseHelpers.createDatabaseFolderPrefix('tenant_b'),
 );
+
+assert.equal(cleanupHelpers.getDocDatabaseId({
+  id: 'main',
+  data: () => ({}),
+}), '');
+assert.equal(cleanupHelpers.getDocDatabaseId({
+  id: 'old_shop__invoice_1',
+  data: () => ({}),
+}), 'old_shop');
+assert.equal(cleanupHelpers.getDocDatabaseId({
+  id: 'anything',
+  data: () => ({ databaseId: 'explicit_shop' }),
+}), 'explicit_shop');
+
+const makeFakeDoc = (collectionName, id, data) => ({
+  id,
+  ref: { collectionName, id },
+  data: () => data,
+});
+const fakeCleanupCollections = {
+  restaurants: [
+    makeFakeDoc('restaurants', 'canonical_shop', { databaseId: 'canonical_shop', setupCompleted: true }),
+    makeFakeDoc('restaurants', 'old_shop', { databaseId: 'old_shop', setupCompleted: true }),
+    makeFakeDoc('restaurants', 'draft_shop', { databaseId: 'draft_shop', setupCompleted: false }),
+  ],
+  appData: [
+    makeFakeDoc('appData', 'main', { exportedAt: '2026-01-01' }),
+    makeFakeDoc('appData', 'canonical_shop__main', {}),
+    makeFakeDoc('appData', 'old_shop__main', {}),
+  ],
+  invoices: [
+    makeFakeDoc('invoices', 'canonical_invoice', { databaseId: 'canonical_shop' }),
+    makeFakeDoc('invoices', 'old_invoice', { databaseId: 'old_shop' }),
+  ],
+};
+const fakeCleanupDb = {
+  collection: (collectionName) => ({
+    get: async () => {
+      const docs = fakeCleanupCollections[collectionName] || [];
+      return { docs, empty: docs.length === 0, size: docs.length };
+    },
+  }),
+};
+const duplicateDocuments = await cleanupHelpers.findDuplicateDocuments(fakeCleanupDb, 'canonical_shop');
+assert.deepEqual(
+  duplicateDocuments.map((entry) => `${entry.collection}:${entry.id}`).sort(),
+  ['appData:old_shop__main', 'invoices:old_invoice', 'restaurants:old_shop'],
+);
+assert.equal(cleanupHelpers.summarizeDocuments(duplicateDocuments).totalDocuments, 3);
 
 delete process.env.VERCEL_ENV;
 delete process.env.WASTESHIFT_MANAGER_API_SECRET;

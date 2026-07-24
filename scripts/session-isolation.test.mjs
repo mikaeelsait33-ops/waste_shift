@@ -17,6 +17,10 @@ const managerRecoveryApi = await readFile(new URL('../api/manager-recovery.js', 
 const singleShopApi = await readFile(new URL('../api/_singleShop.js', import.meta.url), 'utf8');
 const staffSessionService = await readFile(new URL('../src/services/staffSession.js', import.meta.url), 'utf8');
 const restaurantAccessHook = await readFile(new URL('../src/hooks/useRestaurantAccess.js', import.meta.url), 'utf8');
+const restaurantDataHook = await readFile(new URL('../src/hooks/useRestaurantData.js', import.meta.url), 'utf8');
+const restaurantPersistenceHook = await readFile(new URL('../src/hooks/useRestaurantPersistence.js', import.meta.url), 'utf8');
+const setupWizard = await readFile(new URL('../src/components/SetupWizard.jsx', import.meta.url), 'utf8');
+const wasteDrafts = await readFile(new URL('../src/utils/wasteDrafts.js', import.meta.url), 'utf8');
 const firestoreRules = await readFile(new URL('../firestore.rules', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8');
 
@@ -25,21 +29,29 @@ assert.match(databaseApi, /createDatabaseFolderPrefix/, 'Fallback database snaps
 assert.doesNotMatch(databaseApi, /list\(\{ prefix: DATABASE_FOLDER/, 'Fallback database reads must not list one shared global database folder.');
 assert.match(adminResetApi, /cache-control', 'no-store'/, 'Admin reset API responses must not be cacheable.');
 
-assert.match(clientDatabaseId, /wasteShiftClientDatabaseId/, 'Client should persist one generated database id per browser install.');
+assert.doesNotMatch(clientDatabaseId, /localStorage/, 'Client database scope must not be stored in browser local storage.');
 assert.doesNotMatch(clientDatabaseId, /getClientDatabaseShareUrl/, 'Single-shop mode must not expose a restaurant sharing link.');
 assert.doesNotMatch(clientDatabaseId, /setClientDatabaseId/, 'Single-shop mode must not allow switching the active restaurant database.');
 assert.doesNotMatch(clientDatabaseId, /keepDatabaseIdInUrl/, 'Single-shop mode must not put internal database identifiers in the URL.');
 assert.match(clientDatabaseId, /removeLegacyDatabaseQuery/, 'Single-shop mode should clean old restaurant-sharing URLs after loading.');
-assert.match(clientDatabaseId, /persistClientDatabaseId/, 'Single-shop mode should be able to remember the one existing shop on a new device.');
+assert.match(clientDatabaseId, /activeDatabaseId/, 'Single-shop mode should keep the adopted Firebase scope in memory.');
 assert.match(apiHeaders, /getClientDatabaseHeaders/, 'Protected API calls must include the client database scope header.');
-assert.match(restaurantFirestore, /wasteShiftRestaurantProfiles/, 'Completed restaurant profiles should have a local reload fallback.');
+assert.doesNotMatch(restaurantFirestore, /localStorage/, 'Completed restaurant profiles must load from Firebase instead of browser profile cache.');
 assert.match(restaurantFirestore, /where\('setupCompleted', '==', true\)/, 'A new device should discover the one completed shop in Firestore.');
 assert.match(restaurantFirestore, /staff-session\?action=restaurant/, 'Automatic shop discovery should use the server-selected canonical restaurant.');
 assert.match(restaurantFirestore, /limit\(10\)/, 'Direct Firestore discovery must remain bounded when legacy profiles exist.');
 assert.match(restaurantFirestore, /canonicalDatabaseId && canonicalDatabaseId !== currentDatabaseId/, 'Every device should adopt the server-selected restaurant scope even if it has an old local scope.');
 assert.match(appSource, /didAdoptSingleShop/, 'The app should restart its initial data loaders after a new device joins the one shop.');
-assert.match(appSource, /loadPersistedAuthSession/, 'App should restore a remembered local login.');
-assert.doesNotMatch(appSource, /localStorage\.setItem\('wasteShiftSyncAccessKey'/, 'Sync secrets must not persist in browser storage.');
+assert.match(appSource, /validateRestaurantSession/, 'App should restore valid access from the server session, not browser storage.');
+for (const [name, source] of [
+  ['App', appSource],
+  ['useRestaurantData', restaurantDataHook],
+  ['useRestaurantPersistence', restaurantPersistenceHook],
+  ['SetupWizard', setupWizard],
+  ['wasteDrafts', wasteDrafts],
+]) {
+  assert.doesNotMatch(source, /localStorage|sessionStorage|indexedDB/, `${name} must not use browser storage for live data.`);
+}
 assert.match(managerSessionService, /method: 'DELETE'/, 'Client logout must revoke the server manager session.');
 assert.match(managerSessionApi, /request\.method === 'DELETE'/, 'Manager session API must support explicit revocation.');
 assert.match(managerSessionApi, /managerSessions.*\.delete\(\)/s, 'Manager session revocation must delete the matching server session.');
@@ -75,8 +87,8 @@ for (const [name, source] of [
   ['invoiceFirestore', invoiceFirestore],
 ]) {
   assert.doesNotMatch(source, /anonymousAuthPromise/, `${name} must not cache a resolved anonymous user promise.`);
-  assert.match(source, /browserLocalPersistence/, `${name} should keep Firebase auth across browser restarts.`);
-  assert.match(source, /authStateReady/, `${name} should wait for a restored Firebase user before signing in again.`);
+  assert.match(source, /inMemoryPersistence/, `${name} must keep Firebase auth in memory only.`);
+  assert.match(source, /authStateReady/, `${name} should wait for Firebase auth readiness before signing in again.`);
   assert.match(source, /setPersistence/, `${name} should set Firebase auth persistence before anonymous sign-in.`);
   assert.match(source, /databaseId/, `${name} should tag Firestore records with a database id.`);
 }
@@ -91,6 +103,7 @@ assert.match(firestoreMenuItems, /startAfter\(options\.cursor\)/, 'Waste history
 assert.match(invoiceFirestore, /where\('databaseId', '==', getActiveDatabaseId\(\)\)/, 'Invoice Firestore reads must be scoped by database id.');
 assert.match(invoiceFirestore, /startAfter\(options\.cursor\)/, 'Invoice and stock history must support Firestore cursor pagination.');
 assert.match(invoiceFirestore, /scopeDocId/, 'Invoice Firestore writes must use scoped document ids to avoid id collisions.');
+assert.doesNotMatch(`${firestoreMenuItems}\n${invoiceFirestore}`, /browserLocalPersistence|browserSessionPersistence|indexedDBLocalPersistence/, 'Firebase Auth must not use browser-backed persistence.');
 assert.match(invoiceFirestore, /where: firestore\.where/, 'Firestore query helpers must expose where at runtime.');
 assert.match(invoiceFirestore, /runTransaction: firestore\.runTransaction/, 'Invoice stock posting must expose Firestore transactions.');
 assert.match(invoiceFirestore, /return runTransaction\(db/, 'Invoice stock posting must be atomic.');

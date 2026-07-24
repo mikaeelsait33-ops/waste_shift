@@ -22,7 +22,6 @@ const getFirestoreApi = async () => {
 
 const toSafeString = (value) => String(value ?? '').trim();
 const scopeDocId = (id) => `${getClientDatabaseId() || 'local'}__${toSafeString(id)}`;
-export const RESTAURANT_PROFILE_CACHE_KEY = 'wasteShiftRestaurantProfiles';
 
 export const createDefaultRestaurantProfile = () => ({
   restaurantName: '',
@@ -50,39 +49,12 @@ export const sanitizeRestaurantProfile = (profile) => {
   };
 };
 
-export const loadCachedRestaurantProfile = () => {
-  if (typeof localStorage === 'undefined') {
-    return createDefaultRestaurantProfile();
-  }
-
-  try {
-    const databaseId = getClientDatabaseId() || 'local';
-    const profiles = JSON.parse(localStorage.getItem(RESTAURANT_PROFILE_CACHE_KEY) || '{}');
-    return sanitizeRestaurantProfile(profiles?.[databaseId]);
-  } catch {
-    return createDefaultRestaurantProfile();
-  }
+export const loadDefaultRestaurantProfile = () => {
+  return createDefaultRestaurantProfile();
 };
 
-export const cacheRestaurantProfile = (profile) => {
-  if (typeof localStorage === 'undefined') {
-    return sanitizeRestaurantProfile(profile);
-  }
-
-  const safeProfile = sanitizeRestaurantProfile(profile);
-
-  try {
-    const databaseId = getClientDatabaseId() || 'local';
-    const profiles = JSON.parse(localStorage.getItem(RESTAURANT_PROFILE_CACHE_KEY) || '{}');
-    localStorage.setItem(RESTAURANT_PROFILE_CACHE_KEY, JSON.stringify({
-      ...(profiles && typeof profiles === 'object' && !Array.isArray(profiles) ? profiles : {}),
-      [databaseId]: safeProfile,
-    }));
-  } catch {
-    return safeProfile;
-  }
-
-  return safeProfile;
+export const prepareRestaurantProfile = (profile) => {
+  return sanitizeRestaurantProfile(profile);
 };
 
 const findSingleCompletedRestaurant = async (db) => {
@@ -131,7 +103,7 @@ export const loadRestaurantProfile = async () => {
   const db = await getFirestoreDb();
 
   if (!db) {
-    return { ok: false, skipped: true, profile: loadCachedRestaurantProfile() };
+    return { ok: false, skipped: true, profile: loadDefaultRestaurantProfile() };
   }
 
   await ensureFirebaseAuth();
@@ -144,7 +116,7 @@ export const loadRestaurantProfile = async () => {
 
     if (canonicalDatabaseId && canonicalDatabaseId !== currentDatabaseId) {
       persistClientDatabaseId(canonicalDatabaseId);
-      const profile = cacheRestaurantProfile(singleRestaurant);
+      const profile = prepareRestaurantProfile(singleRestaurant);
 
       return {
         ok: true,
@@ -161,7 +133,7 @@ export const loadRestaurantProfile = async () => {
 
   if (!snapshot.exists()) {
     if (singleRestaurant) {
-      const profile = cacheRestaurantProfile(singleRestaurant);
+      const profile = prepareRestaurantProfile(singleRestaurant);
       return {
         ok: true,
         exists: true,
@@ -171,16 +143,16 @@ export const loadRestaurantProfile = async () => {
       };
     }
 
-    const cachedProfile = loadCachedRestaurantProfile();
+    const defaultProfile = loadDefaultRestaurantProfile();
     return {
       ok: true,
       exists: false,
-      source: cachedProfile.setupCompleted ? 'cache' : 'empty',
-      profile: cachedProfile,
+      source: 'empty',
+      profile: defaultProfile,
     };
   }
 
-  const profile = cacheRestaurantProfile(snapshot.data());
+  const profile = prepareRestaurantProfile(snapshot.data());
 
   return {
     ok: true,
@@ -213,7 +185,7 @@ export const saveRestaurantProfile = async (profile, options = {}) => {
     updatedAtServer: serverTimestamp(),
   }, { merge: true });
 
-  const savedProfile = cacheRestaurantProfile({
+  const savedProfile = prepareRestaurantProfile({
     ...safeProfile,
     setupCompleted,
     setupCompletedAt: setupCompleted ? safeProfile.setupCompletedAt || now : '',

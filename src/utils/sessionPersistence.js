@@ -21,38 +21,13 @@ export const sanitizeAuthSession = (session) => {
 };
 
 export const clearPersistedAuthSession = () => {
-  try {
-    globalThis.localStorage?.removeItem(AUTH_SESSION_STORAGE_KEY);
-  } catch {
-    // Storage can be unavailable in strict privacy modes.
-  }
-
-  try {
-    globalThis.sessionStorage?.removeItem(AUTH_SESSION_STORAGE_KEY);
-  } catch {
-    // Storage can be unavailable in strict privacy modes.
-  }
+  void AUTH_SESSION_STORAGE_KEY;
 };
 
 export const loadPersistedAuthSession = (databaseId) => {
-  try {
-    const savedSession = globalThis.localStorage?.getItem(AUTH_SESSION_STORAGE_KEY)
-      || globalThis.sessionStorage?.getItem(AUTH_SESSION_STORAGE_KEY);
-    const session = savedSession ? sanitizeAuthSession(JSON.parse(savedSession)) : null;
-    const activeDatabaseId = String(databaseId || '').trim();
-
-    if (!session || (session.databaseId && session.databaseId !== activeDatabaseId)) {
-      return null;
-    }
-
-    const migratedSession = { ...session, databaseId: activeDatabaseId };
-    globalThis.localStorage?.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(migratedSession));
-    globalThis.sessionStorage?.removeItem(AUTH_SESSION_STORAGE_KEY);
-    return migratedSession;
-  } catch {
-    clearPersistedAuthSession();
-    return null;
-  }
+  void databaseId;
+  clearPersistedAuthSession();
+  return null;
 };
 
 export const savePersistedAuthSession = (session, databaseId) => {
@@ -66,11 +41,7 @@ export const savePersistedAuthSession = (session, databaseId) => {
     return null;
   }
 
-  try {
-    globalThis.localStorage?.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(safeSession));
-    globalThis.sessionStorage?.removeItem(AUTH_SESSION_STORAGE_KEY);
-    return safeSession;
-  } catch {
-    return null;
-  }
+  void databaseId;
+  clearPersistedAuthSession();
+  return safeSession;
 };

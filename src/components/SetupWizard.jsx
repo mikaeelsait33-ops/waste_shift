@@ -1,11 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import MenuImport from './MenuImport';
 import { createRecordId } from '../utils/ids';
 import { createMenuItemKey, parseMenuPrice } from '../utils/menuImport';
 import { validatePin } from '../utils/pinAuth';
 import { STAFF_SECTIONS } from '../utils/staffSections';
-
-const SETUP_PROGRESS_KEY = 'wasteShiftSetupProgress';
 
 const createInitialProgress = () => ({
   stepIndex: 0,
@@ -33,27 +31,6 @@ const STEPS = [
   'Review',
 ];
 
-const loadSavedProgress = () => {
-  try {
-    const savedProgress = localStorage.getItem(SETUP_PROGRESS_KEY);
-    if (!savedProgress) {
-      return createInitialProgress();
-    }
-
-    const parsedProgress = JSON.parse(savedProgress);
-    return {
-      ...createInitialProgress(),
-      ...parsedProgress,
-      stepIndex: Math.min(2, Number(parsedProgress?.stepIndex) || 0),
-      managerPin: '',
-      confirmManagerPin: '',
-      staffMembers: [],
-    };
-  } catch {
-    return createInitialProgress();
-  }
-};
-
 const createBlankStaffDraft = () => ({
   name: '',
   role: '',
@@ -74,7 +51,7 @@ function SetupWizard({
   onPrepareManagerAccess,
   onFinishSetup,
 }) {
-  const [progress, setProgress] = useState(loadSavedProgress);
+  const [progress, setProgress] = useState(createInitialProgress);
   const [staffDraft, setStaffDraft] = useState(createBlankStaffDraft);
   const [menuDraft, setMenuDraft] = useState(createBlankMenuDraft);
   const [message, setMessage] = useState('');
@@ -83,21 +60,6 @@ function SetupWizard({
   const stepIndex = Math.max(0, Math.min(STEPS.length - 1, Number(progress.stepIndex) || 0));
   const currentStep = STEPS[stepIndex];
   const completionPercent = Math.round(((stepIndex + 1) / STEPS.length) * 100);
-
-  useEffect(() => {
-    const {
-      managerPin: _managerPin,
-      confirmManagerPin: _confirmManagerPin,
-      staffMembers: _staffMembers,
-      ...safeProgress
-    } = progress;
-
-    localStorage.setItem(SETUP_PROGRESS_KEY, JSON.stringify({
-      ...safeProgress,
-      stepIndex: Math.min(2, stepIndex),
-      staffMembers: [],
-    }));
-  }, [progress, stepIndex]);
 
   const existingMenuItems = useMemo(() => progress.menuItems.map((item) => ({
     key: item.key || createMenuItemKey(item.name),
@@ -301,7 +263,6 @@ function SetupWizard({
         throw new Error(result?.message || 'Could not finish setup.');
       }
 
-      localStorage.removeItem(SETUP_PROGRESS_KEY);
       setMessage('Setup complete.');
     } catch (error) {
       setMessage(error?.message || 'Could not finish setup.');

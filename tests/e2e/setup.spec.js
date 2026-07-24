@@ -46,8 +46,8 @@ test('setup wizard remains usable on mobile viewport', async ({ page, isMobile }
   await expect(page.getByLabel('Manager name')).toBeVisible();
 });
 
-test('remembered shop and login survive reopening the app', async ({ page, context, isMobile }) => {
-  test.skip(isMobile, 'Persistence behavior is browser-wide and covered on desktop Chromium.');
+test('legacy browser cache cannot unlock the Firebase-only app', async ({ page, context, isMobile }) => {
+  test.skip(isMobile, 'Legacy browser cache behavior is browser-wide and covered on desktop Chromium.');
 
   const databaseId = 'ws_persistence_test';
   const manager = {
@@ -90,25 +90,23 @@ test('remembered shop and login survive reopening the app', async ({ page, conte
   const reopenedPage = await context.newPage();
   await reopenedPage.goto('/');
 
-  await expect(reopenedPage.locator('.app-shell')).toBeVisible();
-  await expect(reopenedPage.getByRole('heading', { name: 'Set Up This Restaurant' })).toHaveCount(0);
+  await expect(reopenedPage.getByRole('heading', { name: 'Set Up This Restaurant' })).toBeVisible();
+  await expect(reopenedPage.getByText('Firebase required')).toBeVisible();
+  await expect(reopenedPage.locator('.app-shell')).toHaveCount(0);
   await expect(reopenedPage.getByRole('heading', { name: 'Create Manager Access' })).toHaveCount(0);
   expect(reopenedPage.url()).not.toContain('restaurant=');
 
   await reopenedPage.goto('/?restaurant=legacy-shop');
-  await expect(reopenedPage.locator('.app-shell')).toBeVisible();
+  await expect(reopenedPage.getByRole('heading', { name: 'Set Up This Restaurant' })).toBeVisible();
+  await expect(reopenedPage.locator('.app-shell')).toHaveCount(0);
   expect(reopenedPage.url()).not.toContain('restaurant=');
 
-  await reopenedPage.locator('.navbar').getByRole('button', { name: 'Lock' }).click();
-  await expect(reopenedPage.getByRole('heading', { name: 'Start Waste Logging' })).toBeVisible();
-  expect(await reopenedPage.evaluate(() => localStorage.getItem('wasteShiftAuthSession'))).toBeNull();
-
   await reopenedPage.reload();
-  await expect(reopenedPage.getByRole('heading', { name: 'Start Waste Logging' })).toBeVisible();
+  await expect(reopenedPage.getByRole('heading', { name: 'Set Up This Restaurant' })).toBeVisible();
   await expect(reopenedPage.locator('.app-shell')).toHaveCount(0);
 });
 
-test('staff session exposes waste logging without management screens', async ({ page, isMobile }) => {
+test('legacy staff session cache does not grant staff access', async ({ page }) => {
   const databaseId = 'ws_staff_role_test';
   const manager = {
     id: 'staff_manager',
@@ -159,10 +157,9 @@ test('staff session exposes waste logging without management screens', async ({ 
   }, { restaurantId: databaseId, managerAccount: manager, staffAccount: waiter });
 
   await page.reload();
-  await expect(page.locator('.app-shell')).toBeVisible();
-  const wasteNavigation = isMobile ? page.locator('.bottom-nav') : page.locator('.nav-links');
-  await expect(wasteNavigation.getByRole('button', { name: isMobile ? 'Log' : /Log Waste/ })).toBeVisible();
-  await expect(wasteNavigation.getByRole('button', { name: isMobile ? 'Waste' : /Waste Log/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Set Up This Restaurant' })).toBeVisible();
+  await expect(page.getByText('Firebase required')).toBeVisible();
+  await expect(page.locator('.app-shell')).toHaveCount(0);
   await expect(page.locator('.nav-button', { hasText: 'Dashboard' })).toHaveCount(0);
   await expect(page.locator('.nav-button', { hasText: 'Inventory' })).toHaveCount(0);
   await expect(page.locator('.nav-button', { hasText: 'Menu & Pricing' })).toHaveCount(0);

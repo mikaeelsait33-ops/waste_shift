@@ -1170,7 +1170,7 @@ function InvoiceScanner({
         setWorkspace(data);
         setVatRate(Number(data.settings?.vatRate || DEFAULT_VAT_RATE));
         if (!firebaseReady) {
-          setMessage('Firebase is not configured. Manual invoice entry works locally, but saving is disabled.');
+          setMessage('Firebase is not configured. Invoice saving is disabled.');
         }
       } catch (error) {
         if (!isCancelled) {
@@ -2293,7 +2293,7 @@ function InvoiceScanner({
         <div className="notice-panel notice-panel--warning">
           <div>
             <h3 className="breakdown-title">Firebase required for saving</h3>
-            <p className="small-text" style={{ margin: 0 }}>Manual entry works locally, but invoices, ingredients, suppliers, and stock updates need Firebase env vars.</p>
+            <p className="small-text" style={{ margin: 0 }}>Invoices, ingredients, suppliers, and stock updates need Firebase env vars.</p>
           </div>
         </div>
       )}

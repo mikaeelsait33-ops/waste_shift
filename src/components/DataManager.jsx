@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { getEntryFoodCostLost } from '../utils/wasteCalculations';
+import { getAutomaticManagerApiHeaders } from '../utils/apiHeaders';
 
-const DATABASE_NAME = 'WasteShift Local Database';
+const DATABASE_NAME = 'WasteShift Firebase Backup';
 const DATABASE_VERSION = 1;
 const MAX_BACKUP_FILE_BYTES = 5 * 1024 * 1024;
 
@@ -34,8 +35,10 @@ function DataManager({
   const fileInputRef = useRef(null);
   const [message, setMessage] = useState('');
   const [draftSyncAccessKey, setDraftSyncAccessKey] = useState(syncAccessKey || '');
-  const [lastExportAt, setLastExportAt] = useState(() => localStorage.getItem('wasteShiftLastExportAt') || '');
+  const [lastExportAt, setLastExportAt] = useState('');
   const [importPreview, setImportPreview] = useState(null);
+  const [duplicateCleanupSummary, setDuplicateCleanupSummary] = useState(null);
+  const [isCheckingDuplicateScopes, setIsCheckingDuplicateScopes] = useState(false);
 
   const recipeCount = Object.keys(recipes).length;
   const menuItemCount = Array.isArray(menuItems) ? menuItems.length : 0;
@@ -100,6 +103,7 @@ function DataManager({
   const canExportData = Boolean(accessProfile?.canExportData);
   const canManageServerSync = Boolean(accessProfile?.canManageServerSync);
   const canRestoreDatabase = Boolean(accessProfile?.canRestoreDatabase);
+  const canCleanDuplicateScopes = Boolean(accessProfile?.canClearData);
 
   useEffect(() => {
     setDraftSyncAccessKey(syncAccessKey || '');
@@ -144,7 +148,6 @@ function DataManager({
     anchor.click();
     anchor.remove();
     URL.revokeObjectURL(url);
-    localStorage.setItem('wasteShiftLastExportAt', snapshot.exportedAt);
     setLastExportAt(snapshot.exportedAt);
     setMessage(`Database backup exported with ${wasteItems.length} waste entries.`);
   };
@@ -219,7 +222,7 @@ function DataManager({
           `${summary.wasteItems} waste entries, ${summary.recipes} recipes, ${summary.staff} staff members.`,
           `${summary.storeRoomItems} store room items, ${summary.storeRoomMovements} store room movements.`,
           `Budget: R${summary.budget.toFixed(2)}.`,
-          'This will replace the current local database.',
+          'This will replace the current Firebase app snapshot.',
         ].join('\n');
 
         if (!window.confirm(confirmationText)) {
@@ -249,6 +252,45 @@ function DataManager({
     setMessage(draftSyncAccessKey.trim() ? 'Server sync access key is active until the app is locked or refreshed.' : 'Server sync access key removed.');
   };
 
+  const runDuplicateScopeCleanup = async ({ deleteDuplicates = false } = {}) => {
+    if (!canCleanDuplicateScopes) {
+      setMessage('Only an owner or manager can clean duplicate Firebase scopes.');
+      return;
+    }
+
+    const confirmation = deleteDuplicates
+      ? window.prompt('Type CLEAN DUPLICATES to delete old non-canonical Firebase restaurant/account scopes.')
+      : '';
+
+    if (deleteDuplicates && confirmation !== 'CLEAN DUPLICATES') {
+      setMessage('Duplicate cleanup cancelled.');
+      return;
+    }
+
+    setIsCheckingDuplicateScopes(true);
+    setMessage(deleteDuplicates ? 'Cleaning duplicate Firebase scopes...' : 'Checking duplicate Firebase scopes...');
+
+    try {
+      const response = await fetch('/api/admin-cleanup-duplicates', {
+        method: 'POST',
+        headers: await getAutomaticManagerApiHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify({ confirmation }),
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok || payload?.ok === false) {
+        throw new Error(payload?.message || 'Duplicate cleanup request failed.');
+      }
+
+      setDuplicateCleanupSummary(payload);
+      setMessage(payload.message || 'Duplicate Firebase scope check complete.');
+    } catch (error) {
+      setMessage(error?.message || 'Could not check duplicate Firebase scopes.');
+    } finally {
+      setIsCheckingDuplicateScopes(false);
+    }
+  };
+
   return (
     <section className="panel">
       <div className="panel-body">
@@ -256,18 +298,18 @@ function DataManager({
           <div>
             <p className="eyebrow">Database</p>
             <h2 className="title">Data Health</h2>
-            <p className="subtitle">Vercel hosts the app, Firebase is the primary database, and this browser keeps a local fallback.</p>
+            <p className="subtitle">Vercel hosts the app and Firebase is the primary database for every signed-in manager device.</p>
           </div>
         </div>
 
         <div className="notice-panel notice-panel--success">
           <div>
-            <h3 className="breakdown-title">Browser fallback</h3>
+            <h3 className="breakdown-title">Firebase-only live data</h3>
             <p className="small-text" style={{ margin: 0 }}>
-              Auto-save is active. Use backups if you change browsers, clear site data, or run the app on another port.
+              Live restaurant data is loaded from Firebase. Browser storage is not used as a restaurant database.
             </p>
           </div>
-          <span className="badge is-green">{lastSavedAt ? `Last saved: ${formatDateTime(lastSavedAt)}` : 'Ready to save'}</span>
+          <span className="badge is-green">{lastSavedAt ? `Current session: ${formatDateTime(lastSavedAt)}` : 'Ready'}</span>
         </div>
 
         <div className={`notice-panel${firebaseNoticeClass}`}>
@@ -312,6 +354,44 @@ function DataManager({
               {serverSync?.status === 'saving' ? 'Saving...' : canManageServerSync ? 'Save database' : 'Owner only'}
             </button>
           </div>
+        </div>
+
+        <div className="database-card">
+          <h3 className="breakdown-title">Duplicate Firebase scopes</h3>
+          <p className="small-text">
+            Checks for old restaurant/account scopes outside the canonical Firebase restaurant. Cleanup never touches the selected main restaurant scope.
+          </p>
+          <div className="manager-row">
+            <button
+              type="button"
+              onClick={() => runDuplicateScopeCleanup()}
+              className="ghost-button"
+              disabled={isCheckingDuplicateScopes || !canCleanDuplicateScopes}
+            >
+              {isCheckingDuplicateScopes ? 'Checking...' : canCleanDuplicateScopes ? 'Check duplicates' : 'Manager only'}
+            </button>
+            <button
+              type="button"
+              onClick={() => runDuplicateScopeCleanup({ deleteDuplicates: true })}
+              className="danger-button"
+              disabled={isCheckingDuplicateScopes || !canCleanDuplicateScopes}
+            >
+              Clean duplicates
+            </button>
+          </div>
+          {duplicateCleanupSummary?.summary && (
+            <div className="import-summary-grid" style={{ marginTop: 12 }}>
+              <span className={`badge${duplicateCleanupSummary.summary.totalDocuments === 0 ? ' is-green' : ' is-yellow'}`}>
+                {duplicateCleanupSummary.summary.totalDocuments} duplicate docs
+              </span>
+              {Object.entries(duplicateCleanupSummary.summary.byDatabaseId || {}).slice(0, 6).map(([databaseId, count]) => (
+                <span className="badge" key={databaseId}>{databaseId}: {count}</span>
+              ))}
+              {duplicateCleanupSummary.deletedCount !== undefined && (
+                <span className="badge is-green">Deleted {duplicateCleanupSummary.deletedCount}</span>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="database-card">
@@ -394,7 +474,7 @@ function DataManager({
 
           <div className="database-card">
             <h3 className="breakdown-title">Restore database</h3>
-            <p className="small-text">Import a WasteShift backup file to replace this browser's local database.</p>
+            <p className="small-text">Import a WasteShift backup file to replace the Firebase app snapshot for this restaurant.</p>
             <input
               ref={fileInputRef}
               type="file"

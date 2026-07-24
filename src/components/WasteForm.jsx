@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   calculateItemPriceCost,
   findItemPriceRecord,
@@ -20,9 +20,6 @@ import {
 } from '../utils/wasteCalculations';
 import { createRecordId } from '../utils/ids';
 import {
-  deleteWasteFormDraft,
-  loadWasteFormDraft,
-  saveWasteFormDraft,
   wasteDraftHasContent,
 } from '../utils/wasteDrafts';
 
@@ -230,8 +227,6 @@ function WasteForm({
   const [photoName, setPhotoName] = useState('');
   const [isProcessingPhoto, setIsProcessingPhoto] = useState(false);
   const [isSavingEntry, setIsSavingEntry] = useState(false);
-  const [draftLoaded, setDraftLoaded] = useState(false);
-  const [draftSavedAt, setDraftSavedAt] = useState('');
   const [lastSavedEntryId, setLastSavedEntryId] = useState('');
   const submitInFlightRef = useRef(false);
   const submitButtonRef = useRef(null);
@@ -453,29 +448,7 @@ function WasteForm({
     setWasteDate(getTodayYMD());
     setPhotoPreview('');
     setPhotoName('');
-    deleteWasteFormDraft().catch(() => {});
-    setDraftSavedAt('');
   };
-
-  const applyDraftFields = useCallback((fields) => {
-    setFormType(fields.formType || 'single');
-    setMenuSearch(fields.menuSearch || '');
-    setName(fields.name || '');
-    setQuantity(fields.quantity || '1');
-    setUnit(fields.unit || 'each');
-    setPortionAmount(fields.portionAmount || '');
-    setPortionUnit(fields.portionUnit || 'g');
-    setCategory(fields.category || 'Produce');
-    setWasteClassification(fields.wasteClassification || DEFAULT_WASTE_CLASSIFICATION);
-    setReason(fields.reason || 'Expired');
-    setCustomReason(fields.customReason || '');
-    setSelectedStaffId(fields.selectedStaffId || activeStaffId || '');
-    setCost(fields.cost || '');
-    setNotes(fields.notes || '');
-    setWasteDate(fields.wasteDate || getTodayYMD());
-    setSelectedRecipeKey(fields.selectedRecipeKey || safeMenuItems[0]?.key || '');
-    setSelectedComponentKeys(Array.isArray(fields.selectedComponentKeys) ? fields.selectedComponentKeys : []);
-  }, [activeStaffId, safeMenuItems]);
 
   const applyProfile = (profile) => {
     if (!profile) return;
@@ -579,53 +552,6 @@ function WasteForm({
   }, []);
 
   useEffect(() => {
-    let isCancelled = false;
-
-    loadWasteFormDraft()
-      .then((draft) => {
-        if (isCancelled) {
-          return;
-        }
-
-        if (draft?.fields && wasteDraftHasContent(draft)) {
-          applyDraftFields(draft.fields);
-          setDraftSavedAt(draft.savedAt || '');
-          setFormMessage('Draft restored. Finish it or discard it.');
-        }
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (!isCancelled) {
-          setDraftLoaded(true);
-        }
-      });
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [applyDraftFields]);
-
-  useEffect(() => {
-    if (!draftLoaded || isSavingEntry) {
-      return undefined;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      if (!wasteDraftHasContent(draftFields)) {
-        deleteWasteFormDraft().catch(() => {});
-        setDraftSavedAt('');
-        return;
-      }
-
-      saveWasteFormDraft(draftFields)
-        .then(() => setDraftSavedAt(new Date().toISOString()))
-        .catch(() => {});
-    }, 500);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [draftFields, draftLoaded, isSavingEntry]);
-
-  useEffect(() => {
     const handleBeforeUnload = (event) => {
       if (!wasteDraftHasContent(draftFields)) {
         return;
@@ -703,8 +629,7 @@ function WasteForm({
 
   const handleDiscardDraft = async () => {
     clearFormAfterSave();
-    await deleteWasteFormDraft().catch(() => {});
-    setFormMessage('Draft discarded.');
+    setFormMessage('Form cleared.');
   };
 
   const handleRetryLastSync = async () => {
@@ -768,7 +693,7 @@ function WasteForm({
       setLastSavedEntryId(repeatedEntry.id);
       setFormMessage(
         result?.syncStatus === 'failed'
-          ? `Repeated ${lastEntry.name}. Saved locally, sync needs retry.`
+          ? `Repeated ${lastEntry.name}. Sync failed; retry before leaving this screen.`
           : result?.syncStatus === 'pending'
             ? `Repeated ${lastEntry.name}. It will sync when online.`
             : `Repeated ${lastEntry.name} for R${getEntryFoodCostLost(repeatedEntry).toFixed(2)}.`
@@ -996,7 +921,7 @@ function WasteForm({
     setLastSavedEntryId(finalEntry.id);
     setFormMessage(
       saveResult?.syncStatus === 'failed'
-        ? `Logged ${finalEntry.name} locally. Sync failed, use retry.`
+        ? `Logged ${finalEntry.name} in this session. Sync failed; use retry before leaving.`
         : saveResult?.syncStatus === 'pending'
           ? `Logged ${finalEntry.name}. It will sync when online.`
           : finalEntry.costStatus === 'needs_item_price'
@@ -1024,7 +949,6 @@ function WasteForm({
             <p className="subtitle">Capture raw stock waste or finished menu items.</p>
           </div>
           <div className="manager-row">
-            {draftSavedAt && <span className="badge">Draft saved</span>}
             <button type="button" className="ghost-button compact-action" onClick={handleDiscardDraft}>
               Clear form
             </button>
