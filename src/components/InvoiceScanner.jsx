@@ -8,6 +8,7 @@ import {
   getBaseUnitInfo,
   getLinkedMenuItemsForIngredient,
   normalizeInvoiceUnit,
+  parseInvoiceCsvText,
   roundMoney,
   summarizeInvoiceItems,
 } from '../utils/invoiceParsing';
@@ -48,13 +49,13 @@ const UNIT_OPTIONS = ['kg', 'g', 'L', 'ml', 'each', '5L', 'case of 12', 'case', 
 const SCAN_IMAGE_MAX_EDGE = 1800;
 const SCAN_IMAGE_QUALITY = 0.84;
 const MAX_SCAN_BYTES = 8 * 1024 * 1024;
-const SUPPORTED_SCAN_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
+const SUPPORTED_SCAN_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'text/csv', 'application/vnd.ms-excel']);
 const INVOICE_REVIEW_PAGE_SIZE = 20;
 const INGREDIENT_LIBRARY_PAGE_SIZE = 30;
 const SCAN_STAGE_LABELS = {
   idle: 'Ready',
   uploading: 'Uploading',
-  gemini: 'Reading with Gemini',
+  gemini: 'Reading invoice',
   needs_review: 'Needs review',
   ready_to_save: 'Ready to save',
   saved: 'Saved',
@@ -294,6 +295,110 @@ const mergeStockLevelUpdates = (stockLevels, updates, invoiceId) => {
   return [...stockByIngredientId.values()];
 };
 
+const createRawIngredientRecordsFromInvoiceRows = ({ invoiceRecord, ingredientRows }) => (
+  (Array.isArray(ingredientRows) ? ingredientRows : [])
+    .filter((row) => row?.ingredientId && row?.ingredientName)
+    .map((row) => {
+      const costPerBaseUnit = Number(row.costPerBaseUnit ?? row.costPerBaseUnitExVAT ?? 0);
+      const unitPriceExVAT = Number(row.unitPriceExVAT ?? row.priceExVAT ?? 0);
+      const unitPriceIncVAT = Number(row.unitPriceIncVAT ?? row.priceIncVAT ?? 0);
+      const lineTotalExVAT = Number(row.totalPrice ?? row.priceExVAT ?? 0);
+      const lineTotalIncVAT = Number(row.lineTotalIncVAT ?? row.priceIncVAT ?? 0);
+      const supplier = getInvoiceSupplierName(invoiceRecord);
+
+      return normalizeMasterIngredientRecord({
+        id: row.ingredientId,
+        ingredientId: row.ingredientId,
+        key: row.ingredientId,
+        name: row.ingredientName,
+        canonicalName: row.canonicalName || row.ingredientName,
+        category: row.category || 'Other',
+        unit: row.baseUnit || row.unit || 'each',
+        active: true,
+        latestCost: unitPriceExVAT,
+        currentPrice: unitPriceExVAT,
+        currentPriceIncVAT: unitPriceIncVAT,
+        lastPriceExVAT: unitPriceExVAT,
+        lastPriceIncVAT: unitPriceIncVAT,
+        lastLineTotalExVAT: lineTotalExVAT,
+        lastLineTotalIncVAT: lineTotalIncVAT,
+        lastQuantity: Number(row.quantity ?? row.invoiceQuantity ?? 0),
+        lastUnit: row.unit || row.invoiceUnit || 'each',
+        baseQuantity: Number(row.baseQuantity ?? row.convertedQuantity ?? 0),
+        baseUnit: row.baseUnit || row.unit || 'each',
+        costPerBaseUnitExVAT: costPerBaseUnit,
+        latestCostPerBaseUnit: costPerBaseUnit,
+        lastInvoicePrice: lineTotalExVAT,
+        lastPurchaseQuantity: Number(row.baseQuantity ?? row.convertedQuantity ?? row.quantity ?? 0),
+        lastPurchaseUnit: row.baseUnit || row.unit || 'each',
+        lastInvoiceDate: invoiceRecord.invoiceDate || '',
+        preferredSupplier: supplier,
+        supplier,
+        supplierId: invoiceRecord.supplierId || createInvoiceKey(supplier),
+        aliases: uniqueMasterStrings([row.aliases, row.rawName, row.normalizedRawName, row.ingredientName, row.canonicalName]),
+        linkedMenuItemIds: Array.isArray(row.linkedMenuItemIds) ? row.linkedMenuItemIds : [],
+        linkedRecipeNames: Array.isArray(row.linkedRecipeNames) ? row.linkedRecipeNames : [],
+        priceHistory: [{
+          id: `${invoiceRecord.id || invoiceRecord.invoiceId}-${row.lineItemId || row.ingredientId}`,
+          invoiceId: invoiceRecord.id || invoiceRecord.invoiceId,
+          date: invoiceRecord.invoiceDate || '',
+          supplier,
+          unit: row.unit || row.invoiceUnit || 'each',
+          baseUnit: row.baseUnit || row.unit || 'each',
+          quantity: Number(row.quantity ?? row.invoiceQuantity ?? 0),
+          priceExVAT: unitPriceExVAT,
+          priceIncVAT: unitPriceIncVAT,
+          linePriceExVAT: lineTotalExVAT,
+          linePriceIncVAT: lineTotalIncVAT,
+          totalPrice: lineTotalExVAT,
+          costPerBaseUnit,
+        }],
+      });
+    })
+    .filter(Boolean)
+);
+
+const mergeRawIngredientRecords = (ingredients, invoiceRecord) => {
+  const ingredientRecords = createRawIngredientRecordsFromInvoiceRows({
+    invoiceRecord,
+    ingredientRows: invoiceRecord.ingredientRows,
+  });
+
+  if (ingredientRecords.length === 0) {
+    return Array.isArray(ingredients) ? ingredients : [];
+  }
+
+  const recordsById = new Map((Array.isArray(ingredients) ? ingredients : []).map((ingredient) => [
+    ingredient.id || ingredient.ingredientId || ingredient.key,
+    ingredient,
+  ]));
+
+  ingredientRecords.forEach((ingredientRecord) => {
+    const existingRecord = recordsById.get(ingredientRecord.id) || {};
+    const existingHistory = Array.isArray(existingRecord.priceHistory) ? existingRecord.priceHistory : [];
+    const incomingHistory = Array.isArray(ingredientRecord.priceHistory) ? ingredientRecord.priceHistory : [];
+    const incomingHistoryIds = new Set(incomingHistory.map((history) => history.id || `${history.invoiceId}-${history.date}-${history.priceExVAT}`));
+    const mergedRecord = normalizeMasterIngredientRecord({
+      ...existingRecord,
+      ...ingredientRecord,
+      aliases: uniqueMasterStrings([existingRecord.aliases, existingRecord.previousRawNames, ingredientRecord.aliases]),
+      previousRawNames: uniqueMasterStrings([existingRecord.previousRawNames, ingredientRecord.rawName]),
+      linkedMenuItemIds: uniqueMasterStrings([existingRecord.linkedMenuItemIds, ingredientRecord.linkedMenuItemIds]),
+      linkedRecipeNames: uniqueMasterStrings([existingRecord.linkedRecipeNames, ingredientRecord.linkedRecipeNames]),
+      priceHistory: [
+        ...existingHistory.filter((history) => !incomingHistoryIds.has(history.id || `${history.invoiceId}-${history.date}-${history.priceExVAT}`)),
+        ...incomingHistory,
+      ].sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()),
+    });
+
+    if (mergedRecord) {
+      recordsById.set(mergedRecord.id, mergedRecord);
+    }
+  });
+
+  return [...recordsById.values()].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+};
+
 const createLocalMenuItems = (recipes, menuItems) => (
   (Array.isArray(menuItems) ? menuItems : []).map((menuItem) => {
     const recipe = recipes?.[menuItem.key] || {};
@@ -332,6 +437,14 @@ const readBlobAsDataUrl = (blob) => new Promise((resolve, reject) => {
   reader.onload = () => resolve(String(reader.result || ''));
   reader.onerror = () => reject(new Error('Could not read this invoice file.'));
   reader.readAsDataURL(blob);
+});
+
+const readBlobAsText = (blob) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+
+  reader.onload = () => resolve(String(reader.result || ''));
+  reader.onerror = () => reject(new Error('Could not read this invoice CSV file.'));
+  reader.readAsText(blob);
 });
 
 const getBase64FromDataUrl = (dataUrl) => String(dataUrl || '').split(',').pop() || '';
@@ -392,7 +505,7 @@ const createImageScanPayload = (file) => new Promise((resolve, reject) => {
 });
 
 const createScanPayload = async (file) => {
-  if (!file || !SUPPORTED_SCAN_TYPES.has(file.type)) {
+  if (!file || !isSupportedInvoiceFile(file) || isCsvInvoiceFile(file)) {
     throw new Error('Upload a JPG, PNG, WEBP, or PDF invoice.');
   }
 
@@ -409,6 +522,26 @@ const createScanPayload = async (file) => {
     mimeType: file.type,
     data,
   };
+};
+
+const isCsvInvoiceFile = (file) => {
+  const fileName = String(file?.name || '').toLowerCase();
+  const fileType = String(file?.type || '').toLowerCase();
+
+  return fileName.endsWith('.csv') || ['text/csv', 'application/csv', 'application/vnd.ms-excel'].includes(fileType);
+};
+
+const isSupportedInvoiceFile = (file) => {
+  const fileName = String(file?.name || '').toLowerCase();
+  const fileType = String(file?.type || '').toLowerCase();
+
+  return SUPPORTED_SCAN_TYPES.has(fileType)
+    || fileName.endsWith('.csv')
+    || fileName.endsWith('.pdf')
+    || fileName.endsWith('.jpg')
+    || fileName.endsWith('.jpeg')
+    || fileName.endsWith('.png')
+    || fileName.endsWith('.webp');
 };
 
 const getScannedLineTotal = (item, nextVatMode) => {
@@ -1044,6 +1177,7 @@ function InvoiceScanner({
       return {
         ...currentWorkspace,
         invoices: mergeConfirmedInvoiceRecord(currentWorkspace.invoices, invoiceRecord),
+        ingredients: mergeRawIngredientRecords(currentWorkspace.ingredients, invoiceRecord),
         suppliers: mergeSupplierRecord(
           currentWorkspace.suppliers,
           invoiceRecord,
@@ -1079,7 +1213,7 @@ function InvoiceScanner({
     });
 
     if (!stockResult?.ok) {
-      throw new Error('Invoice was saved, but stock posting could not be completed. Open Scanned invoices to retry it.');
+      throw new Error('Invoice was saved, but stock posting could not be completed. Open Processed invoices to retry it.');
     }
 
     const nextStockPostingStatus = postingMode === 'historical_posted' ? 'historical_posted' : 'posted';
@@ -1119,7 +1253,7 @@ function InvoiceScanner({
   const postInvoiceStockInBackground = ({ invoiceRecord, postingMode = 'posted', successMessage }) => {
     postInvoiceStock({ invoiceRecord, postingMode, successMessage })
       .catch((error) => {
-        setMessage(error?.message || 'Invoice was saved, but stock posting could not be completed. Open Scanned invoices to retry it.');
+        setMessage(error?.message || 'Invoice was saved, but stock posting could not be completed. Open Processed invoices to retry it.');
       })
       .finally(() => {
         setPostingInvoiceId((currentId) => (
@@ -1481,6 +1615,64 @@ function InvoiceScanner({
     };
   };
 
+  const scanCsvInvoiceFile = async (file) => {
+    const rawText = await readBlobAsText(file);
+    const invoice = parseInvoiceCsvText(rawText, { vatRate });
+    const nextVatMode = invoice.vatMode || vatMode;
+    const nextVatRate = Number.isFinite(Number(invoice.vatRate)) ? Number(invoice.vatRate) : vatRate;
+    const importedLines = (Array.isArray(invoice.items) ? invoice.items : [])
+      .map((item) => applyLineCalculations({
+        ...item,
+        vatMode: nextVatMode,
+        vatRate: nextVatRate,
+        rawLine: item.rawLine || `CSV invoice: ${item.itemName}`,
+        confidence: Number(item.confidence) || 0.94,
+      }, { vatMode: nextVatMode, vatRate: nextVatRate }))
+      .filter((item) => item.itemName && Number(item.lineTotal) > 0);
+
+    if (importedLines.length === 0) {
+      throw new Error('No usable invoice line items were found in this CSV. Check that it has item, quantity, unit, price, and total columns.');
+    }
+
+    const importedTotals = invoice.totals || summarizeInvoiceItems(importedLines);
+    const warnings = Array.isArray(invoice.warnings) ? invoice.warnings : [];
+
+    return {
+      file,
+      fileName: file.name,
+      supplierName: invoice.supplierName || '',
+      invoiceNumber: invoice.invoiceNumber || '',
+      invoiceDate: /^\d{4}-\d{2}-\d{2}$/.test(invoice.invoiceDate || '') ? invoice.invoiceDate : '',
+      vatMode: nextVatMode,
+      vatRate: nextVatRate,
+      extractedTotals: importedTotals,
+      lineItems: importedLines,
+      rawText,
+      scannerMetadata: {
+        source: 'csv',
+        confidence: 0.94,
+        reviewStatus: 'ready_to_save',
+        scanDateTime: new Date().toISOString(),
+        documentType: 'invoice_csv',
+      },
+      summary: {
+        fileName: file.name,
+        lineCount: importedLines.length,
+        supplierName: invoice.supplierName || '',
+        invoiceNumber: invoice.invoiceNumber || '',
+        totals: importedTotals,
+        model: 'CSV invoice import',
+        confidence: 0.94,
+        needsReview: warnings.length > 0,
+        warnings,
+      },
+    };
+  };
+
+  const readInvoiceFileForReview = (file) => (
+    isCsvInvoiceFile(file) ? scanCsvInvoiceFile(file) : scanFileWithGeminiVision(file)
+  );
+
   const loadBatchDraftForReview = (draft) => {
     if (!draft || !['ready', 'saved'].includes(draft.status)) {
       return;
@@ -1510,7 +1702,7 @@ function InvoiceScanner({
 
   const handleScanFileChange = (event) => {
     const files = Array.from(event.target.files || []);
-    const invalidFile = files.find((file) => !SUPPORTED_SCAN_TYPES.has(file.type));
+    const invalidFile = files.find((file) => !isSupportedInvoiceFile(file));
 
     setScanSummary(null);
     setScanStage('idle');
@@ -1519,7 +1711,7 @@ function InvoiceScanner({
     setActiveBatchDraftId('');
 
     if (invalidFile) {
-      setMessage('Upload JPG, PNG, WEBP, or PDF invoices only.');
+      setMessage('Upload JPG, PNG, WEBP, PDF, or CSV invoices only.');
       setScanFile(null);
       setScanFiles([]);
       setBatchDrafts([]);
@@ -1543,13 +1735,13 @@ function InvoiceScanner({
     }
 
     setMessage(files.length === 1
-      ? `${files[0].name} selected for Gemini scanning.`
-      : `${files.length} invoices selected. Scan all or review them one at a time.`);
+      ? `${files[0].name} selected for invoice import.`
+      : `${files.length} invoices selected. Import all or review them one at a time.`);
   };
 
   const scanInvoiceWithGemini = async () => {
     if (!scanFile) {
-      setMessage('Choose an invoice file before scanning.');
+      setMessage('Choose an invoice file before importing.');
       return;
     }
 
@@ -1557,11 +1749,11 @@ function InvoiceScanner({
       setIsScanningInvoice(true);
       setScanSummary(null);
       setScanStage('uploading');
-      setMessage('Uploading invoice for Gemini...');
+      setMessage(isCsvInvoiceFile(scanFile) ? 'Reading invoice CSV...' : 'Uploading invoice for Gemini...');
 
       setScanStage('gemini');
-      setMessage('Asking Gemini to read the invoice file...');
-      const scannedDraft = await scanFileWithGeminiVision(scanFile);
+      setMessage(isCsvInvoiceFile(scanFile) ? 'Parsing invoice CSV...' : 'Asking Gemini to read the invoice file...');
+      const scannedDraft = await readInvoiceFileForReview(scanFile);
 
       if (scannedDraft.supplierName) setSupplierName(scannedDraft.supplierName);
       if (scannedDraft.invoiceNumber) setInvoiceNumber(scannedDraft.invoiceNumber);
@@ -1587,10 +1779,10 @@ function InvoiceScanner({
             }
           : draft
       )));
-      setMessage(`Gemini added ${scannedDraft.lineItems.length} invoice line${scannedDraft.lineItems.length === 1 ? '' : 's'} for review.`);
+      setMessage(`${scannedDraft.summary?.model || 'Invoice import'} added ${scannedDraft.lineItems.length} invoice line${scannedDraft.lineItems.length === 1 ? '' : 's'} for review.`);
     } catch (error) {
       setScanStage('failed');
-      setMessage(error?.message || 'Could not scan this invoice with Gemini.');
+      setMessage(error?.message || 'Could not import this invoice.');
     } finally {
       setIsScanningInvoice(false);
     }
@@ -1598,14 +1790,14 @@ function InvoiceScanner({
 
   const scanBatchInvoices = async () => {
     if (batchDrafts.length === 0) {
-      setMessage('Choose invoice files before batch scanning.');
+      setMessage('Choose invoice files before batch import.');
       return;
     }
 
     try {
       setIsBatchScanning(true);
       setScanStage('gemini');
-      setMessage(`Scanning ${batchDrafts.length} invoice${batchDrafts.length === 1 ? '' : 's'} with Gemini...`);
+      setMessage(`Importing ${batchDrafts.length} invoice${batchDrafts.length === 1 ? '' : 's'}...`);
 
       const readyDrafts = [];
 
@@ -1615,7 +1807,7 @@ function InvoiceScanner({
         )));
 
         try {
-          const scannedDraft = await scanFileWithGeminiVision(draft.file);
+          const scannedDraft = await readInvoiceFileForReview(draft.file);
           const readyDraft = {
             ...draft,
             ...scannedDraft,
@@ -1631,7 +1823,7 @@ function InvoiceScanner({
         } catch (error) {
           setBatchDrafts((currentDrafts) => currentDrafts.map((currentDraft) => (
             currentDraft.id === draft.id
-              ? { ...currentDraft, status: 'error', error: error?.message || 'Could not scan this invoice.' }
+              ? { ...currentDraft, status: 'error', error: error?.message || 'Could not import this invoice.' }
               : currentDraft
           )));
         }
@@ -1642,7 +1834,7 @@ function InvoiceScanner({
       }
 
       setScanStage(readyDrafts.length > 0 ? 'needs_review' : 'failed');
-      setMessage(`Batch scan complete: ${readyDrafts.length} of ${batchDrafts.length} invoice${batchDrafts.length === 1 ? '' : 's'} ready for review.`);
+      setMessage(`Batch import complete: ${readyDrafts.length} of ${batchDrafts.length} invoice${batchDrafts.length === 1 ? '' : 's'} ready for review.`);
     } finally {
       setIsBatchScanning(false);
     }
@@ -1899,7 +2091,7 @@ function InvoiceScanner({
         stockPostingStatus,
         scannerMetadata,
         rawText: [
-          scannerRawText ? `Gemini scan notes:\n${scannerRawText}` : '',
+          scannerRawText ? `${scannerMetadata?.source === 'csv' ? 'CSV import text' : 'Gemini scan notes'}:\n${scannerRawText}` : '',
           scannerMetadata ? `Scanner metadata: ${JSON.stringify(scannerMetadata)}` : '',
           `Supplier: ${supplierName || 'Unknown supplier'}`,
           `Invoice number: ${invoiceNumber || invoiceId}`,
@@ -1938,7 +2130,7 @@ function InvoiceScanner({
         stockPostingStatus: savedInvoiceRecord.stockPostingStatus,
       });
       setMessage(shouldPostStock
-        ? 'Invoice saved in Scanned invoices. Posting stock in the background...'
+        ? 'Invoice saved in Processed invoices. Posting stock in the background...'
         : stockMode === 'historical'
           ? 'Historical invoice confirmed. Prices and ingredient history were updated, and current stock was not changed.'
           : 'Invoice confirmed without changing stock. Prices and ingredient history were updated.');
@@ -2018,10 +2210,10 @@ function InvoiceScanner({
             Upload & Review
           </button>
           <button type="button" className={`segment-button${activeView === 'ingredients' ? ' is-active' : ''}`} onClick={() => setActiveView('ingredients')}>
-            Ingredients
+            Raw ingredients
           </button>
           <button type="button" className={`segment-button${activeView === 'history' ? ' is-active' : ''}`} onClick={() => setActiveView('history')}>
-            Scanned invoices
+            Processed invoices
           </button>
           <button type="button" className={`segment-button${activeView === 'stock' ? ' is-active' : ''}`} onClick={() => setActiveView('stock')}>
             Stock
@@ -2170,7 +2362,7 @@ function InvoiceScanner({
                   <div>
                     <p className="eyebrow">Capture</p>
                     <h2 className="title">Scan or Add Lines</h2>
-                    <p className="subtitle">Gemini reads the invoice file into editable lines, and nothing saves until you confirm.</p>
+                    <p className="subtitle">Read invoice photos, PDFs, or CSV files into editable lines. Nothing saves until you confirm.</p>
                   </div>
                   <span className="badge">{lineItems.length} lines</span>
                 </div>
@@ -2181,21 +2373,21 @@ function InvoiceScanner({
                       ref={scanFileInputRef}
                       type="file"
                       multiple
-                      accept="image/jpeg,image/png,image/webp,application/pdf"
+                      accept="image/jpeg,image/png,image/webp,application/pdf,text/csv,.csv"
                       onChange={handleScanFileChange}
                       className="invoice-file-input"
                     />
                     <span className="invoice-upload-label">
                       {scanFiles.length > 1 ? `${scanFiles.length} invoices selected` : scanFile ? scanFile.name : 'Choose invoice files'}
                     </span>
-                    <span className="small-text">JPG, PNG, WEBP, or PDF. Select several invoices for batch review.</span>
+                    <span className="small-text">JPG, PNG, WEBP, PDF, or CSV. Select several invoices for batch review.</span>
                   </label>
                   <div className="invoice-manual-actions">
                     <button type="button" className="primary-button" onClick={scanInvoiceWithGemini} disabled={!scanFile || isScanningInvoice || isBatchScanning}>
-                      {isScanningInvoice ? 'Scanning...' : 'Scan selected'}
+                      {isScanningInvoice ? 'Importing...' : 'Import selected'}
                     </button>
                     <button type="button" className="ghost-button" onClick={scanBatchInvoices} disabled={batchDrafts.length === 0 || isScanningInvoice || isBatchScanning}>
-                      {isBatchScanning ? 'Scanning batch...' : 'Scan all'}
+                      {isBatchScanning ? 'Importing batch...' : 'Import all'}
                     </button>
                     <button
                       type="button"
@@ -2226,8 +2418,8 @@ function InvoiceScanner({
                             <strong>{index + 1}. {draft.fileName}</strong>
                             <span className="small-text">
                               {draft.status === 'ready' && `${draft.lineCount} lines ready`}
-                              {draft.status === 'queued' && 'Waiting to scan'}
-                              {draft.status === 'scanning' && 'Gemini scanning...'}
+                              {draft.status === 'queued' && 'Waiting to import'}
+                              {draft.status === 'scanning' && 'Reading invoice...'}
                               {draft.status === 'saved' && `Saved${draft.savedInvoiceId ? ` as ${draft.savedInvoiceId}` : ''}`}
                               {draft.status === 'error' && (draft.error || 'Could not scan')}
                             </span>
@@ -2426,6 +2618,10 @@ function InvoiceScanner({
                         : ingredientMatchOptions;
                     const linePricing = buildInvoiceIngredientPricing(lineItem);
                     const priceHistory = match?.ingredient?.priceHistory || [];
+                    const linkedRecipesForLine = getLinkedMenuItemsForIngredient(
+                      match?.ingredient?.name || lineItem.itemName,
+                      allMenuItems
+                    );
                     const sparklineData = [
                       ...priceHistory.map((history) => ({ price: Number(history.priceExVAT || 0) })),
                       { price: Number(lineItem.priceExVAT || 0) },
@@ -2522,6 +2718,16 @@ function InvoiceScanner({
                               <span className="small-text">
                                 {linePricing.convertedQuantity} {linePricing.baseUnit} at {formatUnitMoney(linePricing.costPerBaseUnit)} / {linePricing.baseUnit}
                               </span>
+                              {linkedRecipesForLine.length > 0 && (
+                                <div className="notice-list">
+                                  {linkedRecipesForLine.slice(0, 4).map(({ menuItem }) => (
+                                    <span key={menuItem.id || menuItem.key || menuItem.name} className="badge is-blue">
+                                      Recipe: {menuItem.name}
+                                    </span>
+                                  ))}
+                                  {linkedRecipesForLine.length > 4 && <span className="badge">+{linkedRecipesForLine.length - 4} recipes</span>}
+                                </div>
+                              )}
                               {!linePricing.canConvert && <span className="badge is-yellow">Package count needed</span>}
                               {sparklineData.length > 1 && (
                                 <div className="invoice-sparkline">
@@ -2895,9 +3101,9 @@ function InvoiceScanner({
           <div className="panel-body">
             <div className="section-header">
               <div>
-                <p className="eyebrow">Scanned invoices</p>
+                <p className="eyebrow">Processed invoices</p>
                 <h2 className="title">Supplier Invoice Library</h2>
-                <p className="subtitle">Confirmed scans are grouped by supplier and invoice date for quick lookup.</p>
+                <p className="subtitle">Confirmed invoices are grouped by supplier and invoice date for quick lookup.</p>
               </div>
               <span className="badge">{filteredInvoices.length} invoices</span>
             </div>

@@ -202,6 +202,56 @@ export const detectSupplierName = (text) => {
   )) || '';
 };
 
+const createIsoDate = ({ year, month, day }) => {
+  const numericYear = Number(year);
+  const numericMonth = Number(month);
+  const numericDay = Number(day);
+  const date = new Date(Date.UTC(numericYear, numericMonth - 1, numericDay));
+
+  if (
+    !Number.isFinite(numericYear)
+    || !Number.isFinite(numericMonth)
+    || !Number.isFinite(numericDay)
+    || date.getUTCFullYear() !== numericYear
+    || date.getUTCMonth() !== numericMonth - 1
+    || date.getUTCDate() !== numericDay
+  ) {
+    return '';
+  }
+
+  return date.toISOString().slice(0, 10);
+};
+
+const parseInvoiceDateValue = (value) => {
+  const text = String(value || '').trim();
+
+  if (!text) return '';
+
+  const isoMatch = text.match(/^((?:20)?\d{2})[/-]([01]?\d)[/-]([0-3]?\d)$/);
+  if (isoMatch) {
+    const [, year, month, day] = isoMatch;
+    return createIsoDate({
+      year: year.length === 2 ? `20${year}` : year,
+      month,
+      day,
+    });
+  }
+
+  const slashMatch = text.match(/^([0-3]?\d)[/-]([01]?\d)[/-]((?:20)?\d{2})$/);
+  if (slashMatch) {
+    const [, day, month, year] = slashMatch;
+    return createIsoDate({
+      year: year.length === 2 ? `20${year}` : year,
+      month,
+      day,
+    });
+  }
+
+  const parsedDate = new Date(text);
+
+  return Number.isNaN(parsedDate.getTime()) ? '' : parsedDate.toISOString().slice(0, 10);
+};
+
 export const detectInvoiceDate = (text) => {
   const value = String(text || '');
   const explicitDate = value.match(/\b(?:invoice\s*)?date\s*:?\s*([0-3]?\d[/-][01]?\d[/-](?:20)?\d{2})/i)?.[1]
@@ -211,21 +261,7 @@ export const detectInvoiceDate = (text) => {
 
   if (!explicitDate) return new Date().toISOString().slice(0, 10);
 
-  const parsedDate = new Date(explicitDate);
-
-  if (!Number.isNaN(parsedDate.getTime())) {
-    return parsedDate.toISOString().slice(0, 10);
-  }
-
-  const slashMatch = explicitDate.match(/^([0-3]?\d)[/-]([01]?\d)[/-]((?:20)?\d{2})$/);
-
-  if (slashMatch) {
-    const [, day, month, year] = slashMatch;
-    const fullYear = year.length === 2 ? `20${year}` : year;
-    return `${fullYear}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-  }
-
-  return new Date().toISOString().slice(0, 10);
+  return parseInvoiceDateValue(explicitDate) || new Date().toISOString().slice(0, 10);
 };
 
 const getDecimalPlaces = (value) => {
@@ -619,6 +655,252 @@ export const parseInvoiceText = (text, { vatRate = DEFAULT_VAT_RATE } = {}) => {
     items,
     rawText,
     totals: summarizeInvoiceItems(items),
+  };
+};
+
+const countDelimiterOutsideQuotes = (line, delimiter) => {
+  let count = 0;
+  let inQuotes = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    const nextChar = line[index + 1];
+
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (!inQuotes && char === delimiter) {
+      count += 1;
+    }
+  }
+
+  return count;
+};
+
+const detectCsvDelimiter = (text) => {
+  const sampleLines = String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  const candidates = ['\t', ';', ','];
+  const scores = candidates.map((delimiter) => ({
+    delimiter,
+    score: sampleLines.reduce((sum, line) => sum + countDelimiterOutsideQuotes(line, delimiter), 0),
+  }));
+
+  return scores.sort((a, b) => b.score - a.score)[0]?.delimiter || ',';
+};
+
+const parseCsvRows = (text) => {
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let inQuotes = false;
+  const value = String(text || '').replace(/^\uFEFF/, '');
+  const delimiter = detectCsvDelimiter(value);
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    const nextChar = value[index + 1];
+
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        cell += '"';
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (!inQuotes && char === delimiter) {
+      row.push(cell.trim());
+      cell = '';
+      continue;
+    }
+
+    if (!inQuotes && (char === '\n' || char === '\r')) {
+      if (char === '\r' && nextChar === '\n') {
+        index += 1;
+      }
+      row.push(cell.trim());
+      if (row.some((part) => part !== '')) {
+        rows.push(row);
+      }
+      row = [];
+      cell = '';
+      continue;
+    }
+
+    cell += char;
+  }
+
+  row.push(cell.trim());
+  if (row.some((part) => part !== '')) {
+    rows.push(row);
+  }
+
+  return rows;
+};
+
+const normalizeCsvHeader = (value) => String(value || '')
+  .trim()
+  .toLowerCase()
+  .replace(/[%()]/g, ' ')
+  .replace(/[^a-z0-9]+/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const CSV_HEADER_ALIASES = {
+  itemName: [
+    'item',
+    'item name',
+    'description',
+    'product',
+    'product name',
+    'stock item',
+    'ingredient',
+    'raw ingredient',
+    'name',
+    'details',
+  ],
+  quantity: ['qty', 'quantity', 'invoice quantity', 'ordered', 'received', 'amount bought'],
+  unit: ['unit', 'uom', 'measure', 'unit of measure', 'pack', 'size'],
+  unitPrice: ['unit price', 'price', 'rate', 'excl price', 'exclusive price', 'price ex vat', 'unit price ex vat'],
+  lineTotal: ['line total', 'total', 'amount', 'line amount', 'total amount'],
+  exclusiveTotal: ['exclusive total', 'excl total', 'total ex vat', 'ex vat total', 'line total ex vat', 'subtotal'],
+  inclusiveTotal: ['inclusive total', 'incl total', 'total inc vat', 'inc vat total', 'line total inc vat', 'gross total'],
+  vatAmount: ['vat', 'vat amount', 'tax', 'tax amount'],
+  invoiceNumber: ['invoice number', 'invoice no', 'inv number', 'inv no'],
+  invoiceDate: ['invoice date', 'date'],
+  supplierName: ['supplier', 'supplier name', 'vendor', 'vendor name'],
+};
+
+const getCsvColumnMap = (headerRow) => {
+  const normalizedHeaders = (Array.isArray(headerRow) ? headerRow : []).map(normalizeCsvHeader);
+  const columnMap = {};
+
+  Object.entries(CSV_HEADER_ALIASES).forEach(([fieldName, aliases]) => {
+    const index = normalizedHeaders.findIndex((header) => aliases.includes(header));
+    if (index >= 0) {
+      columnMap[fieldName] = index;
+    }
+  });
+
+  return columnMap;
+};
+
+const getCsvValue = (row, columnMap, fieldName) => {
+  const index = columnMap[fieldName];
+  return Number.isInteger(index) ? row[index] : '';
+};
+
+const createLineItemFromCsvRow = ({ row, columnMap, index, vatMode, vatRate }) => {
+  const itemName = String(getCsvValue(row, columnMap, 'itemName') || '').trim();
+  const quantity = parseNumericValue(getCsvValue(row, columnMap, 'quantity')) || 1;
+  const unit = normalizeInvoiceUnit(getCsvValue(row, columnMap, 'unit') || 'each');
+  const explicitInclusiveTotal = parseMoney(getCsvValue(row, columnMap, 'inclusiveTotal'));
+  const explicitExclusiveTotal = parseMoney(getCsvValue(row, columnMap, 'exclusiveTotal'));
+  const genericTotal = parseMoney(getCsvValue(row, columnMap, 'lineTotal'));
+  const unitPrice = parseMoney(getCsvValue(row, columnMap, 'unitPrice'));
+  const lineTotal = vatMode === 'exclusive'
+    ? explicitExclusiveTotal ?? genericTotal ?? (unitPrice !== null ? unitPrice * quantity : 0)
+    : explicitInclusiveTotal ?? genericTotal ?? (unitPrice !== null ? unitPrice * quantity : 0);
+  const calculatedUnitPrice = unitPrice !== null
+    ? unitPrice
+    : quantity > 0
+      ? lineTotal / quantity
+      : lineTotal;
+
+  if (!isValidItemName(itemName) || !hasReasonableLineValues({ lineTotal, unitPrice: calculatedUnitPrice, quantity })) {
+    return null;
+  }
+
+  const vat = calculateVatValues({ lineTotal, unitPrice: calculatedUnitPrice, vatMode, vatRate });
+  const base = getBaseUnitInfo(quantity, unit);
+  const costPerBaseUnitExVAT = base.quantity > 0 ? roundUnitPrice(vat.priceExVAT / base.quantity) : 0;
+
+  return {
+    id: `${createRecordId('invoice_csv_line')}_${index}_${createInvoiceKey(itemName) || 'line'}`,
+    itemName,
+    quantity,
+    unit,
+    unitPrice: roundMoney(calculatedUnitPrice),
+    lineTotal: roundMoney(lineTotal),
+    vatMode,
+    vatRate,
+    vatAmount: vat.vatAmount,
+    priceExVAT: vat.priceExVAT,
+    priceIncVAT: vat.priceIncVAT,
+    unitPriceExVAT: vat.unitPriceExVAT,
+    unitPriceIncVAT: vat.unitPriceIncVAT,
+    baseQuantity: base.quantity,
+    baseUnit: base.unit,
+    costPerBaseUnitExVAT,
+    rawLine: row.join(', '),
+    confidence: 0.94,
+  };
+};
+
+export const parseInvoiceCsvText = (text, { vatRate = DEFAULT_VAT_RATE } = {}) => {
+  const rawText = String(text || '');
+  const rows = parseCsvRows(rawText);
+
+  if (rows.length === 0) {
+    return {
+      supplierName: '',
+      invoiceNumber: '',
+      invoiceDate: new Date().toISOString().slice(0, 10),
+      vatMode: 'inclusive',
+      vatRate,
+      items: [],
+      rawText,
+      totals: { totalExVAT: 0, totalVAT: 0, totalIncVAT: 0 },
+      warnings: ['CSV file was empty.'],
+    };
+  }
+
+  const columnMap = getCsvColumnMap(rows[0]);
+  const hasStructuredHeader = Number.isInteger(columnMap.itemName)
+    && (Number.isInteger(columnMap.lineTotal) || Number.isInteger(columnMap.exclusiveTotal) || Number.isInteger(columnMap.inclusiveTotal) || Number.isInteger(columnMap.unitPrice));
+
+  if (!hasStructuredHeader) {
+    const fallback = parseInvoiceText(rawText.replace(/[,\t;]/g, ' '), { vatRate });
+    return {
+      ...fallback,
+      warnings: ['CSV headers were not recognized, so the file was parsed as invoice text.'],
+    };
+  }
+
+  const vatMode = Number.isInteger(columnMap.exclusiveTotal) && !Number.isInteger(columnMap.inclusiveTotal)
+    ? 'exclusive'
+    : Number.isInteger(columnMap.inclusiveTotal) && !Number.isInteger(columnMap.exclusiveTotal)
+      ? 'inclusive'
+      : detectVatMode(rawText);
+  const dataRows = rows.slice(1);
+  const items = dataRows
+    .map((row, index) => createLineItemFromCsvRow({ row, columnMap, index, vatMode, vatRate }))
+    .filter(Boolean);
+  const firstDataRow = dataRows.find((row) => row.some(Boolean)) || [];
+  const csvInvoiceDate = parseInvoiceDateValue(getCsvValue(firstDataRow, columnMap, 'invoiceDate'));
+
+  return {
+    supplierName: getCsvValue(firstDataRow, columnMap, 'supplierName') || detectSupplierName(rawText),
+    invoiceNumber: getCsvValue(firstDataRow, columnMap, 'invoiceNumber') || '',
+    invoiceDate: csvInvoiceDate || detectInvoiceDate(rawText),
+    vatMode,
+    vatRate,
+    items,
+    rawText,
+    totals: summarizeInvoiceItems(items),
+    warnings: items.length === 0 ? ['No usable invoice line items were found in the CSV.'] : [],
   };
 };
 

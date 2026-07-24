@@ -287,6 +287,7 @@ export function useInvoicePricing({
           cost: Number(ingredient.cost) || 0,
           costPerBaseUnit: ingredient.costPerBaseUnit ?? null,
           baseUnit: ingredient.baseUnit || '',
+          priceCatalogKey: ingredient.priceCatalogKey || ingredient.ingredientId || '',
         }));
         const totalCost = roundCurrency(components.reduce((sum, component) => sum + component.cost, 0));
         const nextMenuItem = {

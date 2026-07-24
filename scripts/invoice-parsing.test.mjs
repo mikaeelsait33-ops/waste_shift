@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   parseInvoiceText,
+  parseInvoiceCsvText,
   parseMoney,
   getBaseUnitInfo,
   getLinkedMenuItemsForIngredient,
@@ -22,6 +23,36 @@ assert.equal(parseMoney('R1 234,50'), 1234.5);
 assert.equal(parseMoney('ZAR 1,234.50'), 1234.5);
 assert.deepEqual(getBaseUnitInfo(1, '5L'), { quantity: 5000, unit: 'ml' });
 assert.deepEqual(getBaseUnitInfo(2, 'case of 12'), { quantity: 24, unit: 'each' });
+
+const csvInvoice = parseInvoiceCsvText(`Supplier,Invoice Number,Invoice Date,Description,Qty,Unit,Unit Price,Exclusive Total
+Cape Foods,INV-CSV-7,2026-07-24,Tomatoes,2.5,kg,30.00,75.00
+Cape Foods,INV-CSV-7,2026-07-24,Olive Oil,1,5L,115.00,115.00
+`, { vatRate: 0.15 });
+
+assert.equal(csvInvoice.supplierName, 'Cape Foods');
+assert.equal(csvInvoice.invoiceNumber, 'INV-CSV-7');
+assert.equal(csvInvoice.invoiceDate, '2026-07-24');
+assert.equal(csvInvoice.vatMode, 'exclusive');
+assert.equal(csvInvoice.items.length, 2);
+assert.equal(csvInvoice.items[0].itemName, 'Tomatoes');
+assert.equal(csvInvoice.items[0].baseUnit, 'g');
+assert.equal(csvInvoice.items[1].baseQuantity, 5000);
+assert.equal(csvInvoice.totals.totalExVAT, 190);
+
+const localizedDateCsvInvoice = parseInvoiceCsvText(`Supplier,Invoice Number,Invoice Date,Description,Qty,Unit,Unit Price,Exclusive Total
+Cape Foods,INV-CSV-8,15/06/2026,Tomatoes,1,kg,30.00,30.00
+`, { vatRate: 0.15 });
+
+assert.equal(localizedDateCsvInvoice.invoiceDate, '2026-06-15');
+
+const semicolonCsvInvoice = parseInvoiceCsvText(`Supplier;Description;Qty;Unit;Unit Price;Exclusive Total
+Raw Supplier;Onions;1,5;kg;21,90;32,85
+`, { vatRate: 0.15 });
+
+assert.equal(semicolonCsvInvoice.items.length, 1);
+assert.equal(semicolonCsvInvoice.items[0].quantity, 1.5);
+assert.equal(semicolonCsvInvoice.items[0].unitPrice, 21.9);
+assert.equal(semicolonCsvInvoice.items[0].lineTotal, 32.85);
 
 let item = getOnlyItem(`
 Cape Foods
