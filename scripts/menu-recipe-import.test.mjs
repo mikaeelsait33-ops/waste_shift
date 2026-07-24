@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { createGeminiParts, normalizeGeminiMenuPayload } from '../api/gemini-menu.js';
+import geminiMenuHandler, {
+  createGeminiFileBatches,
+  createGeminiGenerationConfig,
+  createGeminiParts,
+  mergeGeminiMenuPayloads,
+  normalizeGeminiMenuPayload,
+} from '../api/gemini-menu.js';
 import {
   buildMenuImportSaveItems,
   createMenuRecipeReview,
@@ -63,6 +69,49 @@ const multiPageGuideParts = createGeminiParts({
 });
 assert.equal(multiPageGuideParts.length, 3);
 
+const fivePageGuideFiles = Array.from({ length: 5 }, (_, index) => ({
+  name: `page-${index + 1}.jpg`,
+  mimeType: 'image/jpeg',
+  base64: Buffer.from(`page-${index + 1}`).toString('base64'),
+}));
+const fivePageBatches = createGeminiFileBatches({ files: fivePageGuideFiles });
+assert.deepEqual(fivePageBatches.map((batch) => batch.length), [2, 2, 1]);
+assert.equal(createGeminiFileBatches({
+  files: [
+    { mimeType: 'application/pdf', base64: 'cGRm' },
+    { mimeType: 'image/jpeg', base64: 'aW1hZ2U=' },
+  ],
+}).length, 1);
+
+const generationConfig = createGeminiGenerationConfig('gemini-2.5-flash-lite');
+assert.equal(generationConfig.thinkingConfig.thinkingBudget, 0);
+assert.equal(generationConfig.maxOutputTokens, 8192);
+
+const mergedPayload = mergeGeminiMenuPayloads([
+  {
+    dishes: [{
+      name: 'Breakfast Burger',
+      category: 'Breakfast',
+      confidence: 0.7,
+      ingredients: [{ name: 'Bun', quantity: 1, unit: 'each' }],
+    }],
+  },
+  {
+    dishes: [{
+      name: '  Breakfast   Burger ',
+      category: '',
+      confidence: 0.92,
+      ingredients: [
+        { name: 'Bun', quantity: 1, unit: 'each' },
+        { name: 'Egg', quantity: 2, unit: 'each' },
+      ],
+    }],
+  },
+]);
+assert.equal(mergedPayload.dishes.length, 1);
+assert.equal(mergedPayload.dishes[0].ingredients.length, 2);
+assert.equal(mergedPayload.dishes[0].confidence, 0.92);
+
 const review = createMenuRecipeReview(normalized.dishes, catalog);
 assert.equal(review[0].ingredients[0].catalogKey, 'rocket');
 assert.equal(review[0].ingredients[0].unitMismatch, false);
@@ -101,6 +150,7 @@ const appSource = [
 ].join('\n');
 const firestoreMenuSource = await readFile(new URL('../src/services/firestoreMenuItems.js', import.meta.url), 'utf8');
 const menuImportSource = await readFile(new URL('../src/components/MenuImport.jsx', import.meta.url), 'utf8');
+const geminiMenuImportSource = await readFile(new URL('../src/services/geminiMenuImport.js', import.meta.url), 'utf8');
 
 assert.match(recipeManagerSource, /make-line guide together/);
 assert.match(recipeManagerSource, /Bulk add menu items/);
@@ -119,5 +169,133 @@ assert.match(menuImportSource, /Upload make-line guide/);
 assert.match(menuImportSource, /make-line-guide-file-gemini/);
 assert.match(menuImportSource, /prepareMakeLineGuideFilePayloads/);
 assert.doesNotMatch(menuImportSource, /scan-document/);
+assert.match(geminiMenuImportSource, /AbortController/);
+assert.match(geminiMenuImportSource, /response\?\.status === 504/);
+assert.match(geminiMenuImportSource, /response\?\.status === 413/);
+
+const originalFetch = global.fetch;
+const originalApiKey = process.env.GEMINI_API_KEY;
+const geminiRequests = [];
+
+process.env.GEMINI_API_KEY = 'test-gemini-key';
+global.fetch = async (url, options) => {
+  const requestIndex = geminiRequests.length;
+  const requestBody = JSON.parse(options.body);
+  geminiRequests.push({ url: String(url), options, requestBody });
+
+  const dishes = requestIndex < 2
+    ? [{
+        name: 'Batched Burger',
+        category: 'Lunch',
+        confidence: 0.8 + requestIndex * 0.1,
+        ingredients: requestIndex === 0
+          ? [{ name: 'Bun', quantity: 1, unit: 'each' }]
+          : [{ name: 'Patty', quantity: 150, unit: 'g' }],
+      }]
+    : [{
+        name: 'Side Salad',
+        category: 'Sides',
+        confidence: 0.9,
+        ingredients: [{ name: 'Lettuce', quantity: 50, unit: 'g' }],
+      }];
+
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      candidates: [{
+        content: {
+          parts: [{ text: JSON.stringify({ dishes, warnings: [] }) }],
+        },
+      }],
+    }),
+  };
+};
+
+const handlerResponse = {
+  statusCode: 0,
+  payload: null,
+  setHeader() {},
+  status(statusCode) {
+    this.statusCode = statusCode;
+    return this;
+  },
+  json(payload) {
+    this.payload = payload;
+    return this;
+  },
+};
+
+try {
+  await geminiMenuHandler({
+    method: 'POST',
+    headers: {},
+    body: {
+      text: '',
+      files: fivePageGuideFiles,
+    },
+  }, handlerResponse);
+} finally {
+  global.fetch = originalFetch;
+  if (originalApiKey === undefined) {
+    delete process.env.GEMINI_API_KEY;
+  } else {
+    process.env.GEMINI_API_KEY = originalApiKey;
+  }
+}
+
+assert.equal(handlerResponse.statusCode, 200);
+assert.equal(handlerResponse.payload.batchCount, 3);
+assert.equal(handlerResponse.payload.dishes.length, 2);
+assert.equal(handlerResponse.payload.dishes.find((dish) => dish.name === 'Batched Burger').ingredients.length, 2);
+assert.equal(geminiRequests.length, 3);
+assert.ok(geminiRequests.every((request) => request.requestBody.contents[0].parts.length <= 3));
+assert.ok(geminiRequests.every((request) => request.options.headers['x-goog-api-key'] === 'test-gemini-key'));
+assert.ok(geminiRequests.every((request) => !request.url.includes('test-gemini-key')));
+
+const timeoutFetch = global.fetch;
+const timeoutApiKey = process.env.GEMINI_API_KEY;
+const timeoutResponse = {
+  statusCode: 0,
+  payload: null,
+  setHeader() {},
+  status(statusCode) {
+    this.statusCode = statusCode;
+    return this;
+  },
+  json(payload) {
+    this.payload = payload;
+    return this;
+  },
+};
+
+process.env.GEMINI_API_KEY = 'test-gemini-key';
+global.fetch = async () => {
+  const error = new Error('aborted');
+  error.name = 'AbortError';
+  throw error;
+};
+
+try {
+  await geminiMenuHandler({
+    method: 'POST',
+    headers: {},
+    body: {
+      text: 'Burger: 1 bun, 150g patty',
+      files: [],
+    },
+  }, timeoutResponse);
+} finally {
+  global.fetch = timeoutFetch;
+  if (timeoutApiKey === undefined) {
+    delete process.env.GEMINI_API_KEY;
+  } else {
+    process.env.GEMINI_API_KEY = timeoutApiKey;
+  }
+}
+
+assert.equal(timeoutResponse.statusCode, 504);
+assert.equal(timeoutResponse.payload.code, 'gemini_menu_timeout');
+assert.equal(timeoutResponse.payload.retryable, true);
 
 console.log('Menu recipe import tests passed');

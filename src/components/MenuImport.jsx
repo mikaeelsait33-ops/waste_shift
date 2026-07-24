@@ -1,8 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import {
-  getAutomaticManagerApiHeaders,
-  getManagerApiErrorMessage,
-} from '../utils/apiHeaders';
+import { requestGeminiMenuImport } from '../services/geminiMenuImport';
 import {
   buildMenuImportSaveItems,
   catalogUnitMismatch,
@@ -94,31 +91,11 @@ function MenuImport({
   };
 
   const requestGeminiMakeLineGuideParse = async ({ text = '', nextSourceName, files = [] }) => {
-    let response;
-
-    try {
-      response = await fetch('/api/gemini-menu', {
-        method: 'POST',
-        headers: await getAutomaticManagerApiHeaders({ 'content-type': 'application/json' }),
-        body: JSON.stringify({
-          text,
-          files,
-          sourceType: 'make-line-guide',
-        }),
-      });
-    } catch {
-      throw new Error('The guide upload did not reach the server. Use a smaller PDF, upload guide photos, or paste the guide text.');
-    }
-
-    const payload = await response.json().catch(() => ({}));
-
-    if (!response.ok || payload.ok === false) {
-      if (response.status === 413) {
-        throw new Error('This make-line guide upload is too large. Split the PDF, upload guide photos, or paste the guide text.');
-      }
-
-      throw new Error(getManagerApiErrorMessage(payload, 'Gemini could not parse this make-line guide.'));
-    }
+    const payload = await requestGeminiMenuImport({
+      text,
+      files,
+      onProgress: setMessage,
+    });
 
     setSourceName(nextSourceName);
     refreshReview(normalizeDishesFromPayload(payload));
@@ -164,7 +141,9 @@ function MenuImport({
       : 'Preparing make-line guide photo...');
 
     try {
-      const preparedGuide = await prepareMakeLineGuideFilePayloads(file);
+      const preparedGuide = await prepareMakeLineGuideFilePayloads(file, {
+        onProgress: setMessage,
+      });
       if (preparedGuide.notice) {
         setMessage(`${preparedGuide.notice} Reading with Gemini...`);
       } else {
@@ -180,7 +159,7 @@ function MenuImport({
         ? `Gemini read the make-line guide. ${preparedGuide.notice} Review exact portions before saving.`
         : 'Gemini read the make-line guide. Review exact portions before saving.');
     } catch (error) {
-      setMessage(`${error?.message || 'Make-line guide import failed.'} Try a clearer guide photo or paste the guide text.`);
+      setMessage(error?.message || 'Make-line guide import failed.');
     } finally {
       setIsExtracting(false);
       if (fileInputRef.current) {

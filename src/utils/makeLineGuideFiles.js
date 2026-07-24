@@ -151,7 +151,7 @@ const renderPdfPagePayload = async ({ pdf, pageNumber, sourceName }) => {
   return lastPayload;
 };
 
-const createPdfPagePayloads = async (file) => {
+const createPdfPagePayloads = async (file, options = {}) => {
   const pdfjs = await getPdfjs();
   const loadingTask = pdfjs.getDocument({
     data: new Uint8Array(await file.arrayBuffer()),
@@ -164,6 +164,7 @@ const createPdfPagePayloads = async (file) => {
   const maxPages = Math.min(pdf.numPages, PDF_RENDER_MAX_PAGES);
 
   for (let pageNumber = 1; pageNumber <= maxPages; pageNumber += 1) {
+    options.onProgress?.(`Preparing PDF page ${pageNumber} of ${maxPages}...`);
     const payload = await renderPdfPagePayload({ pdf, pageNumber, sourceName: file.name });
     const payloadBytes = getApproxBase64Bytes(payload?.base64);
 
@@ -195,7 +196,7 @@ const createPdfPagePayloads = async (file) => {
   };
 };
 
-export const prepareMakeLineGuideFilePayloads = async (file) => {
+export const prepareMakeLineGuideFilePayloads = async (file, options = {}) => {
   const normalizedType = normalizeFileType(file);
 
   if (!normalizedType) {
@@ -210,7 +211,7 @@ export const prepareMakeLineGuideFilePayloads = async (file) => {
       };
     }
 
-    return createPdfPagePayloads(file);
+    return createPdfPagePayloads(file, options);
   }
 
   const payload = await createCompressedImagePayload(file);

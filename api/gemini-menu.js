@@ -1,7 +1,10 @@
 import { authorizeManagerSessionRequest } from './_auth.js';
 
-const DEFAULT_MODEL = 'gemini-2.5-flash';
+const DEFAULT_MODEL = 'gemini-2.5-flash-lite';
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
+const MAX_IMAGE_FILES_PER_BATCH = 2;
+const GEMINI_REQUEST_TIMEOUT_MS = 70_000;
+const MAX_OUTPUT_TOKENS = 8192;
 const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
   'image/jpeg',
@@ -51,7 +54,7 @@ const RESPONSE_SCHEMA = {
 };
 
 export const config = {
-  maxDuration: 60,
+  maxDuration: 120,
 };
 
 const sendJson = (response, status, body) => {
@@ -178,6 +181,25 @@ const normalizeGeminiFiles = ({ file, guideFile, files }) => (
   ].filter((candidate) => candidate?.base64)
 );
 
+export const createGeminiFileBatches = ({ file, guideFile, files }) => {
+  const fileParts = normalizeGeminiFiles({ file, guideFile, files });
+
+  if (
+    fileParts.length <= MAX_IMAGE_FILES_PER_BATCH
+    || fileParts.some((candidate) => candidate?.mimeType === 'application/pdf')
+  ) {
+    return [fileParts];
+  }
+
+  const batches = [];
+
+  for (let index = 0; index < fileParts.length; index += MAX_IMAGE_FILES_PER_BATCH) {
+    batches.push(fileParts.slice(index, index + MAX_IMAGE_FILES_PER_BATCH));
+  }
+
+  return batches;
+};
+
 const createGeminiParts = ({ text, file, makeLineGuide, guideFile, files }) => {
   const fileParts = normalizeGeminiFiles({ file, guideFile, files });
   const combinedFileBytes = fileParts
@@ -240,26 +262,138 @@ ${guideText.slice(0, 30000)}`,
 
 export { createGeminiParts };
 
-const callGemini = async ({ apiKey, model, text, file, makeLineGuide, guideFile, files }) => {
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts: createGeminiParts({ text, file, makeLineGuide, guideFile, files }) }],
-      generationConfig: {
-        temperature: 0.1,
-        responseMimeType: 'application/json',
-        responseSchema: RESPONSE_SCHEMA,
-      },
-    }),
+export const createGeminiGenerationConfig = (model) => ({
+  temperature: 0.1,
+  maxOutputTokens: MAX_OUTPUT_TOKENS,
+  responseMimeType: 'application/json',
+  responseSchema: RESPONSE_SCHEMA,
+  ...(String(model || '').includes('2.5')
+    ? { thinkingConfig: { thinkingBudget: 0 } }
+    : {}),
+});
+
+export const mergeGeminiMenuPayloads = (payloads) => {
+  const dishesByName = new Map();
+  const warnings = new Set();
+
+  (Array.isArray(payloads) ? payloads : []).forEach((payload) => {
+    const normalized = normalizeGeminiMenuPayload(payload);
+
+    normalized.warnings.forEach((warning) => warnings.add(warning));
+    normalized.dishes.forEach((dish) => {
+      const key = dish.name.toLowerCase().replace(/\s+/g, ' ').trim();
+      const existing = dishesByName.get(key);
+
+      if (!existing) {
+        dishesByName.set(key, {
+          ...dish,
+          ingredients: [...dish.ingredients],
+          warnings: [...dish.warnings],
+        });
+        return;
+      }
+
+      const ingredientsByName = new Map(
+        existing.ingredients.map((ingredient) => [ingredient.name.toLowerCase().trim(), ingredient]),
+      );
+      dish.ingredients.forEach((ingredient) => {
+        const ingredientKey = ingredient.name.toLowerCase().trim();
+        const currentIngredient = ingredientsByName.get(ingredientKey);
+
+        if (
+          !currentIngredient
+          || (currentIngredient.quantity === null && ingredient.quantity !== null)
+        ) {
+          ingredientsByName.set(ingredientKey, ingredient);
+        }
+      });
+
+      dishesByName.set(key, {
+        ...existing,
+        category: existing.category || dish.category,
+        sellingPrice: existing.sellingPrice ?? dish.sellingPrice,
+        instructions: existing.instructions || dish.instructions,
+        ingredients: [...ingredientsByName.values()],
+        confidence: Math.max(existing.confidence, dish.confidence),
+        warnings: [...new Set([...existing.warnings, ...dish.warnings])],
+      });
+    });
   });
-  const body = await response.json().catch(() => ({}));
 
-  if (!response.ok) {
-    throw new Error(body?.error?.message || `Gemini request failed with status ${response.status}.`);
+  return normalizeGeminiMenuPayload({
+    dishes: [...dishesByName.values()],
+    warnings: [...warnings],
+  });
+};
+
+const createGeminiError = (message, status = 422, code = 'gemini_menu_failed') => (
+  Object.assign(new Error(message), { status, code })
+);
+
+const callGemini = async ({ apiKey, model, text, file, makeLineGuide, guideFile, files }) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GEMINI_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-goog-api-key': apiKey,
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: createGeminiParts({ text, file, makeLineGuide, guideFile, files }) }],
+          generationConfig: createGeminiGenerationConfig(model),
+        }),
+      },
+    );
+    const body = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      const message = body?.error?.message || `Gemini request failed with status ${response.status}.`;
+
+      if (response.status === 429) {
+        throw createGeminiError(
+          'Gemini is receiving too many requests right now. Wait a moment and retry this guide.',
+          429,
+          'gemini_rate_limited',
+        );
+      }
+
+      throw createGeminiError(
+        message,
+        response.status >= 500 ? 502 : 422,
+        response.status >= 500 ? 'gemini_unavailable' : 'gemini_menu_rejected',
+      );
+    }
+
+    const responseText = getTextFromGeminiResponse(body);
+
+    if (!responseText) {
+      throw createGeminiError(
+        'Gemini returned no recipe data for this guide. Retry once or upload the relevant guide pages only.',
+        422,
+        'gemini_empty_response',
+      );
+    }
+
+    return normalizeGeminiMenuPayload(parseGeminiJsonText(responseText));
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw createGeminiError(
+        'Gemini took too long to read this guide. Retry once or upload fewer guide pages.',
+        504,
+        'gemini_menu_timeout',
+      );
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
-
-  return body;
 };
 
 export default async function handler(request, response) {
@@ -286,6 +420,7 @@ export default async function handler(request, response) {
   }
 
   try {
+    const startedAt = Date.now();
     const body = await readJsonBody(request);
     const text = String(body?.text || '');
     const file = body?.file && isPlainObject(body.file) ? body.file : null;
@@ -299,17 +434,69 @@ export default async function handler(request, response) {
     }
 
     const model = process.env.GEMINI_MENU_MODEL || process.env.GEMINI_MODEL || DEFAULT_MODEL;
-    const geminiResponse = await callGemini({ apiKey, model, text, file, makeLineGuide, guideFile, files });
-    const normalized = normalizeGeminiMenuPayload(parseGeminiJsonText(getTextFromGeminiResponse(geminiResponse)));
+    const fileBatches = createGeminiFileBatches({ file, guideFile, files });
+    const fileParts = normalizeGeminiFiles({ file, guideFile, files });
+    const combinedFileBytes = fileParts.reduce(
+      (total, candidate) => total + Buffer.byteLength(candidate.base64 || '', 'base64'),
+      0,
+    );
+
+    console.info('[gemini-menu] extraction started', {
+      requestId: String(request.headers?.['x-vercel-id'] || ''),
+      databaseId: authorization.databaseId || '',
+      model,
+      fileCount: fileParts.length,
+      fileBytes: combinedFileBytes,
+      batchCount: fileBatches.length,
+      hasText: Boolean(text.trim() || makeLineGuide.trim()),
+    });
+
+    const batchPayloads = await Promise.all(fileBatches.map(async (batchFiles, batchIndex) => {
+      try {
+        return await callGemini({
+          apiKey,
+          model,
+          text,
+          makeLineGuide,
+          files: batchFiles,
+        });
+      } catch (error) {
+        if (fileBatches.length > 1) {
+          error.message = `Guide page batch ${batchIndex + 1} of ${fileBatches.length} failed. ${error.message}`;
+        }
+        throw error;
+      }
+    }));
+    const normalized = mergeGeminiMenuPayloads(batchPayloads);
+
+    console.info('[gemini-menu] extraction completed', {
+      requestId: String(request.headers?.['x-vercel-id'] || ''),
+      model,
+      batchCount: fileBatches.length,
+      dishCount: normalized.dishes.length,
+      durationMs: Date.now() - startedAt,
+    });
 
     sendJson(response, 200, {
       ok: true,
       model,
+      batchCount: fileBatches.length,
       ...normalized,
     });
   } catch (error) {
-    sendJson(response, 422, {
+    const status = Number.isInteger(error?.status) ? error.status : 422;
+
+    console.error('[gemini-menu] extraction failed', {
+      requestId: String(request.headers?.['x-vercel-id'] || ''),
+      code: error?.code || 'gemini_menu_failed',
+      status,
+      message: error?.message || 'Could not import this make-line guide with Gemini.',
+    });
+
+    sendJson(response, status, {
       ok: false,
+      code: error?.code || 'gemini_menu_failed',
+      retryable: [429, 502, 504].includes(status),
       message: error?.message || 'Could not import this make-line guide with Gemini.',
     });
   }

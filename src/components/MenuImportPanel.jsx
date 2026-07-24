@@ -7,7 +7,7 @@ import {
   parseMenuPlainText,
   parseMenuPrice,
 } from '../utils/menuImport';
-import { getAutomaticManagerApiHeaders, getManagerApiErrorMessage } from '../utils/apiHeaders';
+import { requestGeminiMenuImport } from '../services/geminiMenuImport';
 import { prepareMakeLineGuideFilePayloads } from '../utils/makeLineGuideFiles';
 
 const readFileAsText = (file) => new Promise((resolve, reject) => {
@@ -82,37 +82,19 @@ function MenuImportPanel({
       : 'Extracting make-line guide with Gemini...');
 
     try {
-      const preparedGuide = file ? await prepareMakeLineGuideFilePayloads(file) : { files: [], notice: '' };
-      let response;
+      const preparedGuide = file
+        ? await prepareMakeLineGuideFilePayloads(file, { onProgress: setMessage })
+        : { files: [], notice: '' };
 
       if (preparedGuide.notice) {
         setMessage(`${preparedGuide.notice} Reading with Gemini...`);
       }
 
-      try {
-        response = await fetch('/api/gemini-menu', {
-          method: 'POST',
-          headers: await getAutomaticManagerApiHeaders({ 'content-type': 'application/json' }),
-          body: JSON.stringify({
-            text: file ? '' : sourceText,
-            files: preparedGuide.files,
-            sourceType: 'make-line-guide',
-          }),
-        });
-      } catch {
-        throw new Error('The guide upload did not reach the server. Use a smaller PDF, upload guide photos, or paste the guide text.');
-      }
-
-      const payload = await response.json().catch(() => ({}));
-
-      if (!response.ok || payload.ok === false || payload.success === false) {
-        if (response.status === 413) {
-          throw new Error('This make-line guide upload is too large. Split the PDF, upload guide photos, or paste the guide text.');
-        }
-
-        const protectedApiMessage = getManagerApiErrorMessage(payload, 'Make-line guide import failed.');
-        throw new Error(protectedApiMessage);
-      }
+      const payload = await requestGeminiMenuImport({
+        text: file ? '' : sourceText,
+        files: preparedGuide.files,
+        onProgress: setMessage,
+      });
 
       const extractedMenuItems = payload.items || [];
 
