@@ -212,6 +212,7 @@ assert.match(geminiMenuImportSource, /mergeGeminiMenuImportPayloads/);
 assert.match(geminiMenuImportSource, /GEMINI_MAX_RETRIES/);
 assert.match(geminiMenuImportSource, /retryAfterMs/);
 assert.match(geminiMenuImportSource, /batches\.length > 4 \? 1/);
+assert.match(geminiMenuImportSource, /sectionLabel,\s+requestState,\s+\}\);/);
 
 const originalFetch = global.fetch;
 const originalApiKey = process.env.GEMINI_API_KEY;

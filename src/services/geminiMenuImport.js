@@ -112,7 +112,7 @@ const requestGeminiWithRetry = async ({
   onProgress,
   timeoutMs,
   sectionLabel,
-  requestState,
+  requestState = { lastStartedAt: 0 },
 }) => {
   for (let attempt = 0; attempt <= GEMINI_MAX_RETRIES; attempt += 1) {
     const nextAllowedStart = requestState.lastStartedAt + GEMINI_REQUEST_GAP_MS;
@@ -185,6 +185,7 @@ export const requestGeminiMenuImport = async ({
           onProgress,
           timeoutMs,
           sectionLabel,
+          requestState,
         });
       } catch (error) {
         throw new Error(`${sectionLabel} failed. ${error?.message || 'Gemini could not read this section.'}`);
