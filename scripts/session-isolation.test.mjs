@@ -41,7 +41,8 @@ assert.match(restaurantFirestore, /where\('setupCompleted', '==', true\)/, 'A ne
 assert.match(restaurantFirestore, /staff-session\?action=restaurant/, 'Automatic shop discovery should use the server-selected canonical restaurant.');
 assert.match(restaurantFirestore, /limit\(10\)/, 'Direct Firestore discovery must remain bounded when legacy profiles exist.');
 assert.match(restaurantFirestore, /canonicalDatabaseId && canonicalDatabaseId !== currentDatabaseId/, 'Every device should adopt the server-selected restaurant scope even if it has an old local scope.');
-assert.match(appSource, /didAdoptSingleShop/, 'The app should restart its initial data loaders after a new device joins the one shop.');
+assert.match(appSource, /didAdoptSingleShop/, 'The app should handle canonical Firebase adoption.');
+assert.doesNotMatch(appSource, /window\.location\.reload\(\)/, 'Canonical Firebase adoption must not reload forever when the database scope is memory-only.');
 assert.match(appSource, /validateRestaurantSession/, 'App should restore valid access from the server session, not browser storage.');
 for (const [name, source] of [
   ['App', appSource],

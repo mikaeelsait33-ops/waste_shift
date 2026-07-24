@@ -290,8 +290,13 @@ function App() {
 
         if (!isCancelled) {
           if (result.didAdoptSingleShop) {
-            // Restart the initial data loaders after a fresh device has joined the one shop.
-            window.location.reload();
+            setFirebaseSync(prev => ({
+              ...prev,
+              status: 'ready',
+              message: 'Joined the canonical Firebase restaurant.',
+            }));
+            setRestaurantProfile(result.profile || createDefaultRestaurantProfile());
+            setRestaurantProfileStatus('ready');
             return;
           }
 
