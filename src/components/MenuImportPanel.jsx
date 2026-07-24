@@ -93,6 +93,7 @@ function MenuImportPanel({
       const payload = await requestGeminiMenuImport({
         text: file ? '' : sourceText,
         files: preparedGuide.files,
+        fileBatches: preparedGuide.fileBatches,
         onProgress: setMessage,
       });
 

@@ -2,7 +2,8 @@ const PDF_INLINE_MAX_BYTES = 2.6 * 1024 * 1024;
 const REQUEST_FILE_BYTES_BUDGET = 2.9 * 1024 * 1024;
 const IMAGE_MAX_EDGE = 1700;
 const IMAGE_QUALITY = 0.82;
-const PDF_RENDER_MAX_PAGES = 6;
+const MAX_FILES_PER_REQUEST = 2;
+const PDF_INLINE_MAX_PAGES = 2;
 const PDF_RENDER_ATTEMPTS = [
   { maxEdge: 1700, quality: 0.8 },
   { maxEdge: 1350, quality: 0.74 },
@@ -151,48 +152,88 @@ const renderPdfPagePayload = async ({ pdf, pageNumber, sourceName }) => {
   return lastPayload;
 };
 
-const createPdfPagePayloads = async (file, options = {}) => {
+export const createMakeLineGuideRequestBatches = (files = []) => {
+  const batches = [];
+  let currentBatch = [];
+  let currentBytes = 0;
+
+  files.forEach((file) => {
+    const fileBytes = getApproxBase64Bytes(file?.base64);
+
+    if (fileBytes > REQUEST_FILE_BYTES_BUDGET) {
+      throw new Error('A make-line guide page is too large after compression. Export the guide at a lower resolution or upload a clear photo of that page.');
+    }
+
+    if (
+      currentBatch.length > 0
+      && (
+        currentBatch.length >= MAX_FILES_PER_REQUEST
+        || currentBytes + fileBytes > REQUEST_FILE_BYTES_BUDGET
+      )
+    ) {
+      batches.push(currentBatch);
+      currentBatch = [];
+      currentBytes = 0;
+    }
+
+    currentBatch.push(file);
+    currentBytes += fileBytes;
+  });
+
+  if (currentBatch.length > 0) {
+    batches.push(currentBatch);
+  }
+
+  return batches;
+};
+
+const openPdf = async (file) => {
   const pdfjs = await getPdfjs();
   const loadingTask = pdfjs.getDocument({
     data: new Uint8Array(await file.arrayBuffer()),
     disableFontFace: true,
     isEvalSupported: false,
   });
-  const pdf = await loadingTask.promise;
+
+  return {
+    loadingTask,
+    pdf: await loadingTask.promise,
+  };
+};
+
+const closePdf = async ({ loadingTask, pdf }) => {
+  pdf?.cleanup?.();
+  await loadingTask?.destroy?.();
+};
+
+const createPdfPagePayloads = async (file, options = {}, existingPdf = null) => {
+  const pdfHandle = existingPdf || await openPdf(file);
+  const { pdf } = pdfHandle;
   const files = [];
-  let totalBytes = 0;
-  const maxPages = Math.min(pdf.numPages, PDF_RENDER_MAX_PAGES);
 
-  for (let pageNumber = 1; pageNumber <= maxPages; pageNumber += 1) {
-    options.onProgress?.(`Preparing PDF page ${pageNumber} of ${maxPages}...`);
-    const payload = await renderPdfPagePayload({ pdf, pageNumber, sourceName: file.name });
-    const payloadBytes = getApproxBase64Bytes(payload?.base64);
+  try {
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      options.onProgress?.(`Preparing PDF page ${pageNumber} of ${pdf.numPages}...`);
+      const payload = await renderPdfPagePayload({ pdf, pageNumber, sourceName: file.name });
 
-    if (!payload?.base64) {
-      continue;
-    }
-
-    if (totalBytes + payloadBytes > REQUEST_FILE_BYTES_BUDGET) {
-      if (files.length === 0) {
-        throw new Error('This PDF page is too large after compression. Export only the make-line guide pages or take a clear photo.');
+      if (payload?.base64) {
+        files.push(payload);
       }
-
-      break;
     }
-
-    files.push(payload);
-    totalBytes += payloadBytes;
+  } finally {
+    if (!existingPdf) {
+      await closePdf(pdfHandle);
+    }
   }
 
-  if (files.length === 0) {
-    throw new Error('Could not prepare any pages from this PDF. Export the make-line guide pages again or take clear photos.');
+  if (files.length !== pdf.numPages) {
+    throw new Error(`Could only prepare ${files.length} of ${pdf.numPages} PDF pages. Export the guide again or upload clear guide photos.`);
   }
 
   return {
     files,
-    notice: pdf.numPages > files.length
-      ? `Read the first ${files.length} of ${pdf.numPages} PDF page${pdf.numPages === 1 ? '' : 's'} to keep the upload fast.`
-      : `Converted ${files.length} PDF page${files.length === 1 ? '' : 's'} for upload.`,
+    fileBatches: createMakeLineGuideRequestBatches(files),
+    notice: `Read all ${files.length} PDF page${files.length === 1 ? '' : 's'} in ${Math.ceil(files.length / MAX_FILES_PER_REQUEST)} upload section${files.length === 1 ? '' : 's'}.`,
   };
 };
 
@@ -204,14 +245,23 @@ export const prepareMakeLineGuideFilePayloads = async (file, options = {}) => {
   }
 
   if (normalizedType === 'pdf') {
-    if (file.size <= PDF_INLINE_MAX_BYTES) {
-      return {
-        files: [await createRawFilePayload(file, 'application/pdf')],
-        notice: '',
-      };
+    const pdfHandle = await openPdf(file);
+
+    if (file.size <= PDF_INLINE_MAX_BYTES && pdfHandle.pdf.numPages <= PDF_INLINE_MAX_PAGES) {
+      try {
+        const payload = await createRawFilePayload(file, 'application/pdf');
+
+        return {
+          files: [payload],
+          fileBatches: [[payload]],
+          notice: '',
+        };
+      } finally {
+        await closePdf(pdfHandle);
+      }
     }
 
-    return createPdfPagePayloads(file, options);
+    return createPdfPagePayloads(file, options, pdfHandle).finally(() => closePdf(pdfHandle));
   }
 
   const payload = await createCompressedImagePayload(file);
@@ -222,6 +272,7 @@ export const prepareMakeLineGuideFilePayloads = async (file, options = {}) => {
 
   return {
     files: [payload],
+    fileBatches: [[payload]],
     notice: file.size > getApproxBase64Bytes(payload.base64)
       ? 'Compressed the guide photo for faster upload.'
       : '',

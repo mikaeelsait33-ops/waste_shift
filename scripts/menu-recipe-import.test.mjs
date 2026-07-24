@@ -12,6 +12,8 @@ import {
   createMenuRecipeReview,
   getSmartMenuImportPlan,
 } from '../src/utils/menuRecipeImport.js';
+import { createMakeLineGuideRequestBatches } from '../src/utils/makeLineGuideFiles.js';
+import { mergeGeminiMenuImportPayloads } from '../src/utils/geminiMenuPayload.js';
 
 const catalog = {
   rocket: {
@@ -82,6 +84,39 @@ assert.equal(createGeminiFileBatches({
     { mimeType: 'image/jpeg', base64: 'aW1hZ2U=' },
   ],
 }).length, 1);
+
+const fullGuideFiles = Array.from({ length: 11 }, (_, index) => ({
+  name: `full-guide-page-${index + 1}.jpg`,
+  mimeType: 'image/jpeg',
+  base64: Buffer.from(`full-guide-page-${index + 1}`).toString('base64'),
+}));
+const fullGuideBatches = createMakeLineGuideRequestBatches(fullGuideFiles);
+assert.deepEqual(fullGuideBatches.map((batch) => batch.length), [2, 2, 2, 2, 2, 1]);
+assert.deepEqual(fullGuideBatches.flat().map((file) => file.name), fullGuideFiles.map((file) => file.name));
+
+const clientMergedPayload = mergeGeminiMenuImportPayloads([
+  { model: 'gemini-2.5-flash-lite', batchCount: 1, dishes: [{
+    name: 'Full Guide Dish',
+    category: 'Lunch',
+    confidence: 0.72,
+    ingredients: [{ name: 'Bun', quantity: null, unit: 'each' }],
+  }] },
+  { model: 'gemini-2.5-flash-lite', batchCount: 1, dishes: [{
+    name: ' Full   Guide Dish ',
+    confidence: 0.95,
+    ingredients: [{ name: 'Bun', quantity: 1, unit: 'each' }, { name: 'Patty', quantity: 150, unit: 'g' }],
+  }, {
+    name: 'Second Full Guide Dish',
+    category: 'Sides',
+    confidence: 0.9,
+    ingredients: [],
+  }] },
+]);
+assert.equal(clientMergedPayload.requestBatchCount, 2);
+assert.equal(clientMergedPayload.dishes.length, 2);
+assert.equal(clientMergedPayload.dishes[0].ingredients.length, 2);
+assert.equal(clientMergedPayload.dishes[0].confidence, 0.95);
+assert.equal(clientMergedPayload.items.length, 2);
 
 const generationConfig = createGeminiGenerationConfig('gemini-2.5-flash-lite');
 assert.equal(generationConfig.thinkingConfig.thinkingBudget, 0);
@@ -168,10 +203,12 @@ assert.match(firestoreMenuSource, /category: toSafeString\(category\)/);
 assert.match(menuImportSource, /Upload make-line guide/);
 assert.match(menuImportSource, /make-line-guide-file-gemini/);
 assert.match(menuImportSource, /prepareMakeLineGuideFilePayloads/);
+assert.match(menuImportSource, /fileBatches: preparedGuide\.fileBatches/);
 assert.doesNotMatch(menuImportSource, /scan-document/);
 assert.match(geminiMenuImportSource, /AbortController/);
 assert.match(geminiMenuImportSource, /response\?\.status === 504/);
 assert.match(geminiMenuImportSource, /response\?\.status === 413/);
+assert.match(geminiMenuImportSource, /mergeGeminiMenuImportPayloads/);
 
 const originalFetch = global.fetch;
 const originalApiKey = process.env.GEMINI_API_KEY;

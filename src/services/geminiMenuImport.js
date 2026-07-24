@@ -2,12 +2,13 @@ import {
   getAutomaticManagerApiHeaders,
   getManagerApiErrorMessage,
 } from '../utils/apiHeaders';
+import { mergeGeminiMenuImportPayloads } from '../utils/geminiMenuPayload';
 
 export const GEMINI_MENU_CLIENT_TIMEOUT_MS = 95_000;
 
 export const getGeminiMenuImportErrorMessage = (response, payload = {}) => {
   if (response?.status === 413) {
-    return 'This make-line guide is too large to upload. Split the PDF into guide sections or upload the relevant pages as photos.';
+    return 'This make-line guide section is too large to upload. Try a clearer, lower-resolution guide export.';
   }
 
   if (response?.status === 429) {
@@ -25,16 +26,17 @@ export const getGeminiMenuImportErrorMessage = (response, payload = {}) => {
   return getManagerApiErrorMessage(payload, 'Gemini could not read this make-line guide.');
 };
 
-export const requestGeminiMenuImport = async ({
+const requestSingleGeminiMenuImport = async ({
   text = '',
   files = [],
   onProgress,
-  timeoutMs = GEMINI_MENU_CLIENT_TIMEOUT_MS,
+  timeoutMs,
+  sectionLabel = '',
 }) => {
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
   const slowProgressId = window.setTimeout(() => {
-    onProgress?.('Gemini is checking each guide page...');
+    onProgress?.(`Gemini is checking ${sectionLabel || 'the guide'}...`);
   }, 18_000);
   const finalProgressId = window.setTimeout(() => {
     onProgress?.('Gemini is finishing the recipe breakdown...');
@@ -60,7 +62,7 @@ export const requestGeminiMenuImport = async ({
     return payload;
   } catch (error) {
     if (error?.name === 'AbortError') {
-      throw new Error('The guide upload timed out. Retry once or upload fewer guide pages.');
+      throw new Error('The guide upload timed out. Retry once or use clearer guide pages.');
     }
 
     if (error instanceof TypeError) {
@@ -73,4 +75,57 @@ export const requestGeminiMenuImport = async ({
     window.clearTimeout(slowProgressId);
     window.clearTimeout(finalProgressId);
   }
+};
+
+export const requestGeminiMenuImport = async ({
+  text = '',
+  files = [],
+  fileBatches = [],
+  onProgress,
+  timeoutMs = GEMINI_MENU_CLIENT_TIMEOUT_MS,
+}) => {
+  const batches = Array.isArray(fileBatches) && fileBatches.length > 0
+    ? fileBatches
+    : [files];
+
+  if (batches.length === 1) {
+    return requestSingleGeminiMenuImport({
+      text,
+      files: batches[0],
+      onProgress,
+      timeoutMs,
+    });
+  }
+
+  const results = new Array(batches.length);
+  let nextBatchIndex = 0;
+  const worker = async () => {
+    while (nextBatchIndex < batches.length) {
+      const batchIndex = nextBatchIndex;
+      nextBatchIndex += 1;
+      const sectionLabel = `guide section ${batchIndex + 1} of ${batches.length}`;
+      onProgress?.(`Reading ${sectionLabel}...`);
+
+      try {
+        results[batchIndex] = await requestSingleGeminiMenuImport({
+          text,
+          files: batches[batchIndex],
+          onProgress,
+          timeoutMs,
+          sectionLabel,
+        });
+      } catch (error) {
+        throw new Error(`${sectionLabel} failed. ${error?.message || 'Gemini could not read this section.'}`);
+      }
+
+      onProgress?.(`Read ${batchIndex + 1} of ${batches.length} guide sections. Continuing...`);
+    }
+  };
+
+  await Promise.all([
+    worker(),
+    worker(),
+  ].slice(0, Math.min(2, batches.length)));
+
+  return mergeGeminiMenuImportPayloads(results);
 };

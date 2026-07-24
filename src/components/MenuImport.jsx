@@ -90,10 +90,11 @@ function MenuImport({
       : 'No dishes were found. Try clearer make-line guide text or a better guide photo.');
   };
 
-  const requestGeminiMakeLineGuideParse = async ({ text = '', nextSourceName, files = [] }) => {
+  const requestGeminiMakeLineGuideParse = async ({ text = '', nextSourceName, files = [], fileBatches = [] }) => {
     const payload = await requestGeminiMenuImport({
       text,
       files,
+      fileBatches,
       onProgress: setMessage,
     });
 
@@ -154,6 +155,7 @@ function MenuImport({
         text: '',
         nextSourceName: file.name,
         files: preparedGuide.files,
+        fileBatches: preparedGuide.fileBatches,
       });
       setMessage(preparedGuide.notice
         ? `Gemini read the make-line guide. ${preparedGuide.notice} Review exact portions before saving.`
