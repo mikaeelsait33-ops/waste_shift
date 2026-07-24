@@ -80,6 +80,8 @@ assert.match(invoiceScanner, /priceExVAT: unitPriceExVAT/);
 assert.match(invoiceScanner, /lastLineTotalExVAT: lineTotalExVAT/);
 assert.match(invoiceScanner, /Processed invoices/);
 assert.match(invoiceScanner, /Supplier Invoice Library/);
+assert.match(invoiceScanner, /Invoice data refreshed from Firebase/);
+assert.match(invoiceScanner, /visibilitychange/);
 assert.match(invoiceScanner, /pending_stock_post/);
 assert.match(invoiceScanner, /Post stock/);
 assert.match(invoiceScanner, /refreshWorkspaceInBackground/);

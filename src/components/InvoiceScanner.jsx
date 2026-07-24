@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Line, LineChart, ResponsiveContainer } from 'recharts';
 import {
   INVOICE_CATEGORIES,
@@ -704,6 +704,8 @@ function InvoiceScanner({
   const [postingInvoiceId, setPostingInvoiceId] = useState('');
   const [loadingOlderInvoices, setLoadingOlderInvoices] = useState(false);
   const [loadingOlderStockMovements, setLoadingOlderStockMovements] = useState(false);
+  const [isRefreshingWorkspace, setIsRefreshingWorkspace] = useState(false);
+  const workspaceRefreshInFlightRef = useRef(false);
 
   const canManageInvoices = Boolean(accessProfile?.canUseAiImports);
   const canExportInvoiceReports = Boolean(accessProfile?.canExportData);
@@ -1127,6 +1129,36 @@ function InvoiceScanner({
     setVisibleStockMovementLimit(DEFAULT_PAGE_SIZE);
   }, [stockSearchValue]);
 
+  const refreshWorkspace = useCallback(async ({ silent = false } = {}) => {
+    if (workspaceRefreshInFlightRef.current) {
+      return null;
+    }
+
+    workspaceRefreshInFlightRef.current = true;
+    if (!silent) {
+      setIsRefreshingWorkspace(true);
+    }
+
+    try {
+      const data = await loadInvoiceWorkspaceData();
+      setWorkspace(data);
+      onInvoiceSaved?.();
+      if (!silent) {
+        setMessage('Invoice data refreshed from Firebase.');
+      }
+      return data;
+    } finally {
+      workspaceRefreshInFlightRef.current = false;
+      setIsRefreshingWorkspace(false);
+    }
+  }, [onInvoiceSaved]);
+
+  const refreshWorkspaceInBackground = useCallback(() => {
+    refreshWorkspace({ silent: true }).catch((error) => {
+      console.warn('Could not refresh invoice workspace.', error);
+    });
+  }, [refreshWorkspace]);
+
   useEffect(() => {
     let isCancelled = false;
 
@@ -1141,7 +1173,9 @@ function InvoiceScanner({
           setMessage('Firebase is not configured. Manual invoice entry works locally, but saving is disabled.');
         }
       } catch (error) {
-        setMessage(error?.message || 'Could not load invoice workspace data.');
+        if (!isCancelled) {
+          setMessage(error?.message || 'Could not load invoice workspace data.');
+        }
       }
     };
 
@@ -1152,17 +1186,40 @@ function InvoiceScanner({
     };
   }, [firebaseReady]);
 
-  const refreshWorkspace = async () => {
-    const data = await loadInvoiceWorkspaceData();
-    setWorkspace(data);
-    onInvoiceSaved?.();
-  };
+  useEffect(() => {
+    if (!firebaseReady || !canManageInvoices || typeof window === 'undefined') {
+      return undefined;
+    }
 
-  const refreshWorkspaceInBackground = () => {
-    refreshWorkspace().catch((error) => {
-      console.warn('Could not refresh invoice workspace.', error);
-    });
-  };
+    const refreshIfVisible = () => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        refreshWorkspaceInBackground();
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refreshWorkspaceInBackground();
+      }
+    };
+    const intervalId = window.setInterval(refreshIfVisible, 30000);
+
+    window.addEventListener('focus', refreshWorkspaceInBackground);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshWorkspaceInBackground);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [canManageInvoices, firebaseReady, refreshWorkspaceInBackground]);
+
+  useEffect(() => {
+    if (!firebaseReady || !canManageInvoices || activeView === 'entry') {
+      return;
+    }
+
+    refreshWorkspaceInBackground();
+  }, [activeView, canManageInvoices, firebaseReady, refreshWorkspaceInBackground]);
 
   const applyConfirmedInvoiceToWorkspace = (invoiceRecord, stockLevelUpdates = []) => {
     if (!invoiceRecord?.id) {
@@ -2222,6 +2279,14 @@ function InvoiceScanner({
             Reports
           </button>
         </div>
+        <button
+          type="button"
+          className="ghost-button"
+          onClick={() => refreshWorkspace().catch((error) => setMessage(error?.message || 'Could not refresh invoice data.'))}
+          disabled={isRefreshingWorkspace}
+        >
+          {isRefreshingWorkspace ? 'Refreshing...' : 'Refresh'}
+        </button>
       </div>
 
       {!firebaseReady && (

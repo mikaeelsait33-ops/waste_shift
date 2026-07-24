@@ -1,6 +1,6 @@
 import { getFirestoreDb, ensureFirebaseAuth } from './firestoreMenuItems';
 import { getAutomaticManagerApiHeaders } from '../utils/apiHeaders';
-import { getClientDatabaseId, persistClientDatabaseId } from '../utils/clientDatabaseId';
+import { getClientDatabaseId, normalizeDatabaseId, persistClientDatabaseId } from '../utils/clientDatabaseId';
 
 const getRestaurantProfileRef = () => ['restaurants', getClientDatabaseId() || 'local'];
 const getFirestoreApi = async () => {
@@ -136,11 +136,30 @@ export const loadRestaurantProfile = async () => {
 
   await ensureFirebaseAuth();
   const { doc, getDoc } = await getFirestoreApi();
+  const currentDatabaseId = getClientDatabaseId() || 'local';
+  const singleRestaurant = await findSingleCompletedRestaurant(db);
+
+  if (singleRestaurant?.setupCompleted) {
+    const canonicalDatabaseId = normalizeDatabaseId(singleRestaurant.databaseId);
+
+    if (canonicalDatabaseId && canonicalDatabaseId !== currentDatabaseId) {
+      persistClientDatabaseId(canonicalDatabaseId);
+      const profile = cacheRestaurantProfile(singleRestaurant);
+
+      return {
+        ok: true,
+        exists: true,
+        source: 'firestore-single-shop-canonical',
+        didAdoptSingleShop: true,
+        previousDatabaseId: currentDatabaseId,
+        profile,
+      };
+    }
+  }
+
   const snapshot = await getDoc(doc(db, ...getRestaurantProfileRef()));
 
   if (!snapshot.exists()) {
-    const singleRestaurant = await findSingleCompletedRestaurant(db);
-
     if (singleRestaurant) {
       const profile = cacheRestaurantProfile(singleRestaurant);
       return {

@@ -36,6 +36,7 @@ assert.match(restaurantFirestore, /wasteShiftRestaurantProfiles/, 'Completed res
 assert.match(restaurantFirestore, /where\('setupCompleted', '==', true\)/, 'A new device should discover the one completed shop in Firestore.');
 assert.match(restaurantFirestore, /staff-session\?action=restaurant/, 'Automatic shop discovery should use the server-selected canonical restaurant.');
 assert.match(restaurantFirestore, /limit\(10\)/, 'Direct Firestore discovery must remain bounded when legacy profiles exist.');
+assert.match(restaurantFirestore, /canonicalDatabaseId && canonicalDatabaseId !== currentDatabaseId/, 'Every device should adopt the server-selected restaurant scope even if it has an old local scope.');
 assert.match(appSource, /didAdoptSingleShop/, 'The app should restart its initial data loaders after a new device joins the one shop.');
 assert.match(appSource, /loadPersistedAuthSession/, 'App should restore a remembered local login.');
 assert.doesNotMatch(appSource, /localStorage\.setItem\('wasteShiftSyncAccessKey'/, 'Sync secrets must not persist in browser storage.');
@@ -55,7 +56,9 @@ assert.match(staffSessionApi, /checkPinAttemptAllowed/, 'Staff PIN verification 
 assert.match(loginThrottleApi, /runTransaction/, 'PIN failure counters must update atomically across serverless instances.');
 assert.match(managerRecoveryApi, /WASTESHIFT_RECOVERY_SECRET/, 'Legacy manager recovery must require a server-only secret.');
 assert.match(managerRecoveryApi, /activeManagerExists/, 'Legacy manager recovery must close after the first active manager exists.');
-assert.match(singleShopApi, /hasAppData \? 500/, 'Canonical single-shop discovery must prioritize profiles linked to real app data.');
+assert.match(singleShopApi, /invoiceSignal\.count \* 900/, 'Canonical single-shop discovery must heavily prioritize scopes with processed invoices.');
+assert.match(singleShopApi, /wasteSignal\.count \* 500/, 'Canonical single-shop discovery must prioritize scopes with shared waste uploads.');
+assert.match(singleShopApi, /operationalRecordCount/, 'Canonical single-shop discovery must use operational records as a tie-breaker when duplicate profiles exist.');
 assert.match(singleShopApi, /completedProfileCount/, 'Canonical single-shop discovery must report legacy duplicate profile count.');
 assert.match(staffSessionService, /getAutomaticManagerApiHeaders/, 'Access requests must use authenticated API headers.');
 assert.match(apiHeaders, /x-wasteshift-firebase-token/, 'Authenticated API headers must carry a Firebase identity token.');
