@@ -209,6 +209,9 @@ assert.match(geminiMenuImportSource, /AbortController/);
 assert.match(geminiMenuImportSource, /response\?\.status === 504/);
 assert.match(geminiMenuImportSource, /response\?\.status === 413/);
 assert.match(geminiMenuImportSource, /mergeGeminiMenuImportPayloads/);
+assert.match(geminiMenuImportSource, /GEMINI_MAX_RETRIES/);
+assert.match(geminiMenuImportSource, /retryAfterMs/);
+assert.match(geminiMenuImportSource, /batches\.length > 4 \? 1/);
 
 const originalFetch = global.fetch;
 const originalApiKey = process.env.GEMINI_API_KEY;
