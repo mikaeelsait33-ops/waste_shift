@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const databaseApi = await readFile(new URL('../api/database.js', import.meta.url), 'utf8');
 const adminResetApi = await readFile(new URL('../api/admin-reset.js', import.meta.url), 'utf8');
 const firestoreMenuItems = await readFile(new URL('../src/services/firestoreMenuItems.js', import.meta.url), 'utf8');
 const invoiceFirestore = await readFile(new URL('../src/services/invoiceFirestore.js', import.meta.url), 'utf8');
+const wasteStockApi = await readFile(new URL('../api/waste-stock.js', import.meta.url), 'utf8');
+const wasteStockService = await readFile(new URL('../src/services/wasteStock.js', import.meta.url), 'utf8');
 const apiHeaders = await readFile(new URL('../src/utils/apiHeaders.js', import.meta.url), 'utf8');
 const clientDatabaseId = await readFile(new URL('../src/utils/clientDatabaseId.js', import.meta.url), 'utf8');
 const restaurantFirestore = await readFile(new URL('../src/services/restaurantFirestore.js', import.meta.url), 'utf8');
@@ -13,7 +14,8 @@ const managerSessionApi = await readFile(new URL('../api/manager-session.js', im
 const staffSessionApi = await readFile(new URL('../api/staff-session.js', import.meta.url), 'utf8');
 const accessSessionApi = await readFile(new URL('../api/_accessSession.js', import.meta.url), 'utf8');
 const loginThrottleApi = await readFile(new URL('../api/_loginThrottle.js', import.meta.url), 'utf8');
-const managerRecoveryApi = await readFile(new URL('../api/manager-recovery.js', import.meta.url), 'utf8');
+const managerBootstrapApi = await readFile(new URL('../api/manager-bootstrap.js', import.meta.url), 'utf8');
+const authGate = await readFile(new URL('../src/components/AuthGate.jsx', import.meta.url), 'utf8');
 const singleShopApi = await readFile(new URL('../api/_singleShop.js', import.meta.url), 'utf8');
 const staffSessionService = await readFile(new URL('../src/services/staffSession.js', import.meta.url), 'utf8');
 const restaurantAccessHook = await readFile(new URL('../src/hooks/useRestaurantAccess.js', import.meta.url), 'utf8');
@@ -24,9 +26,6 @@ const wasteDrafts = await readFile(new URL('../src/utils/wasteDrafts.js', import
 const firestoreRules = await readFile(new URL('../firestore.rules', import.meta.url), 'utf8');
 const appSource = await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8');
 
-assert.match(databaseApi, /x-wasteshift-database-id/, 'Fallback database API must require a client database id.');
-assert.match(databaseApi, /createDatabaseFolderPrefix/, 'Fallback database snapshots must be stored below a scoped folder.');
-assert.doesNotMatch(databaseApi, /list\(\{ prefix: DATABASE_FOLDER/, 'Fallback database reads must not list one shared global database folder.');
 assert.match(adminResetApi, /cache-control', 'no-store'/, 'Admin reset API responses must not be cacheable.');
 
 assert.doesNotMatch(clientDatabaseId, /localStorage/, 'Client database scope must not be stored in browser local storage.');
@@ -67,8 +66,11 @@ assert.match(accessSessionApi, /expiresAtTimestamp/, 'Restaurant access sessions
 assert.match(managerSessionApi, /checkPinAttemptAllowed/, 'Manager PIN verification must enforce login throttling.');
 assert.match(staffSessionApi, /checkPinAttemptAllowed/, 'Staff PIN verification must enforce login throttling.');
 assert.match(loginThrottleApi, /runTransaction/, 'PIN failure counters must update atomically across serverless instances.');
-assert.match(managerRecoveryApi, /WASTESHIFT_RECOVERY_SECRET/, 'Legacy manager recovery must require a server-only secret.');
-assert.match(managerRecoveryApi, /activeManagerExists/, 'Legacy manager recovery must close after the first active manager exists.');
+assert.match(managerBootstrapApi, /activeManagerExists/, 'Manager setup must close after the first active manager exists.');
+assert.match(managerBootstrapApi, /runTransaction/, 'One-time manager setup must be claimed atomically.');
+assert.match(managerBootstrapApi, /managerBootstraps/, 'Manager setup must keep a server-only one-time claim.');
+assert.doesNotMatch(managerBootstrapApi, /recoveryKey|RECOVERY_SECRET/, 'Manager setup must not require a recovery key.');
+assert.doesNotMatch(authGate, /recovery key|recoveryKey|manager-recovery/i, 'The login screen must not ask for a recovery key.');
 assert.match(singleShopApi, /invoiceSignal\.count \* 900/, 'Canonical single-shop discovery must heavily prioritize scopes with processed invoices.');
 assert.match(singleShopApi, /wasteSignal\.count \* 500/, 'Canonical single-shop discovery must prioritize scopes with shared waste uploads.');
 assert.match(singleShopApi, /operationalRecordCount/, 'Canonical single-shop discovery must use operational records as a tie-breaker when duplicate profiles exist.');
@@ -77,6 +79,7 @@ assert.match(staffSessionService, /getAutomaticManagerApiHeaders/, 'Access reque
 assert.match(apiHeaders, /x-wasteshift-firebase-token/, 'Authenticated API headers must carry a Firebase identity token.');
 assert.match(restaurantAccessHook, /serverRole === localRole/, 'Remembered browser roles must match the server-issued access role.');
 assert.match(restaurantAccessHook, /serverSession\.staffId.*authSession\.staffId/, 'Remembered staff identities must match the server-issued access session.');
+assert.match(restaurantAccessHook, /setDirectoryStatus\('error'\)/, 'A directory error must not be mistaken for a missing manager account.');
 assert.match(firestoreRules, /function hasManagerAccess/, 'Firestore rules must enforce manager access centrally.');
 assert.match(firestoreRules, /match \/accessSessions\/\{sessionId\}[\s\S]*allow read, write: if false;/, 'Client code must never read or write access-session documents directly.');
 assert.match(firestoreRules, /match \/staffAccounts\/\{staffId\}[\s\S]*allow read, write: if false;/, 'Client code must never read staff PIN records directly.');
@@ -101,6 +104,9 @@ assert.match(firestoreMenuItems, /managementPin:\s*null/, 'Legacy manager PINs m
 assert.match(firestoreMenuItems, /orderBy\('createdAt', 'desc'\)/, 'Waste history must be ordered by Firestore.');
 assert.match(firestoreMenuItems, /limit\(pageSize\)/, 'Waste history must be bounded by a Firestore query limit.');
 assert.match(firestoreMenuItems, /startAfter\(options\.cursor\)/, 'Waste history must continue from a Firestore cursor.');
+assert.match(firestoreMenuItems, /APP_DATA_SECTION_FIELDS/, 'Shared app state must be split into independently saved Firebase sections.');
+assert.match(firestoreMenuItems, /lastSyncedAppSectionFingerprints/, 'Unchanged Firebase sections should not be overwritten by another device.');
+assert.match(firestoreMenuItems, /writeBatch\(db\)/, 'Changed Firebase sections should be committed atomically.');
 assert.match(invoiceFirestore, /where\('databaseId', '==', getActiveDatabaseId\(\)\)/, 'Invoice Firestore reads must be scoped by database id.');
 assert.match(invoiceFirestore, /startAfter\(options\.cursor\)/, 'Invoice and stock history must support Firestore cursor pagination.');
 assert.match(invoiceFirestore, /scopeDocId/, 'Invoice Firestore writes must use scoped document ids to avoid id collisions.');
@@ -108,7 +114,13 @@ assert.doesNotMatch(`${firestoreMenuItems}\n${invoiceFirestore}`, /browserLocalP
 assert.match(invoiceFirestore, /where: firestore\.where/, 'Firestore query helpers must expose where at runtime.');
 assert.match(invoiceFirestore, /runTransaction: firestore\.runTransaction/, 'Invoice stock posting must expose Firestore transactions.');
 assert.match(invoiceFirestore, /return runTransaction\(db/, 'Invoice stock posting must be atomic.');
+assert.match(invoiceFirestore, /await batch\.commit\(\)/, 'Confirmed invoices and their ingredient prices must be posted in one batch.');
 assert.doesNotMatch(invoiceFirestore, /deleteDoc\(ingredientRef/, 'Ingredient deletion must preserve the audit record.');
 assert.doesNotMatch(invoiceFirestore, /nestedDocsToDelete\.map\(\(docSnapshot\) => deleteDoc/, 'Invoice price history must be archived instead of hard deleted.');
+assert.match(wasteStockApi, /authorizeRestaurantSessionRequest/, 'Waste stock updates must require a valid restaurant session.');
+assert.match(wasteStockApi, /runTransaction/, 'Waste stock deductions and reversals must be atomic.');
+assert.match(wasteStockApi, /alreadySynced/, 'Waste stock updates must be idempotent.');
+assert.match(wasteStockApi, /waste_reversal/, 'Voiding waste must restore the deducted stock.');
+assert.match(wasteStockService, /\/api\/waste-stock/, 'The client must call the protected stock-sync endpoint.');
 
 console.log('session isolation tests passed');

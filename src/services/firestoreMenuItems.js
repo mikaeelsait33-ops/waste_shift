@@ -44,6 +44,7 @@ const getFirestoreApi = async () => {
       setDoc: firestore.setDoc,
       startAfter: firestore.startAfter,
       where: firestore.where,
+      writeBatch: firestore.writeBatch,
     }));
   }
 
@@ -157,12 +158,23 @@ const toSafeNumber = (value, fallback = 0) => {
 
 const toSafeCurrency = (value, fallback = 0) => roundCurrency(toSafeNumber(value, fallback));
 
-const isLocalPhotoDataUrl = (value) => /^data:image\//i.test(String(value || ''));
+const WASTE_PHOTO_DATA_URL_PATTERN = /^data:image\/(?:jpe?g|png|webp);base64,/i;
+const MAX_WASTE_PHOTO_DATA_URL_LENGTH = 600 * 1024;
 
-const getSharedPhotoUrl = (value) => {
+const isLocalPhotoDataUrl = (value) => WASTE_PHOTO_DATA_URL_PATTERN.test(String(value || ''));
+
+const getPersistedPhotoUrl = (value) => {
   const photoUrl = toSafeString(value);
 
-  return photoUrl && !isLocalPhotoDataUrl(photoUrl) ? photoUrl : '';
+  if (!photoUrl) {
+    return '';
+  }
+
+  if (!isLocalPhotoDataUrl(photoUrl)) {
+    return photoUrl;
+  }
+
+  return photoUrl.length <= MAX_WASTE_PHOTO_DATA_URL_LENGTH ? photoUrl : '';
 };
 
 const removeUndefinedValues = (value) => {
@@ -195,6 +207,23 @@ const sanitizeWasteComponent = (component, index) => {
   };
 };
 
+const sanitizeStockDeduction = (deduction) => {
+  const ingredientId = toSafeString(deduction?.ingredientId);
+  const quantityBase = toSafeNumber(deduction?.quantityBase);
+
+  if (!ingredientId || quantityBase <= 0) {
+    return null;
+  }
+
+  return {
+    ingredientId,
+    ingredientName: toSafeString(deduction?.ingredientName) || ingredientId,
+    quantityBase,
+    baseUnit: toSafeString(deduction?.baseUnit) || 'each',
+    cost: toSafeCurrency(deduction?.cost),
+  };
+};
+
 const createFirestoreAppDataPayload = (databaseData) => {
   const data = databaseData && typeof databaseData === 'object' ? databaseData : {};
   const stripStaffCredentials = (records) => (Array.isArray(records) ? records : []).map((record) => {
@@ -217,9 +246,45 @@ const createFirestoreAppDataPayload = (databaseData) => {
   });
 };
 
+const APP_DATA_SECTION_FIELDS = {
+  operations: ['budget', 'settings', 'portionProfiles'],
+  menu: ['recipes', 'customMenuItems', 'itemPriceCatalog'],
+  staff: ['customStaffList', 'staffList', 'authSettings'],
+  inventory: ['storeRoomItems', 'storeRoomMovements', 'inventoryMovements'],
+  audit: ['auditLog'],
+};
+const lastSyncedAppSectionFingerprints = new Map();
+
+const createAppDataSections = (databaseData) => {
+  const safeData = createFirestoreAppDataPayload(databaseData);
+
+  return Object.fromEntries(Object.entries(APP_DATA_SECTION_FIELDS).map(([section, fields]) => [
+    section,
+    Object.fromEntries(fields
+      .filter((field) => safeData[field] !== undefined)
+      .map((field) => [field, safeData[field]])),
+  ]));
+};
+
+const getAppSectionFingerprint = (sectionData) => JSON.stringify(sectionData || {});
+
+const combineAppDataSections = (legacyData, sectionDataByName) => {
+  const combined = {
+    ...(legacyData && typeof legacyData === 'object' ? legacyData : {}),
+  };
+
+  Object.values(sectionDataByName).forEach((sectionData) => {
+    if (sectionData && typeof sectionData === 'object') {
+      Object.assign(combined, sectionData);
+    }
+  });
+
+  return combined;
+};
+
 const createFirestoreWasteEntryPayload = (entry, authUser = null) => {
   const createdAt = toSafeString(entry?.createdAt) || new Date().toISOString();
-  const photoUrl = getSharedPhotoUrl(entry?.photoUrl);
+  const photoUrl = getPersistedPhotoUrl(entry?.photoUrl);
   const wastedComponents = (Array.isArray(entry?.wastedComponents) ? entry.wastedComponents : [])
     .map(sanitizeWasteComponent)
     .filter(Boolean);
@@ -231,6 +296,8 @@ const createFirestoreWasteEntryPayload = (entry, authUser = null) => {
     localEntryId: toSafeString(entry?.id),
     name: toSafeString(entry?.name),
     itemType: toSafeString(entry?.itemType),
+    ingredientId: toSafeString(entry?.ingredientId || entry?.priceCatalogKey),
+    priceCatalogKey: toSafeString(entry?.priceCatalogKey || entry?.ingredientId),
     recipeKey: toSafeString(entry?.recipeKey),
     category: toSafeString(entry?.category),
     quantity: toSafeNumber(entry?.quantity, 1),
@@ -279,6 +346,9 @@ const createFirestoreWasteEntryPayload = (entry, authUser = null) => {
       ? entry.componentsWasted.map(toSafeString).filter(Boolean)
       : wastedComponents.map((component) => component.name),
     wastedComponents,
+    stockDeductions: (Array.isArray(entry?.stockDeductions) ? entry.stockDeductions : [])
+      .map(sanitizeStockDeduction)
+      .filter(Boolean),
     hasPhoto: Boolean(photoUrl || entry?.hasPhoto || isLocalPhotoDataUrl(entry?.photoUrl)),
     photoUrl,
     photoStoragePath: toSafeString(entry?.photoStoragePath),
@@ -287,7 +357,7 @@ const createFirestoreWasteEntryPayload = (entry, authUser = null) => {
     photoUploadedAt: toSafeString(entry?.photoUploadedAt),
     photoMimeType: toSafeString(entry?.photoMimeType),
     photoSizeBytes: toSafeNumber(entry?.photoSizeBytes),
-    photoUploadStatus: toSafeString(entry?.photoUploadStatus || (photoUrl ? 'uploaded' : '')),
+    photoUploadStatus: toSafeString(entry?.photoUploadStatus || (photoUrl ? 'stored_in_firestore' : '')),
   });
 };
 
@@ -303,7 +373,7 @@ const normalizeFirestoreWasteEntry = (docSnapshot) => {
     foodCostLost: toSafeCurrency(data?.foodCostLost ?? data?.cost),
     syncStatus: toSafeString(data?.syncStatus) || 'synced',
     syncError: toSafeString(data?.syncError),
-    photoUrl: getSharedPhotoUrl(data?.photoUrl),
+    photoUrl: getPersistedPhotoUrl(data?.photoUrl),
     hasPhoto: Boolean(data?.hasPhoto || data?.photoUrl),
     photoStoragePath: toSafeString(data?.photoStoragePath),
     photoName: toSafeString(data?.photoName),
@@ -417,20 +487,46 @@ export const loadFirestoreDatabaseSnapshot = async () => {
   }
 
   await ensureFirebaseAuth();
-  const { doc, getDoc } = await getFirestoreApi();
-  const snapshot = await getDoc(doc(db, 'appData', scopeDocId('main')));
+  const { collection, getDocs, query, where } = await getFirestoreApi();
+  const snapshot = await getDocs(query(
+    collection(db, 'appData'),
+    where('databaseId', '==', getActiveDatabaseId()),
+  ));
 
-  if (!snapshot.exists()) {
+  if (snapshot.empty) {
+    lastSyncedAppSectionFingerprints.clear();
     return { ok: true, exists: false, data: null, updatedAt: '' };
   }
 
-  const snapshotData = snapshot.data();
+  const documents = snapshot.docs.map((documentSnapshot) => ({
+    id: documentSnapshot.id,
+    ...documentSnapshot.data(),
+  }));
+  const legacyDocument = documents.find((document) => document.id === scopeDocId('main'));
+  const legacyData = legacyDocument?.data && typeof legacyDocument.data === 'object'
+    ? legacyDocument.data
+    : {};
+  const legacySections = createAppDataSections(legacyData);
+  const sectionDataByName = Object.fromEntries(Object.keys(APP_DATA_SECTION_FIELDS).map((section) => {
+    const sectionDocument = documents.find((document) => document.section === section);
+    const sectionData = sectionDocument?.data && typeof sectionDocument.data === 'object'
+      ? sectionDocument.data
+      : legacySections[section];
+
+    lastSyncedAppSectionFingerprints.set(section, getAppSectionFingerprint(sectionData));
+    return [section, sectionData];
+  }));
+  const updatedAt = documents
+    .map((document) => toSafeString(document.updatedAtClient || document.exportedAt))
+    .filter(Boolean)
+    .sort()
+    .at(-1) || '';
 
   return {
     ok: true,
     exists: true,
-    data: snapshotData?.data || {},
-    updatedAt: toSafeString(snapshotData?.updatedAtClient || snapshotData?.exportedAt),
+    data: combineAppDataSections(legacyData, sectionDataByName),
+    updatedAt,
   };
 };
 
@@ -441,21 +537,42 @@ export const saveFirestoreDatabaseSnapshot = async (databaseData) => {
     return { ok: false, skipped: true };
   }
 
-  const safeData = createFirestoreAppDataPayload(databaseData);
+  const sections = createAppDataSections(databaseData);
   const exportedAt = new Date().toISOString();
   const databaseId = getActiveDatabaseId();
+  const changedSections = Object.entries(sections).filter(([section, sectionData]) => (
+    lastSyncedAppSectionFingerprints.get(section) !== getAppSectionFingerprint(sectionData)
+  ));
+
+  if (changedSections.length === 0) {
+    return { ok: true, unchanged: true, changedSections: [], updatedAt: exportedAt };
+  }
 
   await ensureFirebaseAuth();
-  const { doc, serverTimestamp, setDoc } = await getFirestoreApi();
-  await setDoc(doc(db, 'appData', scopeDocId('main')), {
-    databaseId,
-    data: safeData,
-    exportedAt,
-    updatedAtClient: exportedAt,
-    updatedAt: serverTimestamp(),
-  }, { merge: true });
+  const { doc, serverTimestamp, writeBatch } = await getFirestoreApi();
+  const batch = writeBatch(db);
 
-  return { ok: true, updatedAt: exportedAt };
+  changedSections.forEach(([section, sectionData]) => {
+    batch.set(doc(db, 'appData', scopeDocId(`section-${section}`)), {
+      databaseId,
+      section,
+      data: sectionData,
+      exportedAt,
+      updatedAtClient: exportedAt,
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+  });
+
+  await batch.commit();
+  changedSections.forEach(([section, sectionData]) => {
+    lastSyncedAppSectionFingerprints.set(section, getAppSectionFingerprint(sectionData));
+  });
+
+  return {
+    ok: true,
+    changedSections: changedSections.map(([section]) => section),
+    updatedAt: exportedAt,
+  };
 };
 
 export const saveFirestoreMenuItem = async ({
@@ -530,6 +647,77 @@ export const saveFirestoreRecipe = async ({ key, name, category = '', menuPrice 
   }), { merge: true });
 
   return { ok: true };
+};
+
+export const saveFirestoreMenuBundle = async (items = []) => {
+  const db = await getFirestoreDb();
+  const safeItems = (Array.isArray(items) ? items : [])
+    .map((item) => {
+      const name = toSafeString(item?.name);
+      const key = toSafeString(item?.key) || createItemPriceKey(name);
+      const components = (Array.isArray(item?.components) ? item.components : [])
+        .map(sanitizeComponent)
+        .filter(Boolean);
+
+      if (!name || !key) {
+        return null;
+      }
+
+      return {
+        ...item,
+        key,
+        name,
+        category: toSafeString(item?.category),
+        components,
+        totalCost: Number.isFinite(Number(item?.totalCost))
+          ? roundCurrency(Number(item.totalCost))
+          : roundCurrency(components.reduce((sum, component) => sum + component.cost, 0)),
+      };
+    })
+    .filter(Boolean);
+
+  if (!db || safeItems.length === 0) {
+    return { ok: false, skipped: true, savedCount: 0 };
+  }
+
+  if (safeItems.length > 200) {
+    throw new Error('Save make-line guides in groups of 200 recipes or fewer.');
+  }
+
+  await ensureFirebaseAuth();
+  const { doc, serverTimestamp, writeBatch } = await getFirestoreApi();
+  const batch = writeBatch(db);
+  const databaseId = getActiveDatabaseId();
+
+  safeItems.forEach((item) => {
+    const commonFields = {
+      databaseId,
+      key: item.key,
+      name: item.name,
+      category: item.category,
+      ...(item.menuPrice !== null && item.menuPrice !== undefined
+        ? { menuPrice: roundCurrency(Number(item.menuPrice) || 0) }
+        : {}),
+      updatedAt: serverTimestamp(),
+    };
+
+    batch.set(doc(db, 'menuItems', scopeDocId(item.key)), {
+      ...commonFields,
+      totalCost: item.totalCost,
+      components: item.components,
+      archived: false,
+      archivedAt: '',
+      archivedBy: '',
+    }, { merge: true });
+    batch.set(doc(db, 'recipes', scopeDocId(item.key)), removeUndefinedValues({
+      ...commonFields,
+      ingredients: item.components,
+      instructions: toSafeString(item?.instructions),
+    }), { merge: true });
+  });
+
+  await batch.commit();
+  return { ok: true, savedCount: safeItems.length };
 };
 
 export const archiveFirestoreMenuItem = async (key, archivedBy = 'WasteShift user') => {
@@ -633,6 +821,10 @@ export const saveFirestoreWasteEntry = async (entry) => {
 
   if (!db || !safeEntryId) {
     return { ok: false, skipped: true };
+  }
+
+  if (isLocalPhotoDataUrl(entry?.photoUrl) && !getPersistedPhotoUrl(entry.photoUrl)) {
+    throw new Error('This photo is too large to save. Choose a smaller photo and try again.');
   }
 
   const authUser = await ensureFirebaseAuth();

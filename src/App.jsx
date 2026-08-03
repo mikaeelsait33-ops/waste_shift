@@ -33,7 +33,6 @@ import { useRestaurantData } from './hooks/useRestaurantData';
 import { useRestaurantPersistence } from './hooks/useRestaurantPersistence';
 import { useInvoicePricing } from './hooks/useInvoicePricing';
 import { useMenuRecipes } from './hooks/useMenuRecipes';
-import { useStoreRoom } from './hooks/useStoreRoom';
 import { useStaffAccess } from './hooks/useStaffAccess';
 import { useWasteEntries } from './hooks/useWasteEntries';
 import { useWasteHistoryPagination } from './hooks/useWasteHistoryPagination';
@@ -42,7 +41,7 @@ import {
   validateRestaurantResetConfirmation,
 } from './utils/restaurantReset';
 import { getActiveWasteEntries } from './utils/wasteSync';
-import { getClientDatabaseHeaders, getClientDatabaseId } from './utils/clientDatabaseId';
+import { getClientDatabaseId } from './utils/clientDatabaseId';
 import {
   clearPersistedAuthSession,
 } from './utils/sessionPersistence';
@@ -62,13 +61,10 @@ import {
   sanitizePortionProfiles,
   sanitizeSettings,
   sanitizeStaffMembers,
-  sanitizeStoreRoomItems,
-  sanitizeStoreRoomMovements,
 } from './utils/appData';
 import {
   FIRESTORE_CONFIGURED,
   FIRESTORE_RUNTIME_INFO,
-  SERVER_DATABASE_ENDPOINT,
 } from './config/appRuntime';
 
 const AppWorkspace = lazy(() => import('./components/AppWorkspace'));
@@ -84,23 +80,15 @@ const PageFallback = ({ label = 'Loading screen' }) => (
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [inventoryView, setInventoryView] = useState('invoices');
   const [menuPricingView, setMenuPricingView] = useState('recipes');
-  const [serverSyncEnabled, setServerSyncEnabled] = useState(false);
-  const [serverLoadComplete, setServerLoadComplete] = useState(false);
+  const [firebaseAutoSaveEnabled, setFirebaseAutoSaveEnabled] = useState(false);
+  const [firebaseLoadComplete, setFirebaseLoadComplete] = useState(false);
   const [managerAccountsLoaded, setManagerAccountsLoaded] = useState(!FIRESTORE_CONFIGURED);
-  const [serverSync, setServerSync] = useState({
-    status: FIRESTORE_CONFIGURED ? 'ready' : 'checking',
-    message: FIRESTORE_CONFIGURED
-      ? 'Firebase is the primary database.'
-      : 'Checking for Vercel backup database...',
-    lastSavedAt: '',
-  });
   const [firebaseSync, setFirebaseSync] = useState({
-    status: FIRESTORE_CONFIGURED ? 'checking' : 'local',
+    status: FIRESTORE_CONFIGURED ? 'checking' : 'error',
     message: FIRESTORE_CONFIGURED
       ? `Connecting to Firebase${FIRESTORE_RUNTIME_INFO.projectId ? ` project ${FIRESTORE_RUNTIME_INFO.projectId}` : ''}...`
-      : 'Firebase env vars are not configured. Live records stay in this browser.',
+      : 'Firebase is not configured. Restaurant setup and live records are unavailable.',
     lastSavedAt: '',
     menuItemCount: 0,
     projectId: FIRESTORE_RUNTIME_INFO.projectId,
@@ -110,9 +98,9 @@ function App() {
   const [isOnline, setIsOnline] = useState(() => (
     typeof navigator === 'undefined' ? true : navigator.onLine
   ));
-  const [syncAccessKey, setSyncAccessKey] = useState('');
   const [authSession, setAuthSession] = useState(null);
   const [isPreparingAuth, setIsPreparingAuth] = useState(false);
+  const latestSharedSnapshotUpdatedAtRef = useRef('');
 
   const {
     activeStaffId,
@@ -142,12 +130,8 @@ function App() {
     setPortionProfiles,
     setRecipes,
     setSettings,
-    setStoreRoomItems,
-    setStoreRoomMovements,
     setWasteItems,
     settings,
-    storeRoomItems,
-    storeRoomMovements,
     wasteItems,
   } = useRestaurantData();
 
@@ -208,6 +192,7 @@ function App() {
   });
   const {
     directoryLoaded,
+    directoryStatus,
     sessionValidationStatus,
     staffDirectory,
   } = useRestaurantAccess({
@@ -352,8 +337,8 @@ function App() {
       if (!FIRESTORE_CONFIGURED) {
         setFirebaseSync(prev => ({
           ...prev,
-          status: 'local',
-          message: 'Firebase env vars are not configured. Live records stay in this browser.',
+          status: 'error',
+          message: 'Firebase is not configured. Menu data is unavailable.',
         }));
         return;
       }
@@ -384,12 +369,12 @@ function App() {
           }));
         }
       } catch (error) {
-        console.warn('Firestore menu items unavailable. Using local menu data.', error);
+        console.warn('Firestore menu items unavailable.', error);
         if (!isCancelled) {
           setFirebaseSync(prev => ({
             ...prev,
             status: 'error',
-            message: `${error?.message || 'Firebase is unavailable.'} Local menu data is still available.`,
+            message: error?.message || 'Firebase menu data is unavailable.',
           }));
         }
       }
@@ -474,8 +459,6 @@ function App() {
     setWasteItems,
     settings,
     staffList,
-    storeRoomItems,
-    storeRoomMovements,
     wasteItems,
   });
   const activeStaffMember = useMemo(() => (
@@ -488,9 +471,9 @@ function App() {
     !member.removed
     && (member.staffSection === 'management' || inferRoleKey(member.role) === 'manager' || inferRoleKey(member.role) === 'owner')
   )), [staffList]);
-  const managerRecoveryRequired = FIRESTORE_CONFIGURED
+  const managerSetupRequired = FIRESTORE_CONFIGURED
     && restaurantProfile?.setupCompleted === true
-    && directoryLoaded
+    && directoryStatus === 'ready'
     && !staffDirectory.some((member) => ['owner', 'manager'].includes(inferRoleKey(member.roleKey || member.role)));
   const managerAuthIsConfigured = useMemo(() => (
     restaurantProfile?.setupCompleted === true
@@ -504,15 +487,6 @@ function App() {
     }
   }, [accessProfile.canViewFinancials, authSession, refreshInvoiceDashboardStats, sessionValidationStatus]);
 
-  const getSyncHeaders = useCallback((extraHeaders = {}) => {
-    const trimmedAccessKey = syncAccessKey.trim();
-
-    return getClientDatabaseHeaders({
-      ...extraHeaders,
-      ...(trimmedAccessKey ? { 'x-wasteshift-sync-secret': trimmedAccessKey } : {}),
-    });
-  }, [syncAccessKey]);
-
   const buildDatabaseData = useCallback(() => ({
     wasteItems,
     budget,
@@ -522,13 +496,11 @@ function App() {
     customMenuItems,
     portionProfiles,
     itemPriceCatalog,
-    storeRoomItems,
-    storeRoomMovements,
     settings,
     authSettings,
     inventoryMovements,
     auditLog,
-  }), [wasteItems, budget, recipes, staffList, customStaffList, customMenuItems, portionProfiles, itemPriceCatalog, storeRoomItems, storeRoomMovements, settings, authSettings, inventoryMovements, auditLog]);
+  }), [wasteItems, budget, recipes, staffList, customStaffList, customMenuItems, portionProfiles, itemPriceCatalog, settings, authSettings, inventoryMovements, auditLog]);
   const latestDatabaseDataRef = useRef(null);
 
   useEffect(() => {
@@ -536,21 +508,39 @@ function App() {
   }, [buildDatabaseData]);
 
   const applyDatabaseData = useCallback((databaseData) => {
-    setWasteItems(Array.isArray(databaseData.wasteItems) ? databaseData.wasteItems : []);
-    setBudget(parseFloat(databaseData.budget) || 0);
-    setRecipes(isRecipeMap(databaseData.recipes) ? cloneRecipeMap(databaseData.recipes) : {});
-    setCustomStaffList(sanitizeStaffMembers(databaseData.customStaffList ?? databaseData.staffList));
-    setCustomMenuItems(sanitizeMenuItems(databaseData.customMenuItems));
-    setPortionProfiles(sanitizePortionProfiles(databaseData.portionProfiles));
-    setItemPriceCatalog(sanitizeItemPriceCatalog(databaseData.itemPriceCatalog));
-    setStoreRoomItems(sanitizeStoreRoomItems(databaseData.storeRoomItems));
-    setStoreRoomMovements(sanitizeStoreRoomMovements(databaseData.storeRoomMovements));
-    setSettings(sanitizeSettings(databaseData.settings));
+    if (databaseData.wasteItems !== undefined) {
+      setWasteItems(Array.isArray(databaseData.wasteItems) ? databaseData.wasteItems : []);
+    }
+    if (databaseData.budget !== undefined) {
+      setBudget(parseFloat(databaseData.budget) || 0);
+    }
+    if (databaseData.recipes !== undefined) {
+      setRecipes(isRecipeMap(databaseData.recipes) ? cloneRecipeMap(databaseData.recipes) : {});
+    }
+    if (databaseData.customStaffList !== undefined || databaseData.staffList !== undefined) {
+      setCustomStaffList(sanitizeStaffMembers(databaseData.customStaffList ?? databaseData.staffList));
+    }
+    if (databaseData.customMenuItems !== undefined) {
+      setCustomMenuItems(sanitizeMenuItems(databaseData.customMenuItems));
+    }
+    if (databaseData.portionProfiles !== undefined) {
+      setPortionProfiles(sanitizePortionProfiles(databaseData.portionProfiles));
+    }
+    if (databaseData.itemPriceCatalog !== undefined) {
+      setItemPriceCatalog(sanitizeItemPriceCatalog(databaseData.itemPriceCatalog));
+    }
+    if (databaseData.settings !== undefined) {
+      setSettings(sanitizeSettings(databaseData.settings));
+    }
     if (databaseData.authSettings !== undefined) {
       setAuthSettings(sanitizeAuthSettings(databaseData.authSettings));
     }
-    setInventoryMovements(Array.isArray(databaseData.inventoryMovements) ? databaseData.inventoryMovements : []);
-    setAuditLog(Array.isArray(databaseData.auditLog) ? databaseData.auditLog : []);
+    if (databaseData.inventoryMovements !== undefined) {
+      setInventoryMovements(Array.isArray(databaseData.inventoryMovements) ? databaseData.inventoryMovements : []);
+    }
+    if (databaseData.auditLog !== undefined) {
+      setAuditLog(Array.isArray(databaseData.auditLog) ? databaseData.auditLog : []);
+    }
   }, [
     setAuditLog,
     setAuthSettings,
@@ -562,87 +552,64 @@ function App() {
     setPortionProfiles,
     setRecipes,
     setSettings,
-    setStoreRoomItems,
-    setStoreRoomMovements,
     setWasteItems,
   ]);
 
-  const saveDatabaseToServer = useCallback(async (mode = 'manual') => {
-    const permission = requirePermission(accessProfile, 'canManageServerSync', 'sync the server database');
+  const saveDatabaseToFirebase = useCallback(async () => {
+    const permission = requirePermission(accessProfile, 'canManageServerSync', 'sync Firebase');
 
     if (!permission.ok) {
-      setServerSync(prev => ({
+      setFirebaseSync(prev => ({
         ...prev,
-        status: 'locked',
+        status: 'error',
         message: permission.message,
       }));
       return false;
     }
 
-    setServerSync(prev => ({
+    if (!FIRESTORE_CONFIGURED) {
+      setFirebaseSync(prev => ({
+        ...prev,
+        status: 'error',
+        message: 'Firebase is not configured. Add the Firebase environment variables before using WasteShift.',
+      }));
+      return false;
+    }
+
+    setFirebaseSync(prev => ({
       ...prev,
       status: 'saving',
-      message: FIRESTORE_CONFIGURED
-        ? 'Saving database to Firebase...'
-        : mode === 'manual' ? 'Saving database to server...' : 'Auto-saving database to server...',
+      message: 'Saving restaurant data to Firebase...',
     }));
 
     try {
-      if (FIRESTORE_CONFIGURED) {
-        const payload = await saveFirestoreDatabaseSnapshot(buildDatabaseData());
+      const payload = await saveFirestoreDatabaseSnapshot(buildDatabaseData());
 
-        if (payload?.skipped) {
-          throw new Error('Firebase is not configured for this build.');
-        }
-
-        setServerSyncEnabled(true);
-        setServerSync({
-          status: 'synced',
-          message: 'Firebase database synced.',
-          lastSavedAt: payload.updatedAt || new Date().toISOString(),
-        });
-        setFirebaseSync(prev => ({
-          ...prev,
-          status: 'synced',
-          message: 'Firebase is the primary database and is up to date.',
-          lastSavedAt: payload.updatedAt || new Date().toISOString(),
-        }));
-
-        return true;
+      if (payload?.skipped) {
+        throw new Error('Firebase is not configured for this build.');
       }
 
-      const response = await fetch(SERVER_DATABASE_ENDPOINT, {
-        method: 'POST',
-        headers: getSyncHeaders({ 'content-type': 'application/json' }),
-        body: JSON.stringify({ data: buildDatabaseData() }),
-      });
-      const payload = await response.json().catch(() => ({}));
-
-      if (!response.ok || payload.ok === false) {
-        throw new Error(payload.message || 'Server save failed.');
-      }
-
-      if (!FIRESTORE_CONFIGURED) {
-        setServerSyncEnabled(true);
-      }
-
-      setServerSync({
+      setFirebaseAutoSaveEnabled(true);
+      setFirebaseSync(prev => ({
+        ...prev,
         status: 'synced',
-        message: 'Server database synced.',
+        message: payload?.unchanged
+          ? 'Firebase is connected and all restaurant data is up to date.'
+          : 'Restaurant data saved to Firebase.',
         lastSavedAt: payload.updatedAt || new Date().toISOString(),
-      });
+      }));
 
       return true;
     } catch (error) {
-      setServerSync({
+      setFirebaseSync(prev => ({
+        ...prev,
         status: 'error',
-        message: error?.message || (FIRESTORE_CONFIGURED ? 'Firebase save failed.' : 'Server save failed.'),
-        lastSavedAt: '',
-      });
+        message: error?.message || 'Firebase save failed.',
+      }));
 
       return false;
     }
-  }, [accessProfile, buildDatabaseData, getSyncHeaders]);
+  }, [accessProfile, buildDatabaseData]);
 
   useEffect(() => {
     if (authSession) {
@@ -661,12 +628,12 @@ function App() {
       if (FIRESTORE_CONFIGURED) {
         if (!authSession || sessionValidationStatus !== 'ready') {
           setManagerAccountsLoaded(true);
-          setServerSyncEnabled(false);
-          setServerLoadComplete(false);
+          setFirebaseAutoSaveEnabled(false);
+          setFirebaseLoadComplete(false);
           return;
         }
 
-        setServerSync(prev => ({
+        setFirebaseSync(prev => ({
           ...prev,
           status: 'checking',
           message: 'Loading primary database from Firebase...',
@@ -687,6 +654,7 @@ function App() {
           }
 
           const snapshotData = firebaseSnapshot?.data || {};
+          latestSharedSnapshotUpdatedAtRef.current = firebaseSnapshot?.updatedAt || '';
           const firebaseWasteItems = firebaseWastePage.entries;
           const hasSnapshot = Boolean(firebaseSnapshot?.exists);
           const hasWasteEntries = firebaseWasteItems.length > 0;
@@ -707,30 +675,20 @@ function App() {
                 : defaultDatabaseData.wasteItems,
           };
 
-          setServerSyncEnabled(true);
-          setServerLoadComplete(true);
+          setFirebaseAutoSaveEnabled(true);
+          setFirebaseLoadComplete(true);
           setManagerAccountsLoaded(true);
           if (hasSnapshot || hasWasteEntries || hasManagerAccounts) {
             applyDatabaseData(firebaseDatabaseData);
-            setServerSync({
-              status: 'synced',
-              message: `Loaded primary database from Firebase${hasWasteEntries ? ` with ${firebaseWasteItems.length} waste entr${firebaseWasteItems.length === 1 ? 'y' : 'ies'}` : ''}.`,
-              lastSavedAt: firebaseSnapshot?.updatedAt || '',
-            });
             setFirebaseSync(prev => ({
               ...prev,
               status: 'ready',
-              message: 'Firebase is connected and serving the app database.',
+              message: `Firebase is connected${hasWasteEntries ? ` with ${firebaseWasteItems.length} shared waste entr${firebaseWasteItems.length === 1 ? 'y' : 'ies'}` : ''}.`,
               lastSavedAt: firebaseSnapshot?.updatedAt || new Date().toISOString(),
             }));
             return;
           }
 
-          setServerSync({
-            status: 'ready',
-            message: 'Firebase database is ready. No shared app data has been saved yet.',
-            lastSavedAt: '',
-          });
           setFirebaseSync(prev => ({
             ...prev,
             status: 'ready',
@@ -745,13 +703,8 @@ function App() {
 
           console.warn('Firebase primary database unavailable.', error);
           setManagerAccountsLoaded(true);
-          setServerSyncEnabled(false);
-          setServerLoadComplete(false);
-          setServerSync({
-            status: 'error',
-            message: error?.message || 'Firebase database is unavailable.',
-            lastSavedAt: '',
-          });
+          setFirebaseAutoSaveEnabled(false);
+          setFirebaseLoadComplete(false);
           setFirebaseSync(prev => ({
             ...prev,
             status: 'error',
@@ -761,61 +714,14 @@ function App() {
         }
       }
 
-      try {
-        const response = await fetch(SERVER_DATABASE_ENDPOINT, {
-          cache: 'no-store',
-          headers: getSyncHeaders(),
-        });
-        const payload = await response.json().catch(() => ({}));
-
-        if (!response.ok) {
-          if (response.status === 401 || response.status === 403) {
-            throw new Error(payload.message || 'Server sync is protected. Add the server sync access key in Settings.');
-          }
-
-          throw new Error(payload.message || 'Server database route is not available.');
-        }
-
-        if (payload?.ok === false) {
-          throw new Error(payload.message || 'Server database is not configured.');
-        }
-
-        if (isCancelled) {
-          return;
-        }
-
-        setServerSyncEnabled(true);
-        setServerLoadComplete(true);
-
-        if (payload?.snapshot?.data) {
-          applyDatabaseData(payload.snapshot.data);
-          setServerSync({
-            status: 'synced',
-            message: 'Loaded database from server.',
-            lastSavedAt: payload.snapshot.updatedAt || payload.snapshot.exportedAt || '',
-          });
-          return;
-        }
-
-        setServerSync({
-          status: 'ready',
-          message: 'Server database is ready. No server data has been saved yet.',
-          lastSavedAt: '',
-        });
-      } catch (error) {
-        if (isCancelled) {
-          return;
-        }
-
-        setServerSyncEnabled(false);
-        setServerLoadComplete(false);
-        const message = error?.message || 'Firebase database is unavailable.';
-        setServerSync({
-          status: /protected|access key|unauthorized|forbidden/i.test(message) ? 'locked' : 'local',
-          message,
-          lastSavedAt: '',
-        });
-      }
+      setManagerAccountsLoaded(true);
+      setFirebaseAutoSaveEnabled(false);
+      setFirebaseLoadComplete(false);
+      setFirebaseSync(prev => ({
+        ...prev,
+        status: 'error',
+        message: 'Firebase is not configured. WasteShift requires Firebase for restaurant data.',
+      }));
     };
 
     loadServerDatabase();
@@ -823,14 +729,14 @@ function App() {
     return () => {
       isCancelled = true;
     };
-  }, [applyDatabaseData, authSession, getSyncHeaders, loadInitialWasteHistoryPage, restaurantProfile.setupCompleted, sessionValidationStatus]);
+  }, [applyDatabaseData, authSession, loadInitialWasteHistoryPage, restaurantProfile.setupCompleted, sessionValidationStatus]);
 
   useEffect(() => {
     if (
       !FIRESTORE_CONFIGURED
       || !authSession
       || sessionValidationStatus !== 'ready'
-      || !serverLoadComplete
+      || !firebaseLoadComplete
       || !isOnline
       || typeof window === 'undefined'
     ) {
@@ -873,19 +779,100 @@ function App() {
       window.removeEventListener('focus', refreshRecentWasteEntries);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
-  }, [authSession, isOnline, mergeWasteHistoryEntries, serverLoadComplete, sessionValidationStatus]);
+  }, [authSession, firebaseLoadComplete, isOnline, mergeWasteHistoryEntries, sessionValidationStatus]);
 
   useEffect(() => {
-    if (!serverSyncEnabled || !serverLoadComplete) {
+    if (
+      !FIRESTORE_CONFIGURED
+      || !authSession
+      || sessionValidationStatus !== 'ready'
+      || !firebaseLoadComplete
+      || !isOnline
+      || typeof window === 'undefined'
+    ) {
+      return undefined;
+    }
+
+    let isCancelled = false;
+    let refreshInFlight = false;
+    const refreshSharedWorkspace = async () => {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
+
+      try {
+        const isManagementSession = ['owner', 'manager'].includes(String(authSession.roleKey || '').toLowerCase());
+        const [snapshot, sharedMenuItems] = await Promise.all([
+          isManagementSession
+            ? loadFirestoreDatabaseSnapshot()
+            : Promise.resolve({ ok: true, exists: false, data: null, updatedAt: '' }),
+          loadFirestoreMenuItems(),
+        ]);
+
+        if (isCancelled) return;
+        setFirestoreMenuItems(sharedMenuItems);
+
+        if (
+          snapshot?.exists
+          && snapshot.updatedAt
+          && snapshot.updatedAt !== latestSharedSnapshotUpdatedAtRef.current
+        ) {
+          const currentData = latestDatabaseDataRef.current || {};
+          applyDatabaseData({
+            ...currentData,
+            ...snapshot.data,
+            wasteItems: currentData.wasteItems,
+          });
+          latestSharedSnapshotUpdatedAtRef.current = snapshot.updatedAt;
+          setFirebaseSync((current) => ({
+            ...current,
+            status: 'ready',
+            message: 'Shared restaurant changes refreshed from Firebase.',
+            lastSavedAt: snapshot.updatedAt,
+          }));
+        }
+      } catch (error) {
+        console.warn('Could not refresh shared restaurant data.', error);
+      } finally {
+        refreshInFlight = false;
+      }
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        refreshSharedWorkspace();
+      }
+    };
+    const intervalId = window.setInterval(refreshSharedWorkspace, 45 * 1000);
+
+    window.addEventListener('focus', refreshSharedWorkspace);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshSharedWorkspace);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [
+    applyDatabaseData,
+    authSession,
+    isOnline,
+    firebaseLoadComplete,
+    sessionValidationStatus,
+    setFirebaseSync,
+    setFirestoreMenuItems,
+  ]);
+
+  useEffect(() => {
+    if (!firebaseAutoSaveEnabled || !firebaseLoadComplete) {
       return undefined;
     }
 
     const timeoutId = window.setTimeout(() => {
-      saveDatabaseToServer('auto');
+      saveDatabaseToFirebase();
     }, 900);
 
     return () => window.clearTimeout(timeoutId);
-  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, itemPriceCatalog, storeRoomItems, storeRoomMovements, settings, authSettings, inventoryMovements, auditLog, serverSyncEnabled, serverLoadComplete, saveDatabaseToServer]);
+  }, [wasteItems, budget, recipes, customStaffList, customMenuItems, portionProfiles, itemPriceCatalog, settings, authSettings, inventoryMovements, auditLog, firebaseAutoSaveEnabled, firebaseLoadComplete, saveDatabaseToFirebase]);
 
   const {
     handleAddStaff,
@@ -894,7 +881,7 @@ function App() {
     handleLogin,
     handleLogout,
     handlePrepareSetupManagerAccess,
-    handleRecoverManagerAccess,
+    handleBootstrapManagerAccess,
     handleResetStaffCode,
     handleSavePinSettings,
   } = useStaffAccess({
@@ -912,7 +899,6 @@ function App() {
     setAuthSettings,
     setCustomStaffList,
     setIsPreparingAuth,
-    setSyncAccessKey,
     staffList,
   });
 
@@ -956,20 +942,6 @@ function App() {
     setRecipes,
     setWasteItems,
     wasteItems,
-  });
-
-  const {
-    handleDeleteStoreRoomItem,
-    handleRecordStoreRoomMovement,
-    handleSaveStoreRoomItem,
-  } = useStoreRoom({
-    accessProfile,
-    activeStaffMember,
-    itemPriceCatalog,
-    setAuditLog,
-    setStoreRoomItems,
-    setStoreRoomMovements,
-    storeRoomItems,
   });
 
   const handleSaveSettings = ({ budget: nextBudget, dailyWasteValueLimit, dailyWasteEntryLimit }) => {
@@ -1197,8 +1169,6 @@ function App() {
       setCustomMenuItems(emptyData.customMenuItems);
       setPortionProfiles(emptyData.portionProfiles);
       setItemPriceCatalog(emptyData.itemPriceCatalog);
-      setStoreRoomItems(emptyData.storeRoomItems);
-      setStoreRoomMovements(emptyData.storeRoomMovements);
       setInventoryMovements(emptyData.inventoryMovements);
       setAuditLog(emptyData.auditLog);
       setFirestoreMenuItems([]);
@@ -1212,10 +1182,10 @@ function App() {
       setActiveTab('dashboard');
       setFirebaseSync(prev => ({
         ...prev,
-        status: FIRESTORE_CONFIGURED ? 'synced' : 'local',
+        status: FIRESTORE_CONFIGURED ? 'synced' : 'error',
         message: FIRESTORE_CONFIGURED
           ? 'Restaurant data reset. Complete setup again.'
-          : 'Local restaurant data reset. Configure Firebase before setup can finish.',
+          : 'Restaurant reset could not complete because Firebase is not configured.',
         lastSavedAt: new Date().toISOString(),
         menuItemCount: 0,
       }));
@@ -1226,14 +1196,54 @@ function App() {
     }
   };
 
-  const handleRestoreDatabase = (databaseData) => {
+  const handleRestoreDatabase = async (databaseData) => {
     const permission = requirePermission(accessProfile, 'canRestoreDatabase', 'restore a database backup');
     if (!permission.ok) {
       alert(permission.message);
-      return;
+      return { ok: false, message: permission.message };
     }
 
-    applyDatabaseData(databaseData);
+    if (!FIRESTORE_CONFIGURED) {
+      return { ok: false, message: 'Firebase is required before configuration can be restored.' };
+    }
+
+    try {
+      const restorableFields = [
+        'budget',
+        'settings',
+        'recipes',
+        'customMenuItems',
+        'itemPriceCatalog',
+        'portionProfiles',
+      ];
+      const restorableData = Object.fromEntries(restorableFields
+        .filter((field) => databaseData?.[field] !== undefined)
+        .map((field) => [field, databaseData[field]]));
+      const mergedData = {
+        ...buildDatabaseData(),
+        ...restorableData,
+      };
+      const result = await saveFirestoreDatabaseSnapshot(mergedData);
+      if (result?.skipped || result?.ok === false) {
+        return { ok: false, message: 'Firebase did not restore this configuration.' };
+      }
+
+      applyDatabaseData(restorableData);
+      setFirebaseSync(prev => ({
+        ...prev,
+        status: 'synced',
+        message: 'Restaurant configuration restored to Firebase.',
+        lastSavedAt: result.updatedAt || new Date().toISOString(),
+      }));
+      return { ok: true, message: 'Restaurant configuration restored.' };
+    } catch (error) {
+      setFirebaseSync(prev => ({
+        ...prev,
+        status: 'error',
+        message: error?.message || 'Could not restore restaurant configuration.',
+      }));
+      return { ok: false, message: error?.message || 'Could not restore restaurant configuration.' };
+    }
   };
 
   const authDataIsLoading = FIRESTORE_CONFIGURED
@@ -1300,10 +1310,10 @@ function App() {
         isPreparingAuth={isPreparingAuth}
         authIsConfigured={managerAuthIsConfigured}
         staffList={staffList}
-        managerRecoveryRequired={managerRecoveryRequired}
+        managerSetupRequired={managerSetupRequired}
         onLogin={handleLogin}
         onInitialManagerSetup={handleInitialManagerSetup}
-        onRecoverManagerAccess={handleRecoverManagerAccess}
+        onBootstrapManagerAccess={handleBootstrapManagerAccess}
       />
     );
   }
@@ -1335,17 +1345,12 @@ function App() {
           portionProfiles,
           settings,
           staffList,
-          storeRoomItems,
-          storeRoomMovements,
           wasteItems,
         }}
         inventoryActions={{
-          onDeleteStoreRoomItem: handleDeleteStoreRoomItem,
           onIngredientDeleted: handleInvoiceIngredientDeleted,
           onInvoicePricesUpdated: handleInvoicePricesUpdated,
           onInvoiceSaved: refreshInvoiceDashboardStats,
-          onRecordStoreRoomMovement: handleRecordStoreRoomMovement,
-          onSaveStoreRoomItem: handleSaveStoreRoomItem,
         }}
         menuActions={{
           onAddRecipe: handleAddNewRecipe,
@@ -1360,9 +1365,7 @@ function App() {
         }}
         navigation={{
           activeTab,
-          inventoryView,
           menuPricingView,
-          onInventoryViewChange: setInventoryView,
           onMenuPricingViewChange: setMenuPricingView,
           onNavigate: setActiveTab,
         }}
@@ -1379,13 +1382,11 @@ function App() {
           onRestoreDatabase: handleRestoreDatabase,
           onSavePinSettings: handleSavePinSettings,
           onSaveSettings: handleSaveSettings,
-          onSaveSyncAccessKey: setSyncAccessKey,
-          onSaveToServer: () => saveDatabaseToServer('manual'),
+          onSaveToFirebase: saveDatabaseToFirebase,
         }}
         sync={{
           firebaseSync,
-          serverSync,
-          syncAccessKey,
+          isOnline,
         }}
         wasteActions={{
           onAddEntry: handleAddEntry,

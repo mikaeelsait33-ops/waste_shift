@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { requirePermission } from '../utils/accessControl';
 import { FIRESTORE_CONFIGURED } from '../config/appRuntime';
 import { saveFirestoreWasteEntry } from '../services/firestoreMenuItems';
-import { uploadWastePhotoForEntry } from '../services/wastePhotos';
+import { syncWasteStockForEntry } from '../services/wasteStock';
 import { createAuditLogEntry, createMenuItemKey } from '../utils/appData';
 import {
   createInventoryMovementsFromEntry,
@@ -40,23 +40,26 @@ export function useWasteEntries({
 
   const syncWasteEntryToFirestore = useCallback(async (entry) => {
     if (!FIRESTORE_CONFIGURED) {
-      updateWasteEntrySyncStatus(entry.id, 'failed', 'Firebase is not configured.');
-      return { ok: false, syncStatus: 'failed', message: 'Firebase is not configured. This entry is only visible until the app reloads.' };
+      return { ok: false, syncStatus: 'failed', message: 'Firebase is not configured. Waste cannot be saved.' };
     }
 
     if (!isOnline) {
-      updateWasteEntrySyncStatus(entry.id, 'pending');
-      return { ok: true, syncStatus: 'pending', message: 'Entry queued until this device is online.' };
+      return { ok: false, syncStatus: 'failed', message: 'This device is offline. Reconnect before saving waste.' };
     }
 
     try {
-      const entryForFirestore = await uploadWastePhotoForEntry(entry);
-
-      if (entryForFirestore.photoUrl !== entry.photoUrl) {
-        setWasteItems(prevItems => prevItems.map((item) => (
-          item.id === entry.id ? { ...item, ...entryForFirestore } : item
-        )));
-      }
+      const hasPhoto = /^data:image\/(?:jpe?g|png|webp);base64,/i.test(String(entry?.photoUrl || ''));
+      const encodedPhoto = hasPhoto ? String(entry.photoUrl).split(',', 2)[1] || '' : '';
+      const entryForFirestore = hasPhoto
+        ? {
+            ...entry,
+            hasPhoto: true,
+            photoMimeType: String(entry.photoUrl).slice(5, String(entry.photoUrl).indexOf(';')),
+            photoSizeBytes: Number(entry.photoSizeBytes) || Math.ceil(encodedPhoto.length * 0.75),
+            photoUploadedAt: entry.photoUploadedAt || new Date().toISOString(),
+            photoUploadStatus: 'stored_in_firestore',
+          }
+        : entry;
 
       const result = await saveFirestoreWasteEntry(entryForFirestore);
 
@@ -65,14 +68,31 @@ export function useWasteEntries({
         return { ok: false, syncStatus: 'failed', message: 'Firebase skipped this entry because required fields were missing.' };
       }
 
+      let stockResult = { ok: true, skipped: true };
+      let stockWarning = '';
+
+      try {
+        stockResult = await syncWasteStockForEntry(entry.id);
+      } catch (stockError) {
+        stockWarning = stockError?.message || 'Waste was saved, but stock could not be updated.';
+      }
+
       updateWasteEntrySyncStatus(entry.id, 'synced');
       setFirebaseSync(prev => ({
         ...prev,
         status: 'synced',
-        message: 'Waste entry saved to Firebase.',
+        message: stockWarning
+          ? `Waste entry saved to Firebase. ${stockWarning}`
+          : 'Waste entry and stock saved to Firebase.',
         lastSavedAt: new Date().toISOString(),
       }));
-      return { ok: true, syncStatus: 'synced' };
+      return {
+        ok: true,
+        syncStatus: 'synced',
+        entry: entryForFirestore,
+        stockResult,
+        warning: stockWarning,
+      };
     } catch (error) {
       console.warn('Could not save waste entry to Firestore.', error);
       const message = error?.message || 'Could not save waste entry to Firebase.';
@@ -80,13 +100,28 @@ export function useWasteEntries({
       setFirebaseSync(prev => ({
         ...prev,
         status: 'error',
-        message: `${message} The entry is only visible in this session until sync succeeds.`,
+        message,
       }));
       return { ok: false, syncStatus: 'failed', message };
     }
-  }, [isOnline, setFirebaseSync, setWasteItems, updateWasteEntrySyncStatus]);
+  }, [isOnline, setFirebaseSync, updateWasteEntrySyncStatus]);
 
   const handleAddEntry = async (newEntry) => {
+    if (!FIRESTORE_CONFIGURED) {
+      return {
+        ok: false,
+        message: 'Firebase is required before waste can be logged.',
+      };
+    }
+
+    if (!isOnline) {
+      return {
+        ok: false,
+        offline: true,
+        message: 'This device is offline. Reconnect before logging waste so the entry cannot be lost.',
+      };
+    }
+
     const duplicateWindowMs = 90 * 1000;
     const nowMs = new Date(newEntry?.createdAt || newEntry?.timestamp || Date.now()).getTime();
     const duplicateEntry = wasteItems.find((item) => {
@@ -114,28 +149,44 @@ export function useWasteEntries({
       syncError: '',
     };
 
-    setWasteItems(prevItems => [...prevItems, entryWithSync]);
+    const result = await syncWasteEntryToFirestore(entryWithSync);
+
+    if (!result?.ok) {
+      return result;
+    }
+
+    const savedEntry = {
+      ...entryWithSync,
+      ...(result.entry || {}),
+      syncStatus: 'synced',
+      syncError: '',
+      syncedAt: new Date().toISOString(),
+    };
+    setWasteItems(prevItems => (
+      prevItems.some((item) => item.id === savedEntry.id)
+        ? prevItems.map((item) => (item.id === savedEntry.id ? savedEntry : item))
+        : [...prevItems, savedEntry]
+    ));
     setInventoryMovements(prevMovements => [
       ...prevMovements,
-      ...createInventoryMovementsFromEntry(entryWithSync),
+      ...createInventoryMovementsFromEntry(savedEntry),
     ]);
-
     setAuditLog(prevLog => [
       createAuditLogEntry({
         action: 'Waste entry created',
-        user: entryWithSync.createdBy || entryWithSync.staff,
-        relatedItem: entryWithSync.name,
+        user: savedEntry.createdBy || savedEntry.staff,
+        relatedItem: savedEntry.name,
         afterValue: {
-          id: entryWithSync.id,
-          foodCostLost: getEntryFoodCostLost(entryWithSync),
-          potentialRevenueLost: Number(entryWithSync.potentialRevenueLost) || 0,
-          reason: entryWithSync.reason,
+          id: savedEntry.id,
+          foodCostLost: getEntryFoodCostLost(savedEntry),
+          potentialRevenueLost: Number(savedEntry.potentialRevenueLost) || 0,
+          reason: savedEntry.reason,
         },
       }),
       ...prevLog,
     ].slice(0, 500));
 
-    return syncWasteEntryToFirestore(entryWithSync);
+    return result;
   };
 
   const handleRetryWasteEntrySync = useCallback(async (entryId) => {
@@ -213,37 +264,42 @@ export function useWasteEntries({
       syncStatus: 'pending',
       syncError: '',
     };
+    const result = await syncWasteEntryToFirestore(voidedEntry);
+    if (!result?.ok) {
+      return result;
+    }
+    const savedVoidedEntry = {
+      ...voidedEntry,
+      ...(result.entry || {}),
+      syncStatus: 'synced',
+      syncError: '',
+    };
     const nextWasteItems = wasteItems.map((item) => (
-      item.id === idToDelete ? voidedEntry : item
+      item.id === idToDelete ? savedVoidedEntry : item
     ));
 
     setWasteItems(nextWasteItems);
     setInventoryMovements(nextWasteItems.flatMap(createInventoryMovementsFromEntry));
+    setAuditLog(prevLog => [
+      createAuditLogEntry({
+        action: 'Waste entry voided',
+        user: voidedBy,
+        relatedItem: entryToDelete.name,
+        beforeValue: {
+          id: entryToDelete.id,
+          foodCostLost: getEntryFoodCostLost(entryToDelete),
+          reason: entryToDelete.reason,
+        },
+        afterValue: {
+          status: 'voided',
+          voidedAt,
+          voidReason: savedVoidedEntry.voidReason,
+        },
+      }),
+      ...prevLog,
+    ].slice(0, 500));
 
-    if (entryToDelete) {
-      setAuditLog(prevLog => [
-        createAuditLogEntry({
-          action: 'Waste entry voided',
-          user: voidedBy,
-          relatedItem: entryToDelete.name,
-          beforeValue: {
-            id: entryToDelete.id,
-            foodCostLost: getEntryFoodCostLost(entryToDelete),
-            reason: entryToDelete.reason,
-          },
-          afterValue: {
-            status: 'voided',
-            voidedAt,
-            voidReason: voidedEntry.voidReason,
-          },
-        }),
-        ...prevLog,
-      ].slice(0, 500));
-    }
-
-    return syncWasteEntryToFirestore(voidedEntry)
-      .then((result) => ({ ...result, entry: voidedEntry }))
-      .catch((error) => ({ ok: false, entry: voidedEntry, message: error?.message || 'Void is only visible in this session until Firebase sync succeeds.' }));
+    return { ...result, entry: savedVoidedEntry };
   };
 
   const handleRestoreEntry = async (entryToRestore) => {
@@ -268,9 +324,19 @@ export function useWasteEntries({
       syncStatus: 'pending',
       syncError: '',
     };
-    const nextWasteItems = wasteItems.some((item) => item.id === restoredEntry.id)
-      ? wasteItems.map((item) => (item.id === restoredEntry.id ? restoredEntry : item))
-      : [...wasteItems, restoredEntry];
+    const result = await syncWasteEntryToFirestore(restoredEntry);
+    if (!result?.ok) {
+      return result;
+    }
+    const savedRestoredEntry = {
+      ...restoredEntry,
+      ...(result.entry || {}),
+      syncStatus: 'synced',
+      syncError: '',
+    };
+    const nextWasteItems = wasteItems.some((item) => item.id === savedRestoredEntry.id)
+      ? wasteItems.map((item) => (item.id === savedRestoredEntry.id ? savedRestoredEntry : item))
+      : [...wasteItems, savedRestoredEntry];
 
     setWasteItems(nextWasteItems);
     setInventoryMovements(nextWasteItems.flatMap(createInventoryMovementsFromEntry));
@@ -278,19 +344,17 @@ export function useWasteEntries({
       createAuditLogEntry({
         action: 'Waste entry restored',
         user: restoredBy,
-        relatedItem: restoredEntry.name,
+        relatedItem: savedRestoredEntry.name,
         afterValue: {
-          id: restoredEntry.id,
-          foodCostLost: getEntryFoodCostLost(restoredEntry),
+          id: savedRestoredEntry.id,
+          foodCostLost: getEntryFoodCostLost(savedRestoredEntry),
           status: 'logged',
         },
       }),
       ...prevLog,
     ].slice(0, 500));
 
-    return syncWasteEntryToFirestore(restoredEntry)
-      .then((result) => ({ ...result, entry: restoredEntry }))
-      .catch((error) => ({ ok: false, entry: restoredEntry, message: error?.message || 'Restore is only visible in this session until Firebase sync succeeds.' }));
+    return { ...result, entry: savedRestoredEntry };
   };
 
   const handleClearAll = async () => {
@@ -317,7 +381,6 @@ export function useWasteEntries({
       bulkWasteClearInFlightRef.current = true;
       const voidedAt = new Date().toISOString();
       const voidedBy = activeStaffMember?.name || 'System';
-      const activeIds = new Set(activeEntries.map((entry) => entry.id));
       const voidedEntries = activeEntries.map((entry) => ({
         ...entry,
         status: 'voided',
@@ -328,30 +391,46 @@ export function useWasteEntries({
         syncStatus: 'pending',
         syncError: '',
       }));
-      const voidedEntriesById = new Map(voidedEntries.map((entry) => [entry.id, entry]));
-      const nextWasteItems = wasteItems.map((entry) => (
-        activeIds.has(entry.id) ? voidedEntriesById.get(entry.id) : entry
-      ));
-
-      setWasteItems(nextWasteItems);
-      setInventoryMovements(nextWasteItems.flatMap(createInventoryMovementsFromEntry));
-      setAuditLog(prevLog => [
-        createAuditLogEntry({
-          action: 'Waste log bulk voided',
-          user: voidedBy,
-          relatedItem: 'All waste entries',
-          beforeValue: {
-            entries: activeEntries.length,
-            foodCostLost: activeEntries.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0),
-          },
-          afterValue: { status: 'voided', voidedAt },
-        }),
-        ...prevLog,
-      ].slice(0, 500));
 
       try {
-        const results = await Promise.all(voidedEntries.map(syncWasteEntryToFirestore));
+        const results = [];
+        for (let index = 0; index < voidedEntries.length; index += 5) {
+          const batch = voidedEntries.slice(index, index + 5);
+          results.push(...await Promise.all(batch.map(syncWasteEntryToFirestore)));
+        }
         const failedCount = results.filter((result) => !result?.ok).length;
+        const savedVoidedEntries = results
+          .map((result, index) => (
+            result?.ok
+              ? {
+                  ...voidedEntries[index],
+                  ...(result.entry || {}),
+                  syncStatus: 'synced',
+                  syncError: '',
+                }
+              : null
+          ))
+          .filter(Boolean);
+        const savedEntriesById = new Map(savedVoidedEntries.map((entry) => [entry.id, entry]));
+        const nextWasteItems = wasteItems.map((entry) => savedEntriesById.get(entry.id) || entry);
+
+        setWasteItems(nextWasteItems);
+        setInventoryMovements(nextWasteItems.flatMap(createInventoryMovementsFromEntry));
+        if (savedVoidedEntries.length > 0) {
+          setAuditLog(prevLog => [
+            createAuditLogEntry({
+              action: 'Waste log bulk voided',
+              user: voidedBy,
+              relatedItem: 'Waste entries',
+              beforeValue: {
+                entries: savedVoidedEntries.length,
+                foodCostLost: savedVoidedEntries.reduce((sum, item) => sum + getEntryFoodCostLost(item), 0),
+              },
+              afterValue: { status: 'voided', voidedAt },
+            }),
+            ...prevLog,
+          ].slice(0, 500));
+        }
         setFirebaseSync(prev => ({
           ...prev,
           status: failedCount > 0 ? 'error' : 'synced',

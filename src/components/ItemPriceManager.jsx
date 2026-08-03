@@ -41,7 +41,7 @@ function ItemPriceManager({
     setEditingKey('');
   };
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
 
     const trimmedName = name.trim();
@@ -57,14 +57,19 @@ function ItemPriceManager({
       return;
     }
 
-    onSaveItemPrice?.({
+    const result = await onSaveItemPrice?.({
       key: editingKey || createItemPriceKey(trimmedName),
       name: trimmedName,
       category,
       price: parsedPrice,
       unit,
     });
-    setMessage(`${trimmedName} ingredient price saved.`);
+    if (result?.ok === false) {
+      setMessage(result.message || 'Could not save this ingredient price.');
+      return;
+    }
+
+    setMessage(result?.message || `${trimmedName} ingredient price saved.`);
     resetForm();
   };
 
@@ -77,13 +82,17 @@ function ItemPriceManager({
     setMessage(`Editing ${record.name}.`);
   };
 
-  const handleDelete = (record) => {
+  const handleDelete = async (record) => {
     if (window.confirm(`Remove the saved raw ingredient price for ${record.name}?`)) {
-      onDeleteItemPrice?.(record.key);
+      const result = await onDeleteItemPrice?.(record.key);
+      if (result?.ok === false) {
+        setMessage(result.message || `Could not remove ${record.name}.`);
+        return;
+      }
       if (editingKey === record.key) {
         resetForm();
       }
-      setMessage(`${record.name} ingredient price removed.`);
+      setMessage(result?.message || `${record.name} ingredient price removed.`);
     }
   };
 

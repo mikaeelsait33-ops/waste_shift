@@ -26,7 +26,7 @@ const FIREBASE_CONFIG = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-const hasFirebaseConfig = Boolean(
+const hasFirebaseConfig = import.meta.env.VITE_WASTESHIFT_E2E !== 'true' && Boolean(
   FIREBASE_CONFIG.apiKey
   && FIREBASE_CONFIG.projectId
   && FIREBASE_CONFIG.appId
@@ -62,6 +62,7 @@ const getFirestoreApi = async () => {
       startAfter: firestore.startAfter,
       updateDoc: firestore.updateDoc,
       where: firestore.where,
+      writeBatch: firestore.writeBatch,
     }));
   }
 
@@ -829,6 +830,8 @@ export const saveConfirmedInvoice = async ({
   const safeSupplierName = sanitizeString(supplierName) || 'Unknown supplier';
   const safeInvoiceId = sanitizeString(invoiceId) || createRecordId('invoice');
   const safeLineItems = Array.isArray(lineItems) ? lineItems : [];
+  const safeIngredientRows = (Array.isArray(ingredientRows) ? ingredientRows : [])
+    .filter((row) => row?.ingredientId && row?.ingredientName);
   const safeTotals = totals || {};
   const safeExtractedTotals = extractedTotals || {};
   const safeInvoiceDate = sanitizeString(invoiceDate) || new Date().toISOString().slice(0, 10);
@@ -840,12 +843,27 @@ export const saveConfirmedInvoice = async ({
     ? stockPostingStatus
     : 'not_posted';
 
-  await ensureFirebaseAuth();
-  const { doc, getDoc, increment, serverTimestamp, setDoc } = await getFirestoreApi();
-  const supplierRef = doc(db, 'suppliers', scopeDocId(supplierId));
-  const supplierSnapshot = await getDoc(supplierRef).catch(() => null);
+  if (safeIngredientRows.length > 150) {
+    throw new Error('This invoice has more than 150 ingredient lines. Split it into two invoice records before confirming.');
+  }
 
-  await setDoc(doc(db, 'invoices', scopeDocId(safeInvoiceId)), {
+  await ensureFirebaseAuth();
+  const { doc, getDoc, increment, serverTimestamp, writeBatch } = await getFirestoreApi();
+  const invoiceRef = doc(db, 'invoices', scopeDocId(safeInvoiceId));
+  const supplierRef = doc(db, 'suppliers', scopeDocId(supplierId));
+  const existingInvoiceSnapshot = await getDoc(invoiceRef);
+  const existingInvoice = existingInvoiceSnapshot.exists()
+    && existingInvoiceSnapshot.data()?.databaseId === getActiveDatabaseId()
+      ? existingInvoiceSnapshot.data()
+      : null;
+  const existingStockPostingStatus = sanitizeString(existingInvoice?.stockPostingStatus);
+  const stockWasAlreadyPosted = ['posted', 'historical_posted'].includes(existingStockPostingStatus);
+  const resolvedStockPostingStatus = stockWasAlreadyPosted
+    ? existingStockPostingStatus
+    : safeStockPostingStatus;
+  const batch = writeBatch(db);
+
+  batch.set(invoiceRef, {
     databaseId: getActiveDatabaseId(),
     id: safeInvoiceId,
     invoiceDate: safeInvoiceDate,
@@ -867,21 +885,25 @@ export const saveConfirmedInvoice = async ({
     },
     totalsSource: 'reviewed-line-items',
     lineItems: safeLineItems,
-    ingredientRows: Array.isArray(ingredientRows) ? ingredientRows : [],
+    ingredientRows: safeIngredientRows,
     scannedAt: new Date().toISOString(),
-    status: safeStockPostingStatus === 'prices_only'
+    status: stockWasAlreadyPosted
+      ? sanitizeString(existingInvoice?.status) || (resolvedStockPostingStatus === 'historical_posted' ? 'historical_stock' : 'posted_to_stock')
+      : resolvedStockPostingStatus === 'prices_only'
       ? 'prices_only'
-      : safeStockPostingStatus === 'historical'
+      : resolvedStockPostingStatus === 'historical'
         ? 'historical'
-        : safeStockPostingStatus === 'pending_stock_post'
+        : resolvedStockPostingStatus === 'pending_stock_post'
           ? 'pending_stock_post'
         : 'confirmed',
     confirmedAt,
     confirmedBy: sanitizeString(confirmedBy) || 'WasteShift user',
-    stockPostingStatus: safeStockPostingStatus,
-    stockPostedAt: '',
-    stockPostedBy: '',
-    stockMovementIds: [],
+    stockPostingStatus: resolvedStockPostingStatus,
+    stockPostedAt: stockWasAlreadyPosted ? existingInvoice?.stockPostedAt || '' : '',
+    stockPostedBy: stockWasAlreadyPosted ? sanitizeString(existingInvoice?.stockPostedBy) : '',
+    stockMovementIds: stockWasAlreadyPosted && Array.isArray(existingInvoice?.stockMovementIds)
+      ? existingInvoice.stockMovementIds
+      : [],
     vatRate: sanitizeNumber(vatRate, 0.15),
     vatMode: sanitizeString(vatMode) || 'inclusive',
     rawText: sanitizeString(rawText).slice(0, 12000),
@@ -898,22 +920,22 @@ export const saveConfirmedInvoice = async ({
     updatedAt: serverTimestamp(),
   }, { merge: true });
 
-  await setDoc(supplierRef, {
+  const supplierPayload = {
     databaseId: getActiveDatabaseId(),
     id: supplierId,
     name: safeSupplierName,
-    contactInfo: sanitizeString(supplierSnapshot?.data()?.contactInfo),
-    paymentTerms: sanitizeString(supplierSnapshot?.data()?.paymentTerms),
     lastInvoiceDate: safeInvoiceDate,
-    totalSpend: increment(roundMoney(safeTotals.totalExVAT)),
-    ingredientCount: Array.isArray(ingredientRows) ? new Set(ingredientRows.map((row) => row.ingredientId).filter(Boolean)).size : 0,
-    ...(!supplierSnapshot?.exists?.() ? { createdAt: serverTimestamp() } : {}),
+    ingredientCount: new Set(safeIngredientRows.map((row) => row.ingredientId)).size,
     updatedAt: serverTimestamp(),
-  }, { merge: true });
+  };
 
-  await Promise.all((Array.isArray(ingredientRows) ? ingredientRows : [])
-    .filter((row) => row?.ingredientId && row?.ingredientName)
-    .map(async (row) => {
+  if (!existingInvoice || String(existingInvoice.status || '').toLowerCase() === 'deleted') {
+    supplierPayload.totalSpend = increment(roundMoney(safeTotals.totalExVAT));
+  }
+
+  batch.set(supplierRef, supplierPayload, { merge: true });
+
+  safeIngredientRows.forEach((row) => {
       const ingredientId = sanitizeString(row.ingredientId);
       const pricing = buildInvoiceIngredientPricing({}, row);
       const previousCostPerBaseUnit = sanitizeNumber(row.previousCostPerBaseUnit ?? row.previousCostPerBaseUnitExVAT ?? row.previousCostPerBaseUnitCost);
@@ -967,7 +989,7 @@ export const saveConfirmedInvoice = async ({
         createdAt: serverTimestamp(),
       };
 
-      await setDoc(doc(db, 'ingredients', scopeDocId(ingredientId)), {
+      batch.set(doc(db, 'ingredients', scopeDocId(ingredientId)), {
         databaseId: getActiveDatabaseId(),
         id: ingredientId,
         key: ingredientId,
@@ -1012,14 +1034,18 @@ export const saveConfirmedInvoice = async ({
         updatedAt: serverTimestamp(),
       }, { merge: true });
 
-      await Promise.all([
-        setDoc(doc(db, 'ingredients', scopeDocId(ingredientId), 'priceHistory', historyId), historyPayload, { merge: true }),
-        setDoc(doc(db, 'priceHistory', scopeDocId(`${ingredientId}-${historyId}`)), {
-          id: `${ingredientId}-${historyId}`,
-          ...historyPayload,
-        }, { merge: true }),
-      ]);
-    }));
+      batch.set(
+        doc(db, 'ingredients', scopeDocId(ingredientId), 'priceHistory', historyId),
+        historyPayload,
+        { merge: true },
+      );
+      batch.set(doc(db, 'priceHistory', scopeDocId(`${ingredientId}-${historyId}`)), {
+        id: `${ingredientId}-${historyId}`,
+        ...historyPayload,
+      }, { merge: true });
+    });
+
+  await batch.commit();
 
   return { ok: true, invoiceId: safeInvoiceId };
 };
@@ -1174,6 +1200,28 @@ export const updateStockFromInvoice = async ({
     const groups = [...postingGroups.values()];
     const stockRefs = groups.map((group) => doc(db, 'stockLevels', scopeDocId(group.ingredientId)));
     const stockSnapshots = await Promise.all(stockRefs.map((stockRef) => transaction.get(stockRef)));
+    const movementEntries = groups.flatMap((group) => (
+      group.items.map(({ row, lineItem }) => {
+        const movementId = createStockMovementId({
+          invoiceId,
+          lineItemId: lineItem.id || row.lineItemId,
+          ingredientId: group.ingredientId,
+        });
+
+        return {
+          movementId,
+          movementRef: doc(db, 'stockMovements', scopeDocId(movementId)),
+        };
+      })
+    ));
+    const movementSnapshots = await Promise.all(
+      movementEntries.map(({ movementRef }) => transaction.get(movementRef)),
+    );
+    const existingMovementIds = new Set(
+      movementEntries
+        .filter((_, index) => movementSnapshots[index].exists())
+        .map(({ movementId }) => movementId),
+    );
     const updates = [];
     const stockMovementIds = [];
 
@@ -1187,6 +1235,19 @@ export const updateStockFromInvoice = async ({
       let lastMovementId = '';
 
       group.items.forEach(({ row, lineItem }) => {
+        const movementId = createStockMovementId({
+          invoiceId,
+          lineItemId: lineItem.id || row.lineItemId,
+          ingredientId: group.ingredientId,
+        });
+
+        lastMovementId = movementId;
+        stockMovementIds.push(movementId);
+
+        if (existingMovementIds.has(movementId)) {
+          return;
+        }
+
         const incomingQty = sanitizeNumber(lineItem.baseQuantity || lineItem.quantity, 0);
         const previousQty = runningQty;
         runningQty = roundMoney(runningQty + incomingQty);
@@ -1195,11 +1256,6 @@ export const updateStockFromInvoice = async ({
           : reorderPoint > 0 && runningQty <= reorderPoint
             ? 'low'
             : 'ok';
-        const movementId = createStockMovementId({
-          invoiceId,
-          lineItemId: lineItem.id || row.lineItemId,
-          ingredientId: group.ingredientId,
-        });
         const movementRecord = createStockMovementRecord({
           movementId,
           invoiceId,
@@ -1219,8 +1275,6 @@ export const updateStockFromInvoice = async ({
           createdAt: serverTimestamp(),
         });
 
-        lastMovementId = movementId;
-        stockMovementIds.push(movementId);
         transaction.set(doc(db, 'stockMovements', scopeDocId(movementId)), {
           databaseId: getActiveDatabaseId(),
           ...movementRecord,
@@ -1266,7 +1320,106 @@ export const updateStockFromInvoice = async ({
       status: nextPostingStatus === 'historical_posted' ? 'historical_stock' : 'posted_to_stock',
     });
 
-    return { ok: true, updates, stockMovementIds };
+    return {
+      ok: true,
+      alreadyPosted: updates.length === 0 && stockMovementIds.length > 0,
+      updates,
+      stockMovementIds,
+    };
+  });
+};
+
+export const adjustIngredientStock = async ({
+  ingredientId,
+  ingredientName = '',
+  mode = 'set_count',
+  quantity,
+  note = '',
+  adjustedBy = '',
+}) => {
+  const db = await getFirestoreDb();
+  const safeIngredientId = sanitizeString(ingredientId);
+  const safeQuantity = sanitizeNumber(quantity, Number.NaN);
+  const safeMode = ['set_count', 'receive', 'use'].includes(mode) ? mode : 'set_count';
+
+  if (!db || !safeIngredientId || !Number.isFinite(safeQuantity) || safeQuantity < 0) {
+    return { ok: false, skipped: true, message: 'Choose an ingredient and enter a valid stock quantity.' };
+  }
+
+  if (safeMode !== 'set_count' && safeQuantity <= 0) {
+    return { ok: false, skipped: true, message: 'Enter a quantity greater than zero.' };
+  }
+
+  await ensureFirebaseAuth();
+  const { doc, runTransaction, serverTimestamp } = await getFirestoreApi();
+  const stockRef = doc(db, 'stockLevels', scopeDocId(safeIngredientId));
+  const movementId = createRecordId('stock-adjustment');
+  const movementRef = doc(db, 'stockMovements', scopeDocId(movementId));
+  const now = new Date().toISOString();
+
+  return runTransaction(db, async (transaction) => {
+    const stockSnapshot = await transaction.get(stockRef);
+    const stockData = stockSnapshot.data() || {};
+    const previousQty = roundMoney(stockData.currentQty);
+    const nextQty = safeMode === 'set_count'
+      ? roundMoney(safeQuantity)
+      : safeMode === 'receive'
+        ? roundMoney(previousQty + safeQuantity)
+        : roundMoney(previousQty - safeQuantity);
+    const changeQty = roundMoney(nextQty - previousQty);
+    const parLevel = sanitizeNumber(stockData.parLevel);
+    const reorderPoint = sanitizeNumber(stockData.reorderPoint);
+    const status = reorderPoint > 0 && nextQty <= reorderPoint
+      ? 'low'
+      : parLevel > 0 && nextQty > parLevel
+        ? 'overstocked'
+        : 'ok';
+    const baseUnit = sanitizeString(stockData.unit) || 'each';
+
+    transaction.set(stockRef, {
+      databaseId: getActiveDatabaseId(),
+      ingredientId: safeIngredientId,
+      currentQty: nextQty,
+      unit: baseUnit,
+      status,
+      parLevel,
+      reorderPoint,
+      lastMovementId: movementId,
+      lastUpdated: serverTimestamp(),
+    }, { merge: true });
+    transaction.set(movementRef, {
+      databaseId: getActiveDatabaseId(),
+      id: movementId,
+      movementId,
+      ingredientId: safeIngredientId,
+      ingredientName: sanitizeString(ingredientName) || safeIngredientId,
+      type: safeMode === 'set_count' ? 'stock_count' : safeMode === 'receive' ? 'manual_receive' : 'manual_use',
+      quantityBase: changeQty,
+      baseUnit,
+      previousQuantityBase: previousQty,
+      resultingQuantityBase: nextQty,
+      status,
+      sourceType: 'manual_adjustment',
+      sourceId: movementId,
+      note: sanitizeString(note),
+      adjustedBy: sanitizeString(adjustedBy) || 'WasteShift user',
+      sortDate: now,
+      createdAt: serverTimestamp(),
+    }, { merge: true });
+
+    return {
+      ok: true,
+      movementId,
+      update: {
+        ingredientId: safeIngredientId,
+        ingredientName: sanitizeString(ingredientName) || safeIngredientId,
+        previousQty,
+        changeQty,
+        currentQty: nextQty,
+        unit: baseUnit,
+        status,
+      },
+    };
   });
 };
 

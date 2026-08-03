@@ -1,10 +1,13 @@
 import { authorizeManagerSessionRequest } from './_auth.js';
+import { del, get } from '@vercel/blob';
 
 const DEFAULT_MODEL = 'gemini-2.5-flash-lite';
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_IMAGE_FILES_PER_BATCH = 2;
 const GEMINI_REQUEST_TIMEOUT_MS = 70_000;
-const MAX_OUTPUT_TOKENS = 8192;
+const MAX_OUTPUT_TOKENS = 32768;
+const MAX_STORED_GUIDE_BYTES = 50 * 1024 * 1024;
+const GUIDE_FOLDER = 'wasteshift/make-line-guides/';
 const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
   'image/jpeg',
@@ -200,6 +203,28 @@ export const createGeminiFileBatches = ({ file, guideFile, files }) => {
   return batches;
 };
 
+export const createGeminiPrompt = ({ text = '', makeLineGuide = '' } = {}) => {
+  const guideText = [
+    String(text || '').trim(),
+    String(makeLineGuide || '').trim(),
+  ].filter(Boolean).join('\n\n');
+
+  return `Extract restaurant recipes for WasteShift from a make-line or prep guide.
+Return strict JSON only. The top-level shape must be {"dishes":[...],"warnings":[]}.
+Read the entire document before answering. Return every dish, build, prep item, and recipe that has an actual portion or ingredient list; do not stop after the first page or a small sample.
+Each dish must include: name, category, ingredients, optional instructions, optional sellingPrice, confidence, warnings.
+Each ingredient must include: name, quantity, unit.
+Use units like g, kg, ml, l, each, doz, slice, bun, bottle, packet where visible.
+The make-line guide is the source of truth for portions. Use visible dish or build names as dish names, then use its explicit quantities exactly, especially grams and millilitres.
+Do not treat the document as a customer-facing menu. Do not infer dishes from marketing descriptions.
+Do not invent gram or millilitre amounts. When an exact amount is not visible in the make-line guide, set quantity to 1, unit to "each", and add a warning for human review.
+Do not invent selling prices. Only return sellingPrice when it is explicitly visible in the guide or pasted text. Do not include markdown.
+Do not omit later pages or return only a sample.
+
+Make-line guide text:
+${guideText.slice(0, 30000)}`;
+};
+
 const createGeminiParts = ({ text, file, makeLineGuide, guideFile, files }) => {
   const fileParts = normalizeGeminiFiles({ file, guideFile, files });
   const combinedFileBytes = fileParts
@@ -210,24 +235,8 @@ const createGeminiParts = ({ text, file, makeLineGuide, guideFile, files }) => {
     throw new Error('The make-line guide files are too large. Use smaller files or paste the guide as text.');
   }
 
-  const guideText = [
-    String(text || '').trim(),
-    String(makeLineGuide || '').trim(),
-  ].filter(Boolean).join('\n\n');
-
   const parts = [{
-    text: `Extract restaurant recipes for WasteShift from a make-line or prep guide.
-Return strict JSON only. The top-level shape must be {"dishes":[...],"warnings":[]}.
-Each dish must include: name, category, ingredients, optional instructions, optional sellingPrice, confidence, warnings.
-Each ingredient must include: name, quantity, unit.
-Use units like g, kg, ml, l, each, doz, slice, bun, bottle, packet where visible.
-The make-line guide is the source of truth for portions. Use visible dish or build names as dish names, then use its explicit quantities exactly, especially grams and millilitres.
-Do not treat the document as a customer-facing menu. Do not infer dishes from marketing descriptions.
-Do not invent gram or millilitre amounts. When an exact amount is not visible in the make-line guide, set quantity to 1, unit to "each", and add a warning for human review.
-Do not invent selling prices. Only return sellingPrice when it is explicitly visible in the guide or pasted text. Do not include markdown.
-
-Make-line guide text:
-${guideText.slice(0, 30000)}`,
+    text: createGeminiPrompt({ text, makeLineGuide }),
   }];
 
   const appendFilePart = (nextFile, label) => {
@@ -396,6 +405,172 @@ const callGemini = async ({ apiKey, model, text, file, makeLineGuide, guideFile,
   }
 };
 
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+const uploadStoredGuideToGemini = async ({ buffer, mimeType, displayName, apiKey }) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GEMINI_REQUEST_TIMEOUT_MS);
+
+  try {
+    const startResponse = await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-goog-api-key': apiKey,
+        'x-goog-upload-protocol': 'resumable',
+        'x-goog-upload-command': 'start',
+        'x-goog-upload-header-content-length': String(buffer.length),
+        'x-goog-upload-header-content-type': mimeType,
+      },
+      signal: controller.signal,
+      body: JSON.stringify({ file: { display_name: displayName } }),
+    });
+    const startBody = await startResponse.json().catch(() => ({}));
+
+    if (!startResponse.ok) {
+      throw createGeminiError(startBody?.error?.message || 'Gemini rejected the guide file.', startResponse.status);
+    }
+
+    const uploadUrl = startResponse.headers.get('x-goog-upload-url');
+
+    if (!uploadUrl) {
+      throw createGeminiError('Gemini did not provide a file upload URL.', 502, 'gemini_file_upload_failed');
+    }
+
+    const uploadResponse = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        'content-length': String(buffer.length),
+        'x-goog-upload-offset': '0',
+        'x-goog-upload-command': 'upload, finalize',
+      },
+      signal: controller.signal,
+      body: buffer,
+    });
+    const uploadBody = await uploadResponse.json().catch(() => ({}));
+
+    if (!uploadResponse.ok) {
+      throw createGeminiError(uploadBody?.error?.message || 'Gemini could not store the guide file.', uploadResponse.status);
+    }
+
+    const file = uploadBody?.file || uploadBody;
+
+    if (!file?.name || !file?.uri) {
+      throw createGeminiError('Gemini returned an incomplete guide file.', 502, 'gemini_file_upload_failed');
+    }
+
+    return file;
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw createGeminiError('Gemini took too long to prepare the guide file.', 504, 'gemini_file_upload_timeout');
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
+const waitForStoredGuide = async ({ file, apiKey }) => {
+  if (String(file.state || '').toUpperCase() === 'ACTIVE') {
+    return file;
+  }
+
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < 30_000) {
+    await wait(1_500);
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/${file.name}`, {
+      headers: { accept: 'application/json', 'x-goog-api-key': apiKey },
+    });
+    const body = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw createGeminiError(body?.error?.message || 'Gemini could not prepare the guide file.', response.status);
+    }
+
+    const nextFile = body?.file || body;
+    const state = String(nextFile?.state || '').toUpperCase();
+
+    if (state === 'ACTIVE') return nextFile;
+    if (state === 'FAILED') {
+      throw createGeminiError('Gemini could not process this guide file.', 422, 'gemini_file_processing_failed');
+    }
+  }
+
+  throw createGeminiError('Gemini took too long to prepare this guide file.', 504, 'gemini_file_processing_timeout');
+};
+
+const callGeminiStoredGuide = async ({ apiKey, model, buffer, mimeType, sourceName }) => {
+  const uploadedFile = await uploadStoredGuideToGemini({
+    buffer,
+    mimeType,
+    displayName: sourceName || 'make-line-guide',
+    apiKey,
+  });
+  const activeFile = await waitForStoredGuide({ file: uploadedFile, apiKey });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GEMINI_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
+        signal: controller.signal,
+        body: JSON.stringify({
+          contents: [{
+            role: 'user',
+            parts: [
+              { text: createGeminiPrompt() },
+              { file_data: { mime_type: mimeType, file_uri: activeFile.uri } },
+            ],
+          }],
+          generationConfig: createGeminiGenerationConfig(model),
+        }),
+      },
+    );
+    const body = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw createGeminiError(body?.error?.message || `Gemini request failed with status ${response.status}.`, response.status);
+    }
+
+    const responseText = getTextFromGeminiResponse(body);
+
+    if (!responseText) {
+      throw createGeminiError('Gemini returned no recipe data for this guide.', 422, 'gemini_empty_response');
+    }
+
+    return normalizeGeminiMenuPayload(parseGeminiJsonText(responseText));
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw createGeminiError('Gemini took too long to read this guide. Retry once.', 504, 'gemini_menu_timeout');
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
+const readStoredGuide = async (pathname) => {
+  const stored = await get(pathname, { access: 'public' });
+
+  if (!stored?.stream) {
+    throw createGeminiError('The uploaded guide could not be opened.', 404, 'guide_file_not_found');
+  }
+
+  const buffer = Buffer.from(await new Response(stored.stream).arrayBuffer());
+
+  if (!buffer.length || buffer.length > MAX_STORED_GUIDE_BYTES) {
+    throw createGeminiError('The uploaded guide is empty or larger than the 50 MB limit.', 413, 'guide_file_too_large');
+  }
+
+  return buffer;
+};
+
 export default async function handler(request, response) {
   if (request.method !== 'POST') {
     sendJson(response, 405, { ok: false, message: 'Use POST for make-line guide import.' });
@@ -427,13 +602,58 @@ export default async function handler(request, response) {
     const files = Array.isArray(body?.files) ? body.files.filter(isPlainObject) : [];
     const makeLineGuide = String(body?.makeLineGuide || '');
     const guideFile = body?.guideFile && isPlainObject(body.guideFile) ? body.guideFile : null;
+    const blobPathname = String(body?.blobPathname || '').trim();
 
-    if (!text.trim() && !file?.base64 && files.every((nextFile) => !nextFile?.base64) && !makeLineGuide.trim() && !guideFile?.base64) {
+    if (!text.trim() && !file?.base64 && files.every((nextFile) => !nextFile?.base64) && !makeLineGuide.trim() && !guideFile?.base64 && !blobPathname) {
       sendJson(response, 400, { ok: false, message: 'Provide pasted make-line guide text or a make-line guide file.' });
       return;
     }
 
     const model = process.env.GEMINI_MENU_MODEL || process.env.GEMINI_MODEL || DEFAULT_MODEL;
+
+    if (blobPathname) {
+      if (!blobPathname.startsWith(`${GUIDE_FOLDER}${authorization.databaseId}/`)) {
+        sendJson(response, 403, { ok: false, message: 'This guide does not belong to the active restaurant.' });
+        return;
+      }
+
+      const sourceMimeType = String(body?.sourceMimeType || '').toLowerCase();
+
+      if (!ALLOWED_MIME_TYPES.has(sourceMimeType)) {
+        sendJson(response, 400, { ok: false, message: 'The uploaded guide file type is not supported.' });
+        return;
+      }
+
+      let buffer;
+
+      try {
+        buffer = await readStoredGuide(blobPathname);
+        const normalized = await callGeminiStoredGuide({
+          apiKey,
+          model,
+          buffer,
+          mimeType: sourceMimeType,
+          sourceName: String(body?.sourceName || 'make-line-guide'),
+        });
+
+        sendJson(response, 200, {
+          ok: true,
+          model,
+          batchCount: 1,
+          ...normalized,
+        });
+      } finally {
+        await del(blobPathname).catch((error) => {
+          console.warn('[gemini-menu] temporary guide cleanup failed', {
+            pathname: blobPathname,
+            message: error?.message || 'unknown cleanup error',
+          });
+        });
+      }
+
+      return;
+    }
+
     const fileBatches = createGeminiFileBatches({ file, guideFile, files });
     const fileParts = normalizeGeminiFiles({ file, guideFile, files });
     const combinedFileBytes = fileParts.reduce(

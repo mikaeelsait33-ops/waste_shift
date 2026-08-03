@@ -13,8 +13,6 @@ export function useRestaurantPersistence({
   recipes,
   setLastSavedAt,
   settings,
-  storeRoomItems,
-  storeRoomMovements,
   wasteItems,
 }) {
   useEffect(() => {
@@ -32,8 +30,6 @@ export function useRestaurantPersistence({
     recipes,
     setLastSavedAt,
     settings,
-    storeRoomItems,
-    storeRoomMovements,
     wasteItems,
   ]);
 }

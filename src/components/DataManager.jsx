@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { getEntryFoodCostLost } from '../utils/wasteCalculations';
 import { getAutomaticManagerApiHeaders } from '../utils/apiHeaders';
 
-const DATABASE_NAME = 'WasteShift Firebase Backup';
+const DATABASE_NAME = 'WasteShift Configuration Backup';
 const DATABASE_VERSION = 1;
 const MAX_BACKUP_FILE_BYTES = 5 * 1024 * 1024;
 
@@ -16,25 +16,18 @@ function DataManager({
   menuItems,
   customMenuItems,
   itemPriceCatalog,
-  storeRoomItems,
-  storeRoomMovements,
   portionProfiles,
-  activeStaffId,
   authSettings,
   inventoryMovements,
   auditLog,
-  syncAccessKey,
   accessProfile,
   firebaseSync,
-  serverSync,
-  onSaveToServer,
-  onSaveSyncAccessKey,
+  onSaveToFirebase,
   lastSavedAt,
   onRestoreDatabase,
 }) {
   const fileInputRef = useRef(null);
   const [message, setMessage] = useState('');
-  const [draftSyncAccessKey, setDraftSyncAccessKey] = useState(syncAccessKey || '');
   const [lastExportAt, setLastExportAt] = useState('');
   const [importPreview, setImportPreview] = useState(null);
   const [duplicateCleanupSummary, setDuplicateCleanupSummary] = useState(null);
@@ -46,8 +39,6 @@ function DataManager({
   const itemPriceCount = itemPriceCatalog && typeof itemPriceCatalog === 'object' && !Array.isArray(itemPriceCatalog)
     ? Object.keys(itemPriceCatalog).length
     : 0;
-  const storeRoomItemCount = Array.isArray(storeRoomItems) ? storeRoomItems.length : 0;
-  const storeRoomMovementCount = Array.isArray(storeRoomMovements) ? storeRoomMovements.length : 0;
   const customStaffCount = Array.isArray(customStaffList) ? customStaffList.length : 0;
   const portionProfileCount = portionProfiles && typeof portionProfiles === 'object'
     ? Object.keys(portionProfiles).length
@@ -78,8 +69,6 @@ function DataManager({
       itemPrices: data.itemPriceCatalog && typeof data.itemPriceCatalog === 'object' && !Array.isArray(data.itemPriceCatalog)
         ? Object.keys(data.itemPriceCatalog).length
         : 0,
-      storeRoomItems: Array.isArray(data.storeRoomItems) ? data.storeRoomItems.length : 0,
-      storeRoomMovements: Array.isArray(data.storeRoomMovements) ? data.storeRoomMovements.length : 0,
       portionProfiles: data.portionProfiles && typeof data.portionProfiles === 'object' && !Array.isArray(data.portionProfiles)
         ? Object.keys(data.portionProfiles).length
         : 0,
@@ -90,11 +79,6 @@ function DataManager({
       budget: Number(data.budget) || 0,
     };
   };
-  const serverNoticeClass = ['ready', 'synced'].includes(serverSync?.status)
-    ? ' notice-panel--success'
-    : ['checking', 'saving', 'local', 'locked'].includes(serverSync?.status)
-      ? ' notice-panel--warning'
-      : '';
   const firebaseNoticeClass = ['ready', 'synced'].includes(firebaseSync?.status)
     ? ' notice-panel--success'
     : ['checking', 'local'].includes(firebaseSync?.status)
@@ -105,36 +89,23 @@ function DataManager({
   const canRestoreDatabase = Boolean(accessProfile?.canRestoreDatabase);
   const canCleanDuplicateScopes = Boolean(accessProfile?.canClearData);
 
-  useEffect(() => {
-    setDraftSyncAccessKey(syncAccessKey || '');
-  }, [syncAccessKey]);
-
   const createSnapshot = () => ({
     name: DATABASE_NAME,
     version: DATABASE_VERSION,
     exportedAt: new Date().toISOString(),
     data: {
-      wasteItems,
       budget,
       settings,
       recipes,
-      staffList,
-      customStaffList,
       customMenuItems,
       itemPriceCatalog,
-      storeRoomItems,
-      storeRoomMovements,
       portionProfiles,
-      activeStaffId,
-      authSettings,
-      inventoryMovements,
-      auditLog,
     },
   });
 
   const exportDatabase = () => {
     if (!canExportData) {
-      setMessage('Only an owner or manager can export a database backup.');
+      setMessage('Only an owner or manager can export restaurant configuration.');
       return;
     }
 
@@ -143,21 +114,18 @@ function DataManager({
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `wasteshift-database-${new Date().toISOString().split('T')[0]}.json`;
+    anchor.download = `wasteshift-configuration-${new Date().toISOString().split('T')[0]}.json`;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
     URL.revokeObjectURL(url);
     setLastExportAt(snapshot.exportedAt);
-    setMessage(`Database backup exported with ${wasteItems.length} waste entries.`);
+    setMessage(`Configuration exported with ${recipeCount} recipe${recipeCount === 1 ? '' : 's'}.`);
   };
 
   const validateSnapshot = (snapshot) => {
     if (!snapshot || typeof snapshot !== 'object') return false;
     if (!snapshot.data || typeof snapshot.data !== 'object') return false;
-    if (!Array.isArray(snapshot.data.wasteItems)) return false;
-    if (!Array.isArray(snapshot.data.staffList)) return false;
-    if (snapshot.data.customStaffList !== undefined && !Array.isArray(snapshot.data.customStaffList)) return false;
     if (typeof snapshot.data.recipes !== 'object' || snapshot.data.recipes === null || Array.isArray(snapshot.data.recipes)) return false;
     if (snapshot.data.settings !== undefined && (
       typeof snapshot.data.settings !== 'object'
@@ -175,15 +143,6 @@ function DataManager({
       || snapshot.data.portionProfiles === null
       || Array.isArray(snapshot.data.portionProfiles)
     )) return false;
-    if (snapshot.data.authSettings !== undefined && (
-      typeof snapshot.data.authSettings !== 'object'
-      || snapshot.data.authSettings === null
-      || Array.isArray(snapshot.data.authSettings)
-    )) return false;
-    if (snapshot.data.inventoryMovements !== undefined && !Array.isArray(snapshot.data.inventoryMovements)) return false;
-    if (snapshot.data.storeRoomItems !== undefined && !Array.isArray(snapshot.data.storeRoomItems)) return false;
-    if (snapshot.data.storeRoomMovements !== undefined && !Array.isArray(snapshot.data.storeRoomMovements)) return false;
-    if (snapshot.data.auditLog !== undefined && !Array.isArray(snapshot.data.auditLog)) return false;
     return true;
   };
 
@@ -201,11 +160,11 @@ function DataManager({
     }
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       try {
         const snapshot = JSON.parse(reader.result);
         if (!validateSnapshot(snapshot)) {
-          setMessage('That file does not look like a WasteShift database backup.');
+          setMessage('That file does not look like a WasteShift configuration backup.');
           setImportPreview(null);
           return;
         }
@@ -219,10 +178,9 @@ function DataManager({
 
         const confirmationText = [
           `Import ${file.name}?`,
-          `${summary.wasteItems} waste entries, ${summary.recipes} recipes, ${summary.staff} staff members.`,
-          `${summary.storeRoomItems} store room items, ${summary.storeRoomMovements} store room movements.`,
+          `${summary.recipes} recipes and ${summary.itemPrices} ingredient prices.`,
           `Budget: R${summary.budget.toFixed(2)}.`,
-          'This will replace the current Firebase app snapshot.',
+          'This replaces menu and operating settings only. Waste, invoices, stock, photos, and accounts stay unchanged.',
         ].join('\n');
 
         if (!window.confirm(confirmationText)) {
@@ -230,26 +188,18 @@ function DataManager({
           return;
         }
 
-        onRestoreDatabase(snapshot.data);
-        setMessage(`Database backup imported: ${summary.wasteItems} waste entries restored.`);
-      } catch {
-        setMessage('Could not read that backup file.');
+        const result = await onRestoreDatabase(snapshot.data);
+        setMessage(result?.ok === false
+          ? result.message || 'Could not restore this configuration.'
+          : `Configuration restored: ${summary.recipes} recipe${summary.recipes === 1 ? '' : 's'}.`);
+      } catch (error) {
+        setMessage(error?.message || 'Could not read that configuration file.');
         setImportPreview(null);
       } finally {
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
     };
     reader.readAsText(file);
-  };
-
-  const saveSyncAccessKey = () => {
-    if (!canManageServerSync) {
-      setMessage('Only an owner can manage the server sync access key.');
-      return;
-    }
-
-    onSaveSyncAccessKey?.(draftSyncAccessKey.trim());
-    setMessage(draftSyncAccessKey.trim() ? 'Server sync access key is active until the app is locked or refreshed.' : 'Server sync access key removed.');
   };
 
   const runDuplicateScopeCleanup = async ({ deleteDuplicates = false } = {}) => {
@@ -332,28 +282,15 @@ function DataManager({
           </div>
         </div>
 
-        <div className={`notice-panel${serverNoticeClass}`}>
-          <div>
-            <h3 className="breakdown-title">Primary database sync</h3>
-            <p className="small-text" style={{ margin: 0 }}>
-              {serverSync?.message || 'Database sync status has not started.'}
-            </p>
-          </div>
-          <div className="manager-row">
-            {serverSync?.lastSavedAt && (
-              <span className="badge is-green">
-                {formatDateTime(serverSync.lastSavedAt)}
-              </span>
-            )}
-            <button
-              type="button"
-              onClick={onSaveToServer}
-              className="ghost-button is-warning"
-              disabled={serverSync?.status === 'saving' || !canManageServerSync}
-            >
-              {serverSync?.status === 'saving' ? 'Saving...' : canManageServerSync ? 'Save database' : 'Owner only'}
-            </button>
-          </div>
+        <div className="manager-row">
+          <button
+            type="button"
+            onClick={onSaveToFirebase}
+            className="ghost-button is-warning"
+            disabled={firebaseSync?.status === 'saving' || !canManageServerSync}
+          >
+            {firebaseSync?.status === 'saving' ? 'Saving...' : canManageServerSync ? 'Save to Firebase now' : 'Owner only'}
+          </button>
         </div>
 
         <div className="database-card">
@@ -394,30 +331,6 @@ function DataManager({
           )}
         </div>
 
-        <div className="database-card">
-          <h3 className="breakdown-title">Vercel fallback access key</h3>
-          <p className="small-text">
-            If Firebase is unavailable and `WASTESHIFT_SYNC_SECRET` is set in Vercel, this device must send the matching key before it can save or load fallback backups.
-          </p>
-          <div className="field-grid">
-            <input
-              type="password"
-              value={draftSyncAccessKey}
-              onChange={(event) => setDraftSyncAccessKey(event.target.value)}
-              placeholder="Access key"
-              className="input"
-              disabled={!canManageServerSync}
-              aria-label="Server sync access key"
-            />
-            <button type="button" onClick={saveSyncAccessKey} className="ghost-button is-warning" disabled={!canManageServerSync}>
-              Use key
-            </button>
-          </div>
-          <span className={`badge${syncAccessKey ? ' is-green' : ''}`}>
-            {syncAccessKey ? 'Key active for this session' : 'No key active'}
-          </span>
-        </div>
-
         <div className="notice-panel notice-panel--warning">
           <div>
             <h3 className="breakdown-title">Backup health</h3>
@@ -425,7 +338,7 @@ function DataManager({
               Last downloaded backup: {formatDateTime(lastExportAt)}
             </p>
           </div>
-            <span className="badge">{wasteItems.length + recipeCount + customMenuItemCount + itemPriceCount + storeRoomItemCount + storeRoomMovementCount + customStaffCount} saved records</span>
+            <span className="badge">{recipeCount + customMenuItemCount + itemPriceCount + portionProfileCount} configuration records</span>
         </div>
 
         <div className="metrics-grid">
@@ -446,14 +359,6 @@ function DataManager({
             <span className="metric-label">Menu items</span>
           </div>
           <div className="metric-card">
-            <span className="metric-value">{storeRoomItemCount}</span>
-            <span className="metric-label">Store room items</span>
-          </div>
-          <div className="metric-card">
-            <span className="metric-value">{storeRoomMovementCount}</span>
-            <span className="metric-label">Store movements</span>
-          </div>
-          <div className="metric-card">
             <span className="metric-value">{inventoryMovementCount}</span>
             <span className="metric-label">Inventory movements</span>
           </div>
@@ -465,16 +370,16 @@ function DataManager({
 
         <div className="database-grid">
           <div className="database-card">
-            <h3 className="breakdown-title">Backup database</h3>
-            <p className="small-text">Downloads one JSON file containing waste logs, recipes, portion sizes, staff, store room stock, menu prices, and budget settings.</p>
+            <h3 className="breakdown-title">Export configuration</h3>
+            <p className="small-text">Downloads menu recipes, ingredient prices, portion profiles, limits, and budget settings. Live invoices, stock, waste, photos, and accounts remain in Firebase.</p>
             <button type="button" onClick={exportDatabase} className="primary-button" disabled={!canExportData}>
-              {canExportData ? 'Export backup' : 'Manager only'}
+              {canExportData ? 'Export configuration' : 'Manager only'}
             </button>
           </div>
 
           <div className="database-card">
-            <h3 className="breakdown-title">Restore database</h3>
-            <p className="small-text">Import a WasteShift backup file to replace the Firebase app snapshot for this restaurant.</p>
+            <h3 className="breakdown-title">Restore configuration</h3>
+            <p className="small-text">Import a WasteShift configuration file. Existing waste, invoices, stock, photos, and account access are not replaced.</p>
             <input
               ref={fileInputRef}
               type="file"
@@ -484,7 +389,7 @@ function DataManager({
               style={{ display: 'none' }}
             />
             <button type="button" onClick={() => fileInputRef.current?.click()} className="primary-button" disabled={!canRestoreDatabase}>
-              {canRestoreDatabase ? 'Choose backup file' : 'Owner only'}
+              {canRestoreDatabase ? 'Choose configuration file' : 'Owner only'}
             </button>
           </div>
         </div>
@@ -497,19 +402,10 @@ function DataManager({
             </div>
             <div className="import-summary-grid">
               <span className="small-text">{importPreview.fileName}</span>
-              <span className="badge">{importPreview.wasteItems} waste entries</span>
               <span className="badge">{importPreview.recipes} recipes</span>
-              <span className="badge">{importPreview.staff} staff</span>
               <span className="badge">{importPreview.customMenuItems} custom prices</span>
               <span className="badge">{importPreview.itemPrices} ingredient prices</span>
-              <span className="badge">{importPreview.storeRoomItems} store items</span>
-              <span className="badge">{importPreview.storeRoomMovements} stock moves</span>
               <span className="badge">{importPreview.portionProfiles} portions</span>
-              <span className={`badge${importPreview.authConfigured ? ' is-green' : ' is-red'}`}>
-                PINs {importPreview.authConfigured ? 'configured' : 'missing'}
-              </span>
-              <span className="badge">{importPreview.inventoryMovements} movements</span>
-              <span className="badge">{importPreview.auditLog} audit events</span>
             </div>
           </div>
         )}
@@ -526,14 +422,6 @@ function DataManager({
           <div className="budget-row" style={{ marginTop: '10px' }}>
             <span className="small-text">Raw ingredient prices</span>
             <span className="badge">{itemPriceCount}</span>
-          </div>
-          <div className="budget-row" style={{ marginTop: '10px' }}>
-            <span className="small-text">Store room items</span>
-            <span className="badge">{storeRoomItemCount}</span>
-          </div>
-          <div className="budget-row" style={{ marginTop: '10px' }}>
-            <span className="small-text">Store room movements</span>
-            <span className="badge">{storeRoomMovementCount}</span>
           </div>
           <div className="budget-row" style={{ marginTop: '10px' }}>
             <span className="small-text">Remembered portion sizes</span>

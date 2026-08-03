@@ -14,16 +14,8 @@ export const getConfiguredManagerSecret = () => String(
   || ''
 ).trim();
 
-export const getConfiguredSyncSecret = () => String(
-  process.env.WASTESHIFT_SYNC_SECRET
-  || ''
-).trim();
-
 const getConfiguredManagerApiSecrets = () => (
-  [...new Set([
-    getConfiguredManagerSecret(),
-    getConfiguredSyncSecret(),
-  ].filter(Boolean))]
+  [getConfiguredManagerSecret()].filter(Boolean)
 );
 
 export const getHeaderValue = (request, headerName) => {
@@ -126,7 +118,7 @@ const managerSessionError = (status, code, message) => ({
 
 const DEFAULT_RESTAURANT_ACCESS_ROLES = ['owner', 'manager', 'chef', 'barista', 'waiter'];
 
-// Gemini/OCR requests prove a manager PIN once, then use a Firebase-authenticated,
+// Gemini requests prove a manager PIN once, then use a Firebase-authenticated,
 // server-only session. Local development retains the existing protected-route helper.
 export const authorizeManagerSessionRequest = async (request) => {
   const firebaseAdmin = getFirebaseAdmin();
@@ -248,60 +240,4 @@ export const authorizeRestaurantSessionRequest = async (request, options = {}) =
     console.error('Could not verify restaurant session.', error);
     return managerSessionError(503, 'restaurant_session_unavailable', 'Restaurant access is temporarily unavailable. Please try again.');
   }
-};
-
-export const authorizeSyncApiRequest = (request) => {
-  const managerSecret = getConfiguredManagerSecret();
-  const syncSecret = getConfiguredSyncSecret();
-
-  if (!managerSecret && !syncSecret) {
-    if (!apiIsProductionRuntime()) {
-      return { ok: true, mode: 'local-open' };
-    }
-
-    return {
-      ok: false,
-      status: 503,
-      body: {
-        ok: false,
-        code: 'sync_api_secret_not_configured',
-        requiresSecret: true,
-        message: 'Server sync protection is not configured. Add WASTESHIFT_SYNC_SECRET or WASTESHIFT_MANAGER_API_SECRET in production.',
-      },
-    };
-  }
-
-  const providedManagerSecret = getManagerApiSecret(request);
-  const providedSyncSecret = String(getHeaderValue(request, 'x-wasteshift-sync-secret') || '').trim();
-
-  if (!providedManagerSecret && !providedSyncSecret) {
-    return {
-      ok: false,
-      status: 401,
-      body: {
-        ok: false,
-        code: 'sync_api_secret_required',
-        requiresSecret: true,
-        message: 'Server sync is protected. Add the server sync access key.',
-      },
-    };
-  }
-
-  if (
-    (managerSecret && providedManagerSecret && safeSecretEquals(providedManagerSecret, managerSecret))
-    || (syncSecret && providedSyncSecret && safeSecretEquals(providedSyncSecret, syncSecret))
-  ) {
-    return { ok: true, mode: 'secret' };
-  }
-
-  return {
-    ok: false,
-    status: 403,
-    body: {
-      ok: false,
-      code: 'sync_api_secret_invalid',
-      requiresSecret: true,
-      message: 'Server sync access key is incorrect.',
-    },
-  };
 };

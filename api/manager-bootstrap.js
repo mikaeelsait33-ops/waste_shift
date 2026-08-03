@@ -2,7 +2,7 @@ import { getFirebaseAdmin } from './_firebaseAdmin.js';
 import { verifyFirebaseIdToken } from './_firebaseIdentity.js';
 import { createAccessSession } from './_accessSession.js';
 import { createPinRecord } from './_pinVerification.js';
-import { getHeaderValue, getRequestDatabaseId, safeSecretEquals } from './_auth.js';
+import { getHeaderValue, getRequestDatabaseId } from './_auth.js';
 import { loadCanonicalRestaurant } from './_singleShop.js';
 
 const SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
@@ -12,6 +12,7 @@ const sendJson = (response, status, body) => {
   response.setHeader('content-security-policy', "default-src 'none'; frame-ancestors 'none'");
   response.setHeader('referrer-policy', 'no-referrer');
   response.setHeader('x-content-type-options', 'nosniff');
+  response.setHeader('x-robots-tag', 'noindex, nofollow');
   response.status(status).json(body);
 };
 
@@ -22,37 +23,30 @@ const readBody = (request) => {
 
 export default async function handler(request, response) {
   if (request.method !== 'POST') {
-    sendJson(response, 405, { ok: false, message: 'Use POST for manager recovery.' });
+    sendJson(response, 405, { ok: false, message: 'Use POST to create manager access.' });
     return;
   }
 
-  const recoverySecret = String(process.env.WASTESHIFT_RECOVERY_SECRET || '').trim();
   const firebaseAdmin = getFirebaseAdmin();
-  if (!recoverySecret || !firebaseAdmin) {
+  if (!firebaseAdmin) {
     sendJson(response, 503, {
       ok: false,
-      code: 'manager_recovery_not_configured',
-      message: 'One-time manager recovery is not configured.',
+      code: 'firebase_manager_session_not_configured',
+      message: 'Automatic manager access is not configured on the server.',
     });
     return;
   }
 
   try {
     const body = readBody(request);
-    const providedSecret = String(body?.recoveryKey || '').trim();
     const databaseId = getRequestDatabaseId(request);
     const idToken = String(getHeaderValue(request, 'x-wasteshift-firebase-token') || '').trim();
     const managerId = String(body?.managerId || '').trim();
     const managerName = String(body?.name || '').trim();
     const managerPin = createPinRecord(body?.pin);
 
-    if (!providedSecret || !safeSecretEquals(providedSecret, recoverySecret)) {
-      sendJson(response, 403, { ok: false, code: 'manager_recovery_rejected', message: 'The recovery key was not accepted.' });
-      return;
-    }
-
     if (!databaseId || !idToken) {
-      sendJson(response, 401, { ok: false, code: 'firebase_token_required', message: 'Refresh the app and try recovery again.' });
+      sendJson(response, 401, { ok: false, code: 'firebase_token_required', message: 'Refresh the app and try again.' });
       return;
     }
 
@@ -61,8 +55,8 @@ export default async function handler(request, response) {
       return;
     }
 
-    const decodedToken = await verifyFirebaseIdToken(idToken);
-    const [canonicalRestaurant, managersSnapshot] = await Promise.all([
+    const [decodedToken, canonicalRestaurant, managersSnapshot] = await Promise.all([
+      verifyFirebaseIdToken(idToken),
       loadCanonicalRestaurant(firebaseAdmin),
       firebaseAdmin.db.collection('managers').where('databaseId', '==', databaseId).get(),
     ]);
@@ -71,32 +65,59 @@ export default async function handler(request, response) {
       return manager?.active !== false && manager?.removed !== true;
     });
 
-    if (!canonicalRestaurant || canonicalRestaurant.databaseId !== databaseId || activeManagerExists) {
+    if (!canonicalRestaurant || canonicalRestaurant.databaseId !== databaseId) {
       sendJson(response, 409, {
         ok: false,
-        code: 'manager_recovery_closed',
-        message: 'One-time recovery is closed because manager access already exists or the restaurant is ambiguous.',
+        code: 'manager_bootstrap_unavailable',
+        message: 'The restaurant profile could not be verified. Refresh and try again.',
+      });
+      return;
+    }
+
+    if (activeManagerExists) {
+      sendJson(response, 409, {
+        ok: false,
+        code: 'manager_bootstrap_closed',
+        message: 'Manager access already exists. Refresh and sign in with the existing manager account.',
       });
       return;
     }
 
     const issuedAt = new Date();
     const expiresAt = new Date(issuedAt.getTime() + SESSION_DURATION_MS);
-    await firebaseAdmin.db.collection('managers').doc(`${databaseId}__${managerId}`).set({
-      databaseId,
-      id: managerId,
-      name: managerName,
-      role: 'Manager',
-      roleKey: 'manager',
-      staffSection: 'management',
-      managerPin,
-      active: true,
-      removed: false,
-      removedAt: '',
-      createdAt: issuedAt.toISOString(),
-      updatedAt: issuedAt.toISOString(),
-      recoveredAt: issuedAt.toISOString(),
+    const bootstrapRef = firebaseAdmin.db.collection('managerBootstraps').doc(databaseId);
+    const managerRef = firebaseAdmin.db.collection('managers').doc(`${databaseId}__${managerId}`);
+
+    await firebaseAdmin.db.runTransaction(async (transaction) => {
+      const bootstrapSnapshot = await transaction.get(bootstrapRef);
+      if (bootstrapSnapshot.exists) {
+        const error = new Error('Manager access has already been created.');
+        error.code = 'manager_bootstrap_closed';
+        throw error;
+      }
+
+      transaction.set(bootstrapRef, {
+        databaseId,
+        managerId,
+        claimedAt: issuedAt.toISOString(),
+        claimedByUid: decodedToken.uid,
+      });
+      transaction.set(managerRef, {
+        databaseId,
+        id: managerId,
+        name: managerName,
+        role: 'Manager',
+        roleKey: 'manager',
+        staffSection: 'management',
+        managerPin,
+        active: true,
+        removed: false,
+        removedAt: '',
+        createdAt: issuedAt.toISOString(),
+        updatedAt: issuedAt.toISOString(),
+      });
     });
+
     await Promise.all([
       firebaseAdmin.db.collection('managerSessions').doc(`${databaseId}__${decodedToken.uid}`).set({
         databaseId,
@@ -125,7 +146,12 @@ export default async function handler(request, response) {
       expiresAt: expiresAt.toISOString(),
     });
   } catch (error) {
-    console.error('Manager recovery failed.', error);
-    sendJson(response, 503, { ok: false, code: 'manager_recovery_unavailable', message: 'Manager recovery is temporarily unavailable.' });
+    if (error?.code === 'manager_bootstrap_closed') {
+      sendJson(response, 409, { ok: false, code: error.code, message: error.message });
+      return;
+    }
+
+    console.error('Manager setup failed.', error);
+    sendJson(response, 503, { ok: false, code: 'manager_bootstrap_unavailable', message: 'Manager setup is temporarily unavailable.' });
   }
 }

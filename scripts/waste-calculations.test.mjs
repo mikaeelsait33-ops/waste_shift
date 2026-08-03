@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   buildRecipeIngredientBreakdown,
+  buildWasteStockDeductions,
   calculateMenuWasteFinancials,
   createInventoryMovementsFromEntry,
   getRestaurantDateTimeParts,
@@ -38,6 +39,78 @@ const recipe = {
 assert.equal(scaleQuantityLabel('20g', 2), '40g');
 assert.equal(scaleQuantityLabel('1/2', 2), '1');
 assert.equal(scaleQuantityLabel('garnish', 2), 'garnish x 2');
+
+assert.deepEqual(
+  buildWasteStockDeductions({
+    itemType: 'ingredient',
+    ingredientId: 'ingredient_tomatoes',
+    name: 'Tomatoes',
+    measuredQuantity: 1.5,
+    measuredUnit: 'kg',
+    foodCostLost: 45,
+  }),
+  [{
+    ingredientId: 'ingredient_tomatoes',
+    ingredientName: 'Tomatoes',
+    quantityBase: 1500,
+    baseUnit: 'g',
+    cost: 45,
+  }],
+);
+
+assert.deepEqual(
+  buildWasteStockDeductions({
+    itemType: 'menu',
+    isRecipe: true,
+    ingredients: [
+      {
+        ingredientId: 'ingredient_chicken',
+        name: 'Chicken',
+        quantity: '240g',
+        cost: 21.6,
+      },
+      {
+        priceCatalogKey: 'ingredient_sauce',
+        name: 'Sauce',
+        quantityValue: 0.05,
+        unit: 'l',
+        cost: 2.25,
+      },
+      {
+        name: 'Unlinked garnish',
+        quantity: '5g',
+        cost: 0.2,
+      },
+    ],
+  }),
+  [
+    {
+      ingredientId: 'ingredient_chicken',
+      ingredientName: 'Chicken',
+      quantityBase: 240,
+      baseUnit: 'g',
+      cost: 21.6,
+    },
+    {
+      ingredientId: 'ingredient_sauce',
+      ingredientName: 'Sauce',
+      quantityBase: 50,
+      baseUnit: 'ml',
+      cost: 2.25,
+    },
+  ],
+);
+
+assert.deepEqual(
+  buildWasteStockDeductions({
+    status: 'voided',
+    itemType: 'ingredient',
+    ingredientId: 'ingredient_tomatoes',
+    measuredQuantity: 1,
+    measuredUnit: 'kg',
+  }),
+  [],
+);
 
 const breakdown = buildRecipeIngredientBreakdown(recipe, 2);
 assert.deepEqual(

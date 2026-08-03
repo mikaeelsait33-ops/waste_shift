@@ -15,8 +15,8 @@ import {
   archiveFirestoreMenuItem,
   deleteFirestoreMenuItems,
   restoreFirestoreMenuItem,
+  saveFirestoreMenuBundle,
   saveFirestoreMenuItem,
-  saveFirestoreRecipe,
 } from '../services/firestoreMenuItems';
 import { saveIngredientPriceRecord } from '../services/invoiceFirestore';
 import { saveMenuImportHistory } from '../services/restaurantFirestore';
@@ -79,6 +79,46 @@ export function useMenuRecipes({
       return { ok: false, message: 'No valid approved menu items to save.' };
     }
 
+    if (!FIRESTORE_CONFIGURED) {
+      return { ok: false, message: 'Firebase is required before menu items can be saved.' };
+    }
+
+    const persistedItems = safeItems.map((item) => {
+      const components = item.ingredients.map((ingredient, index) => ({
+        key: createMenuItemKey(`${ingredient.name}-${index}`),
+        ingredientId: ingredient.ingredientId || ingredient.priceCatalogKey || '',
+        name: ingredient.name,
+        displayName: ingredient.displayName || ingredient.name,
+        quantity: ingredient.quantity || '',
+        quantityValue: ingredient.quantityValue ?? null,
+        unit: ingredient.unit || '',
+        cost: Number(ingredient.cost) || 0,
+        costPerBaseUnit: ingredient.costPerBaseUnit ?? null,
+        baseUnit: ingredient.baseUnit || '',
+        priceCatalogKey: ingredient.priceCatalogKey || ingredient.ingredientId || '',
+      }));
+
+      return {
+        ...item,
+        components,
+        totalCost: roundCurrency(components.reduce((sum, component) => sum + component.cost, 0)),
+      };
+    });
+    const saveResult = await saveFirestoreMenuBundle(persistedItems);
+
+    if (saveResult?.skipped || saveResult?.ok === false) {
+      return { ok: false, message: 'Firebase did not save the reviewed menu items.' };
+    }
+
+    let historyWarning = '';
+    if (historyRecord) {
+      try {
+        await saveMenuImportHistory(historyRecord);
+      } catch (error) {
+        historyWarning = error?.message || 'The menu was saved, but its import audit record could not be saved.';
+      }
+    }
+
     setRecipes(prevRecipes => {
       const nextRecipes = { ...prevRecipes };
 
@@ -113,69 +153,30 @@ export function useMenuRecipes({
       return [...nextItems.values()];
     });
 
-    await Promise.all(safeItems.map(async (item) => {
-      const components = item.ingredients.map((ingredient, index) => ({
-        key: createMenuItemKey(`${ingredient.name}-${index}`),
-        ingredientId: ingredient.ingredientId || ingredient.priceCatalogKey || '',
-        name: ingredient.name,
-        displayName: ingredient.displayName || ingredient.name,
-        quantity: ingredient.quantity || '',
-        quantityValue: ingredient.quantityValue ?? null,
-        unit: ingredient.unit || '',
-        cost: Number(ingredient.cost) || 0,
-        costPerBaseUnit: ingredient.costPerBaseUnit ?? null,
-        baseUnit: ingredient.baseUnit || '',
-        priceCatalogKey: ingredient.priceCatalogKey || ingredient.ingredientId || '',
-      }));
-      const totalCost = roundCurrency(components.reduce((sum, component) => sum + component.cost, 0));
+    setFirestoreMenuItems(prevItems => {
+      const nextItems = new Map(prevItems.map((item) => [item.key, item]));
 
-        await saveFirestoreMenuItem({
-          key: item.key,
-          name: item.name,
-          category: item.category,
-          menuPrice: item.menuPrice,
-          totalCost,
-          components,
-        });
-        await saveFirestoreRecipe({
-          key: item.key,
-          name: item.name,
-          category: item.category,
-          menuPrice: item.menuPrice,
-          ingredients: components,
-          instructions: item.instructions,
-        });
-
-      setFirestoreMenuItems(prevItems => {
-        const nextItem = {
+      persistedItems.forEach((item) => {
+        nextItems.set(item.key, {
           key: item.key,
           firestoreId: item.key,
           name: item.name,
           category: item.category,
           menuPrice: item.menuPrice,
-          totalCost,
-          components,
-        };
-        const existingIndex = prevItems.findIndex((menuItem) => menuItem.key === item.key);
-
-        if (existingIndex === -1) {
-          return [...prevItems, nextItem].sort((a, b) => a.name.localeCompare(b.name));
-        }
-
-        return prevItems.map((menuItem, index) => (
-          index === existingIndex ? { ...menuItem, ...nextItem } : menuItem
-        ));
+          totalCost: item.totalCost,
+          components: item.components,
+        });
       });
-    }));
 
-    if (historyRecord) {
-      await saveMenuImportHistory(historyRecord);
-    }
+      return [...nextItems.values()].sort((a, b) => a.name.localeCompare(b.name));
+    });
 
     setFirebaseSync(prev => ({
       ...prev,
-      status: 'synced',
-      message: `${safeItems.length} menu item${safeItems.length === 1 ? '' : 's'} saved to Firebase.`,
+      status: historyWarning ? 'error' : 'synced',
+      message: historyWarning
+        ? `${safeItems.length} menu items saved to Firebase. ${historyWarning}`
+        : `${safeItems.length} menu item${safeItems.length === 1 ? '' : 's'} saved to Firebase.`,
       lastSavedAt: new Date().toISOString(),
       menuItemCount: Math.max(prev.menuItemCount, firestoreMenuItems.length + safeItems.length),
     }));
@@ -223,12 +224,6 @@ export function useMenuRecipes({
       ingredients: catalogLinks.ingredients,
     };
 
-    setItemPriceCatalog(catalogLinks.itemPriceCatalog);
-    setRecipes(prev => ({
-      ...prev,
-      [key]: linkedRecipe,
-    }));
-
     const components = buildRecipeIngredientBreakdown(linkedRecipe, 1, catalogLinks.itemPriceCatalog)
       .map((ingredient) => ({
         key: ingredient.componentKey,
@@ -254,6 +249,38 @@ export function useMenuRecipes({
       components,
     };
 
+    if (!FIRESTORE_CONFIGURED) {
+      return { ok: false, message: 'Firebase is required before make-line guides can be saved.' };
+    }
+
+    try {
+      await Promise.all([
+        ...catalogLinks.createdRecords.map((record) => saveIngredientPriceRecord(record)),
+        saveFirestoreMenuBundle([{
+        key,
+        name: recipeName,
+        category: linkedRecipe.category || '',
+        menuPrice: linkedRecipe.menuPrice,
+        totalCost,
+        components,
+        instructions: linkedRecipe.instructions || '',
+        }]),
+      ]);
+    } catch (error) {
+      console.warn('Could not save recipe to Firebase.', error);
+      setFirebaseSync((prev) => ({
+        ...prev,
+        status: 'error',
+        message: error?.message || 'Could not save this menu item to Firebase.',
+      }));
+      return { ok: false, message: error?.message || 'Could not save this menu item to Firebase.' };
+    }
+
+    setItemPriceCatalog(catalogLinks.itemPriceCatalog);
+    setRecipes(prev => ({
+      ...prev,
+      [key]: linkedRecipe,
+    }));
     setCustomMenuItems((prevItems) => {
       const basicItem = {
         key,
@@ -279,26 +306,6 @@ export function useMenuRecipes({
       return prevItems.map((item, index) => (index === existingIndex ? { ...item, ...nextItem } : item));
     });
 
-    const saveResults = await Promise.allSettled([
-      ...catalogLinks.createdRecords.map((record) => saveIngredientPriceRecord(record)),
-      saveFirestoreMenuItem({
-        key,
-        name: recipeName,
-        category: linkedRecipe.category || '',
-        menuPrice: linkedRecipe.menuPrice,
-        totalCost,
-        components,
-      }),
-      saveFirestoreRecipe({
-        key,
-        name: recipeName,
-        category: linkedRecipe.category || '',
-        menuPrice: linkedRecipe.menuPrice,
-        ingredients: components,
-        instructions: linkedRecipe.instructions || '',
-      }),
-    ]);
-    const failedSaves = saveResults.filter((result) => result.status === 'rejected');
     const ingredientCount = catalogLinks.createdRecords.length;
     const ingredientMessage = ingredientCount > 0
       ? ` ${ingredientCount} new raw ingredient${ingredientCount === 1 ? '' : 's'} added.`
@@ -318,22 +325,6 @@ export function useMenuRecipes({
       ...prevLog,
     ].slice(0, 500));
 
-    if (failedSaves.length > 0) {
-      const firstError = failedSaves[0].reason;
-      console.warn('Could not fully sync recipe to Firestore.', firstError);
-      setFirebaseSync((prev) => ({
-        ...prev,
-        status: 'error',
-        message: `${firstError?.message || 'Could not fully sync this recipe.'} Local recipe is still saved.`,
-      }));
-      return {
-        ok: true,
-        syncWarning: true,
-        createdIngredientCount: ingredientCount,
-        message: `Menu item saved on this device.${ingredientMessage} Firebase sync needs retry.`,
-      };
-    }
-
     setFirebaseSync((prev) => ({
       ...prev,
       status: 'synced',
@@ -351,11 +342,11 @@ export function useMenuRecipes({
     };
   };
 
-  const handleUpsertMenuItem = ({ key: requestedKey, name, price, category = '' }) => {
+  const handleUpsertMenuItem = async ({ key: requestedKey, name, price, category = '' }) => {
     const permission = requirePermission(accessProfile, 'canManageMenu', 'manage menu items and recipes');
     if (!permission.ok) {
       alert(permission.message);
-      return;
+      return { ok: false, message: permission.message };
     }
 
     const trimmedName = name.trim();
@@ -363,7 +354,7 @@ export function useMenuRecipes({
 
     if (!trimmedName || !key) {
       alert('Please enter a menu item name.');
-      return;
+      return { ok: false, message: 'Please enter a menu item name.' };
     }
 
     const menuPrice = parsePriceValue(price);
@@ -382,6 +373,32 @@ export function useMenuRecipes({
       category: normalizedCategory,
       menuPrice,
     };
+
+    if (!FIRESTORE_CONFIGURED) {
+      return { ok: false, message: 'Firebase is required before menu items can be saved.' };
+    }
+
+    try {
+      const result = await saveFirestoreMenuItem({
+        key,
+        name: trimmedName,
+        category: normalizedCategory,
+        menuPrice,
+        totalCost,
+        components: existingComponents,
+      });
+
+      if (result?.skipped || result?.ok === false) {
+        return { ok: false, message: 'Firebase did not save this menu item.' };
+      }
+    } catch (error) {
+      setFirebaseSync(prev => ({
+        ...prev,
+        status: 'error',
+        message: error?.message || 'Could not save menu item to Firebase.',
+      }));
+      return { ok: false, message: error?.message || 'Could not save menu item to Firebase.' };
+    }
 
     setCustomMenuItems(prevItems => {
       const existingItemIndex = prevItems.findIndex((item) => item.key === key);
@@ -414,37 +431,16 @@ export function useMenuRecipes({
       ));
     });
 
-    saveFirestoreMenuItem({
-      key,
-      name: trimmedName,
-      category: normalizedCategory,
-      menuPrice,
-      totalCost,
-      components: existingComponents,
-    })
-      .then((result) => {
-        if (result?.skipped) {
-          return;
-        }
-
-        setFirebaseSync(prev => ({
-          ...prev,
-          status: 'synced',
-          message: `${trimmedName} saved to Firebase menu items.`,
-          lastSavedAt: new Date().toISOString(),
-          menuItemCount: firestoreMenuItems.some((item) => item.key === key || item.firestoreId === key)
-            ? prev.menuItemCount
-            : Math.max(prev.menuItemCount, firestoreMenuItems.length + 1),
-        }));
-      })
-      .catch((error) => {
-        console.warn('Could not save menu item to Firestore.', error);
-        setFirebaseSync(prev => ({
-          ...prev,
-          status: 'error',
-          message: `${error?.message || 'Could not save menu item to Firebase.'} Local menu item is still saved.`,
-        }));
-      });
+    setFirebaseSync(prev => ({
+      ...prev,
+      status: 'synced',
+      message: `${trimmedName} saved to Firebase menu items.`,
+      lastSavedAt: new Date().toISOString(),
+      menuItemCount: firestoreMenuItems.some((item) => item.key === key || item.firestoreId === key)
+        ? prev.menuItemCount
+        : Math.max(prev.menuItemCount, firestoreMenuItems.length + 1),
+    }));
+    return { ok: true, message: `${trimmedName} saved.` };
   };
 
   const handleDeleteCustomMenuItem = async (menuItemKey) => {
@@ -463,6 +459,10 @@ export function useMenuRecipes({
       return;
     }
 
+    if (!FIRESTORE_CONFIGURED) {
+      return { ok: false, message: 'Firebase is required before menu items can be archived.' };
+    }
+
     const archivedAt = new Date().toISOString();
     const archivedBy = activeStaffMember?.name || 'System';
     const archivedRecord = {
@@ -476,6 +476,20 @@ export function useMenuRecipes({
       archivedAt,
       archivedBy,
     };
+
+    try {
+      const result = await archiveFirestoreMenuItem(menuItemKey, archivedBy);
+      if (result?.skipped || result?.ok === false) {
+        return { ok: false, message: 'Firebase did not archive this menu item.' };
+      }
+    } catch (error) {
+      setFirebaseSync(prev => ({
+        ...prev,
+        status: 'error',
+        message: error?.message || `Could not archive ${menuItem.name} in Firebase.`,
+      }));
+      return { ok: false, message: error?.message || `Could not archive ${menuItem.name}.` };
+    }
 
     setCustomMenuItems(prevItems => {
       const existingIndex = prevItems.findIndex((item) => item.key === menuItemKey);
@@ -521,18 +535,13 @@ export function useMenuRecipes({
       ...prevLog,
     ].slice(0, 500));
 
-    if (FIRESTORE_CONFIGURED) {
-      try {
-        await archiveFirestoreMenuItem(menuItemKey, archivedBy);
-      } catch (error) {
-        console.warn('Could not archive Firebase menu item.', error);
-        setFirebaseSync(prev => ({
-          ...prev,
-          status: 'error',
-          message: `${menuItem.name} was archived in this session, but Firebase did not update yet.`,
-        }));
-      }
-    }
+    setFirebaseSync(prev => ({
+      ...prev,
+      status: 'synced',
+      message: `${menuItem.name} archived in Firebase.`,
+      lastSavedAt: new Date().toISOString(),
+    }));
+    return { ok: true, message: `${menuItem.name} archived.` };
   };
 
   const handleRestoreMenuItem = async (menuItemKey) => {
@@ -540,10 +549,28 @@ export function useMenuRecipes({
 
     if (!permission.ok) {
       alert(permission.message);
-      return;
+      return { ok: false, message: permission.message };
+    }
+
+    if (!FIRESTORE_CONFIGURED) {
+      return { ok: false, message: 'Firebase is required before menu items can be restored.' };
     }
 
     const restoredBy = activeStaffMember?.name || 'System';
+    try {
+      const result = await restoreFirestoreMenuItem(menuItemKey);
+      if (result?.skipped || result?.ok === false) {
+        return { ok: false, message: 'Firebase did not restore this menu item.' };
+      }
+    } catch (error) {
+      setFirebaseSync(prev => ({
+        ...prev,
+        status: 'error',
+        message: error?.message || 'Could not restore this menu item in Firebase.',
+      }));
+      return { ok: false, message: error?.message || 'Could not restore this menu item.' };
+    }
+
     setCustomMenuItems(prevItems => prevItems.map((item) => (
       item.key === menuItemKey
         ? { ...item, archived: false, archivedAt: '', archivedBy: '' }
@@ -581,18 +608,13 @@ export function useMenuRecipes({
       ...prevLog,
     ].slice(0, 500));
 
-    if (FIRESTORE_CONFIGURED) {
-      try {
-        await restoreFirestoreMenuItem(menuItemKey);
-      } catch (error) {
-        console.warn('Could not restore Firebase menu item.', error);
-        setFirebaseSync(prev => ({
-          ...prev,
-          status: 'error',
-          message: 'Menu item restored in this session, but Firebase did not update yet.',
-        }));
-      }
-    }
+    setFirebaseSync(prev => ({
+      ...prev,
+      status: 'synced',
+      message: 'Menu item restored in Firebase.',
+      lastSavedAt: new Date().toISOString(),
+    }));
+    return { ok: true, message: 'Menu item restored.' };
   };
 
 
@@ -623,6 +645,28 @@ export function useMenuRecipes({
       return;
     }
 
+    if (!FIRESTORE_CONFIGURED) {
+      setFirebaseSync(prev => ({
+        ...prev,
+        status: 'error',
+        message: 'Firebase is required before the menu can be wiped.',
+      }));
+      return;
+    }
+
+    let result;
+    try {
+      result = await deleteFirestoreMenuItems(firestoreKeys);
+    } catch (error) {
+      console.warn('Could not wipe Firebase menu items.', error);
+      setFirebaseSync(prev => ({
+        ...prev,
+        status: 'error',
+        message: error?.message || 'Could not wipe Firebase menu items.',
+      }));
+      return;
+    }
+
     setRecipes({});
     setCustomMenuItems([]);
     setFirestoreMenuItems([]);
@@ -641,33 +685,13 @@ export function useMenuRecipes({
       ...prevLog,
     ].slice(0, 500));
 
-    if (!FIRESTORE_CONFIGURED) {
-      setFirebaseSync(prev => ({
-        ...prev,
-        status: 'local',
-        message: 'Firebase is not configured. Menu changes are not durable until Firebase is available.',
-        menuItemCount: 0,
-      }));
-      return;
-    }
-
-    try {
-      const result = await deleteFirestoreMenuItems(firestoreKeys);
-      setFirebaseSync(prev => ({
-        ...prev,
-        status: 'synced',
-        message: `Menu wiped. Removed ${result.deletedCount || firestoreKeys.length} Firebase menu item${(result.deletedCount || firestoreKeys.length) === 1 ? '' : 's'}.`,
-        lastSavedAt: new Date().toISOString(),
-        menuItemCount: 0,
-      }));
-    } catch (error) {
-      console.warn('Could not wipe Firebase menu items.', error);
-      setFirebaseSync(prev => ({
-        ...prev,
-        status: 'error',
-        message: `${error?.message || 'Could not wipe Firebase menu items.'} Local menu was wiped; refresh may reload Firebase items until this is fixed.`,
-      }));
-    }
+    setFirebaseSync(prev => ({
+      ...prev,
+      status: 'synced',
+      message: `Menu wiped. Removed ${result.deletedCount || firestoreKeys.length} Firebase menu item${(result.deletedCount || firestoreKeys.length) === 1 ? '' : 's'}.`,
+      lastSavedAt: new Date().toISOString(),
+      menuItemCount: 0,
+    }));
   };
 
   return {

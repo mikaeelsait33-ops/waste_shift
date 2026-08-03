@@ -9,6 +9,9 @@ export const useRestaurantAccess = ({
 }) => {
   const [staffDirectory, setStaffDirectory] = useState([]);
   const [directoryLoaded, setDirectoryLoaded] = useState(!firebaseConfigured || !restaurantReady);
+  const [directoryStatus, setDirectoryStatus] = useState(() => (
+    firebaseConfigured && restaurantReady ? 'loading' : 'ready'
+  ));
   const [sessionValidationStatus, setSessionValidationStatus] = useState(() => (
     firebaseConfigured && authSession ? 'checking' : 'ready'
   ));
@@ -16,20 +19,55 @@ export const useRestaurantAccess = ({
   useEffect(() => {
     if (!firebaseConfigured || !restaurantReady) {
       setDirectoryLoaded(true);
+      setDirectoryStatus('ready');
       return undefined;
     }
 
     let isCancelled = false;
-    setDirectoryLoaded(false);
+    let refreshInFlight = false;
+    const refreshDirectory = async ({ showLoading = false } = {}) => {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
+      if (showLoading) {
+        setDirectoryLoaded(false);
+        setDirectoryStatus('loading');
+      }
 
-    loadStaffDirectory().then((result) => {
-      if (isCancelled) return;
-      setStaffDirectory(result.ok && Array.isArray(result.staff) ? result.staff : []);
-      setDirectoryLoaded(true);
-    });
+      try {
+        const result = await loadStaffDirectory();
+        if (isCancelled) return;
+        if (result.ok && Array.isArray(result.staff)) {
+          setStaffDirectory(result.staff);
+          setDirectoryStatus('ready');
+        } else {
+          setDirectoryStatus('error');
+        }
+        setDirectoryLoaded(true);
+      } catch {
+        if (!isCancelled) {
+          setDirectoryStatus('error');
+          setDirectoryLoaded(true);
+        }
+      } finally {
+        refreshInFlight = false;
+      }
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        refreshDirectory();
+      }
+    };
+
+    refreshDirectory({ showLoading: true });
+    const intervalId = window.setInterval(refreshDirectory, 45 * 1000);
+    window.addEventListener('focus', refreshDirectory);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
 
     return () => {
       isCancelled = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshDirectory);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
   }, [firebaseConfigured, restaurantReady]);
 
@@ -70,6 +108,7 @@ export const useRestaurantAccess = ({
 
   return {
     directoryLoaded,
+    directoryStatus,
     sessionValidationStatus,
     staffDirectory,
   };

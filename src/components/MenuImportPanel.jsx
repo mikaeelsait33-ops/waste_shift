@@ -8,7 +8,7 @@ import {
   parseMenuPrice,
 } from '../utils/menuImport';
 import { requestGeminiMenuImport } from '../services/geminiMenuImport';
-import { prepareMakeLineGuideFilePayloads } from '../utils/makeLineGuideFiles';
+import { uploadMakeLineGuideToVercel } from '../services/vercelGeminiMenuImport';
 
 const readFileAsText = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -77,25 +77,21 @@ function MenuImportPanel({
     }
 
     setIsExtracting(true);
-    setMessage(file
-      ? (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf') ? 'Preparing PDF make-line guide...' : 'Preparing make-line guide photo...')
-      : 'Extracting make-line guide with Gemini...');
+    setMessage(file ? 'Uploading the complete make-line guide...' : 'Extracting make-line guide with Gemini...');
 
     try {
-      const preparedGuide = file
-        ? await prepareMakeLineGuideFilePayloads(file, { onProgress: setMessage })
-        : { files: [], notice: '' };
+      let payload;
 
-      if (preparedGuide.notice) {
-        setMessage(`${preparedGuide.notice} Reading with Gemini...`);
+      if (file) {
+        payload = await uploadMakeLineGuideToVercel(file, {
+          onProgress: setMessage,
+        });
+      } else {
+        payload = await requestGeminiMenuImport({
+          text: sourceText,
+          onProgress: setMessage,
+        });
       }
-
-      const payload = await requestGeminiMenuImport({
-        text: file ? '' : sourceText,
-        files: preparedGuide.files,
-        fileBatches: preparedGuide.fileBatches,
-        onProgress: setMessage,
-      });
 
       const extractedMenuItems = payload.items || [];
 

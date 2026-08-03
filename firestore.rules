@@ -203,6 +203,10 @@ service cloud.firestore {
     }
 
     match /stockLevels/{stockId} {
+      // Transactions must be able to establish that a scoped stock record does
+      // not exist before creating it. This grants no access to existing data.
+      allow get: if signedIn()
+        && !exists(/databases/$(database)/documents/stockLevels/$(stockId));
       allow read: if signedIn() && hasRestaurantAccess(resource.data.databaseId);
       allow create, update: if signedIn()
         && hasManagerAccess(request.resource.data.databaseId)
@@ -214,6 +218,10 @@ service cloud.firestore {
     }
 
     match /stockMovements/{movementId} {
+      // Deterministic movement IDs make retries idempotent. Managers need to
+      // check an unused ID before the transaction creates the movement.
+      allow get: if signedIn()
+        && !exists(/databases/$(database)/documents/stockMovements/$(movementId));
       allow read: if signedIn() && hasRestaurantAccess(resource.data.databaseId);
       allow create, update: if signedIn()
         && hasManagerAccess(request.resource.data.databaseId)
@@ -227,6 +235,10 @@ service cloud.firestore {
     }
 
     match /invoices/{invoiceId} {
+      // A confirmation reads its deterministic invoice ID before the atomic
+      // batch so retries can preserve already-posted stock state.
+      allow get: if signedIn()
+        && !exists(/databases/$(database)/documents/invoices/$(invoiceId));
       allow read: if signedIn() && hasManagerAccess(resource.data.databaseId);
       allow create, update: if signedIn()
         && hasManagerAccess(request.resource.data.databaseId)

@@ -31,7 +31,6 @@ if (!allowedTargetPattern.test(target)) {
 
 const urls = [
   '/',
-  '/api/database',
 ];
 
 const runRequest = async (url) => {

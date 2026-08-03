@@ -35,7 +35,7 @@ class ErrorBoundary extends Component {
               <p className="eyebrow">Recovery</p>
               <h2 className="title">Something went wrong</h2>
               <p className="subtitle">
-                WasteShift kept your browser data safe. Try this screen again, or reload if the problem continues.
+                Your confirmed records remain in Firebase. Try this screen again, or reload if the problem continues.
               </p>
             </div>
           </div>

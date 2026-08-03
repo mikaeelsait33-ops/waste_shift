@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { requestGeminiMenuImport } from '../services/geminiMenuImport';
+import { uploadMakeLineGuideToVercel } from '../services/vercelGeminiMenuImport';
 import {
   buildMenuImportSaveItems,
   catalogUnitMismatch,
@@ -15,7 +16,6 @@ import {
   normalizeItemPriceUnit,
   sanitizeItemPriceCatalog,
 } from '../utils/itemPriceCatalog';
-import { prepareMakeLineGuideFilePayloads } from '../utils/makeLineGuideFiles';
 
 const normalizeDishesFromPayload = (payload) => {
   if (Array.isArray(payload?.dishes)) {
@@ -90,11 +90,9 @@ function MenuImport({
       : 'No dishes were found. Try clearer make-line guide text or a better guide photo.');
   };
 
-  const requestGeminiMakeLineGuideParse = async ({ text = '', nextSourceName, files = [], fileBatches = [] }) => {
+  const requestGeminiMakeLineGuideParse = async ({ text = '', nextSourceName }) => {
     const payload = await requestGeminiMenuImport({
       text,
-      files,
-      fileBatches,
       onProgress: setMessage,
     });
 
@@ -137,29 +135,15 @@ function MenuImport({
     }
 
     setIsExtracting(true);
-    setMessage(file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
-      ? 'Preparing PDF make-line guide...'
-      : 'Preparing make-line guide photo...');
+    setMessage('Uploading the complete make-line guide...');
 
     try {
-      const preparedGuide = await prepareMakeLineGuideFilePayloads(file, {
+      const payload = await uploadMakeLineGuideToVercel(file, {
         onProgress: setMessage,
       });
-      if (preparedGuide.notice) {
-        setMessage(`${preparedGuide.notice} Reading with Gemini...`);
-      } else {
-        setMessage('Reading make-line guide with Gemini...');
-      }
-
-      await requestGeminiMakeLineGuideParse({
-        text: '',
-        nextSourceName: file.name,
-        files: preparedGuide.files,
-        fileBatches: preparedGuide.fileBatches,
-      });
-      setMessage(preparedGuide.notice
-        ? `Gemini read the make-line guide. ${preparedGuide.notice} Review exact portions before saving.`
-        : 'Gemini read the make-line guide. Review exact portions before saving.');
+      setSourceName(file.name);
+      refreshReview(normalizeDishesFromPayload(payload));
+      setMessage(`Gemini read the complete guide. ${payload.dishes.length} recipes are ready for review.`);
     } catch (error) {
       setMessage(error?.message || 'Make-line guide import failed.');
     } finally {

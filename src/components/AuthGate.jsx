@@ -1,19 +1,19 @@
 import { useState } from 'react';
+import KitchenPulse3D from './KitchenPulse3D';
 
 function AuthGate({
   isPreparingAuth,
   authIsConfigured = false,
   staffList = [],
-  managerRecoveryRequired = false,
+  managerSetupRequired = false,
   onLogin,
   onInitialManagerSetup,
-  onRecoverManagerAccess,
+  onBootstrapManagerAccess,
 }) {
-  const [mode, setMode] = useState(managerRecoveryRequired ? 'management' : 'staff');
+  const [mode, setMode] = useState(managerSetupRequired ? 'management' : 'staff');
   const [name, setName] = useState('');
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
-  const [recoveryKey, setRecoveryKey] = useState('');
   const [message, setMessage] = useState('');
   const [isBusy, setIsBusy] = useState(false);
   const staffLoginOptions = (Array.isArray(staffList) ? staffList : [])
@@ -22,6 +22,16 @@ function AuthGate({
       && !member.removed
       && member.staffSection !== 'management'
       && !/\b(owner|manager)\b/i.test(String(member.role || ''))
+    ))
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+  const managerLoginOptions = (Array.isArray(staffList) ? staffList : [])
+    .filter((member) => (
+      member?.id
+      && !member.removed
+      && (
+        member.staffSection === 'management'
+        || /\b(owner|manager)\b/i.test(String(member.role || member.roleKey || ''))
+      )
     ))
     .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
 
@@ -61,7 +71,7 @@ function AuthGate({
       return;
     }
 
-    if (managerRecoveryRequired) {
+    if (managerSetupRequired) {
       if (!name.trim()) {
         setMessage('Enter the manager name.');
         return;
@@ -72,28 +82,21 @@ function AuthGate({
         return;
       }
 
-      if (!recoveryKey.trim()) {
-        setMessage('Enter the one-time recovery key.');
-        return;
-      }
-
       setIsBusy(true);
       setMessage('');
 
       try {
-        const result = await onRecoverManagerAccess?.({
+        const result = await onBootstrapManagerAccess?.({
           name: name.trim(),
           pin,
-          recoveryKey: recoveryKey.trim(),
         });
         if (!result?.ok) {
-          setMessage(result?.message || 'Could not recover manager access.');
+          setMessage(result?.message || 'Could not create manager access.');
           return;
         }
 
         setPin('');
         setConfirmPin('');
-        setRecoveryKey('');
       } finally {
         setIsBusy(false);
       }
@@ -127,9 +130,24 @@ function AuthGate({
   };
 
   return (
-    <main className="auth-screen">
+    <main className="auth-screen auth-experience">
+      <aside className="auth-visual" aria-label="WasteShift restaurant operations">
+        <KitchenPulse3D />
+        <div className="auth-visual__brand" aria-hidden="true">
+          <span className="auth-visual__mark">WS</span>
+          <div>
+            <strong>WasteShift</strong>
+            <span>Restaurant operations</span>
+          </div>
+        </div>
+        <div className="auth-visual__signal" aria-hidden="true">
+          <span />
+          Kitchen pulse active
+        </div>
+      </aside>
+
       <section className="auth-panel">
-        <div className="brand auth-brand">
+        <div className="brand auth-brand auth-brand--panel">
           <span className="brand-mark">WS</span>
           <div>
             <h1 className="brand-name">WasteShift</h1>
@@ -149,20 +167,20 @@ function AuthGate({
         ) : (
           <form onSubmit={handleLoginSubmit} className="auth-form">
               <div>
-                <p className="eyebrow">{!authIsConfigured ? 'First-time setup' : managerRecoveryRequired ? 'One-time recovery' : mode === 'management' ? 'Management login' : 'Staff login'}</p>
-                <h2 className="title">{!authIsConfigured ? 'Create Manager Access' : managerRecoveryRequired ? 'Recover Manager Access' : mode === 'management' ? 'Unlock Management' : 'Start Waste Logging'}</h2>
+                <p className="eyebrow">{!authIsConfigured || managerSetupRequired ? 'Manager setup' : mode === 'management' ? 'Management login' : 'Staff login'}</p>
+                <h2 className="title">{!authIsConfigured || managerSetupRequired ? 'Create Manager Access' : mode === 'management' ? 'Unlock Management' : 'Start Waste Logging'}</h2>
                 <p className="subtitle">
                   {!authIsConfigured
                     ? 'Create the first manager profile and secure management PIN for this restaurant.'
-                    : managerRecoveryRequired
-                    ? 'Restore this legacy restaurant once, then use the manager PIN normally on every device.'
-                    : mode === 'management'
-                    ? 'Enter your name and the management PIN to create or open a manager account.'
-                    : 'Choose a manager-added staff profile and enter the 5 digit PIN issued in Settings.'}
+                     : managerSetupRequired
+                     ? 'No active manager is linked to this restaurant. Create one with a name and PIN.'
+                     : mode === 'management'
+                    ? 'Choose the restaurant manager and enter the management PIN.'
+                     : 'Choose a manager-added staff profile and enter the 5 digit PIN issued in Settings.'}
                 </p>
               </div>
 
-            {authIsConfigured && !managerRecoveryRequired && (
+            {authIsConfigured && !managerSetupRequired && (
               <div className="segmented-control" aria-label="Login type">
               <button
                 type="button"
@@ -179,12 +197,12 @@ function AuthGate({
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setMode('management');
-                  setName('');
-                  setPin('');
-                  setConfirmPin('');
-                  setMessage('');
+                 onClick={() => {
+                   setMode('management');
+                   setName(managerLoginOptions.length === 1 ? managerLoginOptions[0].name : '');
+                   setPin('');
+                   setConfirmPin('');
+                   setMessage('');
                 }}
                 className={`segment-button${mode === 'management' ? ' is-active' : ''}`}
               >
@@ -193,7 +211,7 @@ function AuthGate({
             </div>
             )}
 
-            {!authIsConfigured || managerRecoveryRequired || mode === 'management' ? (
+            {!authIsConfigured || managerSetupRequired ? (
               <div className="field">
                 <label htmlFor="login-name">{authIsConfigured ? 'Management name' : 'First manager name'}</label>
                 <input
@@ -205,6 +223,23 @@ function AuthGate({
                   placeholder="e.g. Nadia"
                   className="input"
                 />
+              </div>
+            ) : mode === 'management' ? (
+              <div className="field">
+                <label htmlFor="login-name">Manager account</label>
+                <select
+                  id="login-name"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  className="select"
+                >
+                  <option value="">Choose manager</option>
+                  {managerLoginOptions.map((member) => (
+                    <option key={member.id} value={member.name}>
+                      {member.name}
+                    </option>
+                  ))}
+                </select>
               </div>
             ) : (
               <>
@@ -234,7 +269,7 @@ function AuthGate({
             )}
 
             <div className="field">
-              <label htmlFor="login-pin">{!authIsConfigured || managerRecoveryRequired || mode === 'management' ? 'Management PIN' : '5 digit staff PIN'}</label>
+              <label htmlFor="login-pin">{!authIsConfigured || managerSetupRequired || mode === 'management' ? 'Management PIN' : '5 digit staff PIN'}</label>
               <input
                 id="login-pin"
                 type="password"
@@ -242,12 +277,12 @@ function AuthGate({
                 autoComplete="current-password"
                 value={pin}
                 onChange={(event) => setPin(event.target.value)}
-                placeholder={!authIsConfigured || managerRecoveryRequired || mode === 'management' ? 'Enter PIN' : 'Enter 5 digit PIN'}
+                placeholder={!authIsConfigured || managerSetupRequired || mode === 'management' ? 'Enter PIN' : 'Enter 5 digit PIN'}
                 className="input"
               />
             </div>
 
-            {(!authIsConfigured || managerRecoveryRequired) && (
+            {(!authIsConfigured || managerSetupRequired) && (
               <div className="field">
                 <label htmlFor="confirm-login-pin">Confirm management PIN</label>
                 <input
@@ -263,23 +298,8 @@ function AuthGate({
               </div>
             )}
 
-            {managerRecoveryRequired && (
-              <div className="field">
-                <label htmlFor="manager-recovery-key">One-time recovery key</label>
-                <input
-                  id="manager-recovery-key"
-                  type="password"
-                  autoComplete="one-time-code"
-                  value={recoveryKey}
-                  onChange={(event) => setRecoveryKey(event.target.value)}
-                  placeholder="Enter recovery key"
-                  className="input"
-                />
-              </div>
-            )}
-
             <button type="submit" className="primary-button" disabled={isBusy}>
-              {isBusy ? 'Checking...' : !authIsConfigured ? 'Create manager access' : managerRecoveryRequired ? 'Restore manager access' : mode === 'management' ? 'Unlock management' : 'Continue'}
+              {isBusy ? 'Checking...' : !authIsConfigured || managerSetupRequired ? 'Create manager access' : mode === 'management' ? 'Unlock management' : 'Continue'}
             </button>
           </form>
         )}

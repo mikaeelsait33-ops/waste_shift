@@ -75,8 +75,10 @@ const appSource = [
   await readFile(new URL('../src/hooks/useRestaurantPersistence.js', import.meta.url), 'utf8'),
 ].join('\n');
 const firestoreSource = await readFile(new URL('../src/services/firestoreMenuItems.js', import.meta.url), 'utf8');
+const firestoreRulesSource = await readFile(new URL('../firestore.rules', import.meta.url), 'utf8');
 const managerAccountsSource = await readFile(new URL('../src/services/managerAccounts.js', import.meta.url), 'utf8');
 const settingsSource = await readFile(new URL('../src/components/Settings.jsx', import.meta.url), 'utf8');
+const wasteEntriesSource = await readFile(new URL('../src/hooks/useWasteEntries.js', import.meta.url), 'utf8');
 const setupWizardSource = await readFile(new URL('../src/components/SetupWizard.jsx', import.meta.url), 'utf8');
 const idsSource = await readFile(new URL('../src/utils/ids.js', import.meta.url), 'utf8');
 
@@ -89,6 +91,10 @@ assert.match(appSource, /managerPin/);
 assert.match(appSource, /Enter a 5 digit staff PIN/);
 assert.match(appSource, /That staff PIN is already in use/);
 assert.match(settingsSource, /Add manager account/);
+assert.doesNotMatch(settingsSource, /one primary manager account/);
+assert.match(settingsSource, /Manager PIN set/);
+assert.match(appSource, /Add another manager before removing the last manager account/);
+assert.match(appSource, /You cannot remove the manager account that is currently signed in/);
 assert.match(settingsSource, /Staff PIN/);
 assert.match(settingsSource, /5 digit staff PIN/);
 assert.match(setupWizardSource, /Use a unique 5 digit staff PIN/);
@@ -107,7 +113,12 @@ assert.match(firestoreSource, /stripStaffCredentials/);
 assert.match(firestoreSource, /managementPin:\s*null/);
 assert.doesNotMatch(appSource, /localStorage|sessionStorage|indexedDB/);
 assert.equal(idsSource.includes('Date.now'), false);
-assert.match(firestoreSource, /photoUrl:\s*getSharedPhotoUrl\(data\?\.photoUrl\)/);
+assert.match(firestoreSource, /photoUrl:\s*getPersistedPhotoUrl\(data\?\.photoUrl\)/);
+assert.match(firestoreSource, /stored_in_firestore/);
+assert.doesNotMatch(wasteEntriesSource, /uploadWastePhotoForEntry|wastePhotos/);
 assert.match(firestoreSource, /hasPhoto:/);
+assert.match(firestoreRulesSource, /!exists\(\/databases\/\$\(database\)\/documents\/invoices\/\$\(invoiceId\)\)/);
+assert.match(firestoreRulesSource, /!exists\(\/databases\/\$\(database\)\/documents\/stockLevels\/\$\(stockId\)\)/);
+assert.match(firestoreRulesSource, /!exists\(\/databases\/\$\(database\)\/documents\/stockMovements\/\$\(movementId\)\)/);
 
 console.log('auth and permissions tests passed');

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RefreshCw } from 'lucide-react';
 import { Line, LineChart, ResponsiveContainer } from 'recharts';
 import {
   INVOICE_CATEGORIES,
@@ -14,6 +15,7 @@ import {
 } from '../utils/invoiceParsing';
 import { createItemPriceKey, roundUnitPrice } from '../utils/itemPriceCatalog';
 import {
+  adjustIngredientStock,
   deleteIngredient,
   loadInvoiceHistoryPage,
   invoiceFirestoreIsConfigured,
@@ -287,7 +289,7 @@ const mergeStockLevelUpdates = (stockLevels, updates, invoiceId) => {
       ingredientId,
       currentQty: Number(update.currentQty) || 0,
       unit: update.unit || existingStock.unit || 'each',
-      lastInvoiceId: invoiceId,
+      lastInvoiceId: invoiceId || existingStock.lastInvoiceId || '',
       status: update.status || existingStock.status || 'ok',
     });
   });
@@ -705,6 +707,13 @@ function InvoiceScanner({
   const [loadingOlderInvoices, setLoadingOlderInvoices] = useState(false);
   const [loadingOlderStockMovements, setLoadingOlderStockMovements] = useState(false);
   const [isRefreshingWorkspace, setIsRefreshingWorkspace] = useState(false);
+  const [stockAdjustment, setStockAdjustment] = useState({
+    ingredientId: '',
+    mode: 'set_count',
+    quantity: '',
+    note: '',
+  });
+  const [isSavingStockAdjustment, setIsSavingStockAdjustment] = useState(false);
   const workspaceRefreshInFlightRef = useRef(false);
 
   const canManageInvoices = Boolean(accessProfile?.canUseAiImports);
@@ -1052,19 +1061,51 @@ function InvoiceScanner({
       })
       .sort((a, b) => new Date(b.sortDate || b.receivedDate || b.invoiceDate || 0).getTime() - new Date(a.sortDate || a.receivedDate || a.invoiceDate || 0).getTime())
   ), [stockSearchValue, workspace.stockMovements]);
+  const ingredientNameById = useMemo(() => new Map(
+    availableIngredients.map((ingredient) => [
+      ingredient.ingredientId || ingredient.id,
+      ingredient.name,
+    ]),
+  ), [availableIngredients]);
+  const filteredStockLevels = useMemo(() => (
+    [...(Array.isArray(workspace.stockLevels) ? workspace.stockLevels : [])]
+      .map((stockLevel) => ({
+        ...stockLevel,
+        ingredientName: ingredientNameById.get(stockLevel.ingredientId || stockLevel.id)
+          || stockLevel.ingredientName
+          || stockLevel.ingredientId
+          || stockLevel.id,
+      }))
+      .filter((stockLevel) => (
+        !stockSearchValue
+        || [
+          stockLevel.ingredientName,
+          stockLevel.unit,
+          stockLevel.status,
+        ].some((part) => String(part || '').toLowerCase().includes(stockSearchValue))
+      ))
+      .sort((a, b) => String(a.ingredientName || '').localeCompare(String(b.ingredientName || '')))
+  ), [ingredientNameById, stockSearchValue, workspace.stockLevels]);
+  const selectedAdjustmentStockLevel = useMemo(() => (
+    workspace.stockLevels.find((stockLevel) => (
+      (stockLevel.ingredientId || stockLevel.id) === stockAdjustment.ingredientId
+    )) || null
+  ), [stockAdjustment.ingredientId, workspace.stockLevels]);
   const visibleStockMovementPage = useMemo(() => getVisiblePage(filteredStockMovements, {
     limit: visibleStockMovementLimit,
     fallbackLimit: DEFAULT_PAGE_SIZE,
   }), [filteredStockMovements, visibleStockMovementLimit]);
   const stockMovementSummary = useMemo(() => {
     const receivedMovements = filteredStockMovements.filter((movement) => String(movement.type || '').includes('receive'));
+    const wasteMovements = filteredStockMovements.filter((movement) => movement.type === 'waste');
     const ingredientCount = new Set(filteredStockMovements.map((movement) => movement.ingredientId).filter(Boolean)).size;
 
     return {
       movements: filteredStockMovements.length,
       receivedMovements: receivedMovements.length,
+      wasteMovements: wasteMovements.length,
       ingredientCount,
-      receivedValue: roundMoney(filteredStockMovements.reduce((sum, movement) => sum + Number(movement.lineTotalExVAT || 0), 0)),
+      receivedValue: roundMoney(receivedMovements.reduce((sum, movement) => sum + Number(movement.lineTotalExVAT || 0), 0)),
     };
   }, [filteredStockMovements]);
   const ingredientSummary = useMemo(() => ({
@@ -2092,6 +2133,58 @@ function InvoiceScanner({
     }
   };
 
+  const handleStockAdjustment = async (event) => {
+    event.preventDefault();
+
+    if (!canManageInvoices) {
+      setMessage('Only an owner or manager can adjust stock.');
+      return;
+    }
+
+    const ingredient = availableIngredients.find((record) => (
+      (record.ingredientId || record.id) === stockAdjustment.ingredientId
+    ));
+    if (!ingredient) {
+      setMessage('Choose a raw ingredient before adjusting stock.');
+      return;
+    }
+
+    setIsSavingStockAdjustment(true);
+    setMessage('Saving stock adjustment...');
+    try {
+      const result = await adjustIngredientStock({
+        ingredientId: stockAdjustment.ingredientId,
+        ingredientName: ingredient.name,
+        mode: stockAdjustment.mode,
+        quantity: stockAdjustment.quantity,
+        note: stockAdjustment.note,
+        adjustedBy: accessProfile?.operatorName || 'WasteShift user',
+      });
+
+      if (!result?.ok) {
+        throw new Error(result?.message || 'Could not save this stock adjustment.');
+      }
+
+      setWorkspace((current) => ({
+        ...current,
+        stockLevels: mergeStockLevelUpdates(current.stockLevels, [result.update], ''),
+      }));
+      setStockAdjustment((current) => ({
+        ...current,
+        quantity: '',
+        note: '',
+      }));
+      setMessage(
+        `${ingredient.name} stock is now ${Number(result.update.currentQty || 0).toFixed(2).replace(/0+$/, '').replace(/\.$/, '')} ${result.update.unit}.`,
+      );
+      refreshWorkspaceInBackground();
+    } catch (error) {
+      setMessage(error?.message || 'Could not save this stock adjustment.');
+    } finally {
+      setIsSavingStockAdjustment(false);
+    }
+  };
+
   const confirmInvoice = async (stockMode = invoiceConfirmMode) => {
     if (confirmInvoiceInFlightRef.current || isConfirmingInvoice) {
       return;
@@ -2285,7 +2378,8 @@ function InvoiceScanner({
           onClick={() => refreshWorkspace().catch((error) => setMessage(error?.message || 'Could not refresh invoice data.'))}
           disabled={isRefreshingWorkspace}
         >
-          {isRefreshingWorkspace ? 'Refreshing...' : 'Refresh'}
+          <RefreshCw size={16} strokeWidth={2.2} aria-hidden="true" />
+          <span>{isRefreshingWorkspace ? 'Refreshing...' : 'Refresh'}</span>
         </button>
       </div>
 
@@ -3343,6 +3437,10 @@ function InvoiceScanner({
                 <span className="metric-label">Received</span>
               </div>
               <div className="metric-card">
+                <span className="metric-value">{stockMovementSummary.wasteMovements}</span>
+                <span className="metric-label">Waste deductions</span>
+              </div>
+              <div className="metric-card">
                 <span className="metric-value">{stockMovementSummary.ingredientCount}</span>
                 <span className="metric-label">Ingredients touched</span>
               </div>
@@ -3356,6 +3454,96 @@ function InvoiceScanner({
               </div>
             </div>
 
+            <form onSubmit={handleStockAdjustment} className="smart-panel" style={{ marginBottom: 16 }}>
+              <div className="smart-panel__header">
+                <div>
+                  <h3 className="breakdown-title">Stock adjustment</h3>
+                  <p className="small-text" style={{ margin: 0 }}>Record a stock count, delivery outside an invoice, or kitchen use.</p>
+                </div>
+                <span className="badge">{selectedAdjustmentStockLevel?.unit || 'each'}</span>
+              </div>
+              <div className="field-grid" style={{ marginTop: 12 }}>
+                <div className="field">
+                  <label htmlFor="stock-adjustment-ingredient">Raw ingredient</label>
+                  <select
+                    id="stock-adjustment-ingredient"
+                    className="select"
+                    value={stockAdjustment.ingredientId}
+                    onChange={(event) => setStockAdjustment((current) => ({
+                      ...current,
+                      ingredientId: event.target.value,
+                    }))}
+                  >
+                    <option value="">Choose ingredient</option>
+                    {availableIngredients.map((ingredient) => (
+                      <option key={ingredient.ingredientId || ingredient.id} value={ingredient.ingredientId || ingredient.id}>
+                        {ingredient.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field">
+                  <label htmlFor="stock-adjustment-mode">Adjustment</label>
+                  <select
+                    id="stock-adjustment-mode"
+                    className="select"
+                    value={stockAdjustment.mode}
+                    onChange={(event) => setStockAdjustment((current) => ({
+                      ...current,
+                      mode: event.target.value,
+                    }))}
+                  >
+                    <option value="set_count">Set counted stock</option>
+                    <option value="receive">Receive stock</option>
+                    <option value="use">Record kitchen use</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label htmlFor="stock-adjustment-quantity">
+                    {stockAdjustment.mode === 'set_count' ? 'Counted quantity' : 'Quantity'}
+                  </label>
+                  <input
+                    id="stock-adjustment-quantity"
+                    className="input"
+                    type="number"
+                    min="0"
+                    step="0.001"
+                    value={stockAdjustment.quantity}
+                    onChange={(event) => setStockAdjustment((current) => ({
+                      ...current,
+                      quantity: event.target.value,
+                    }))}
+                    placeholder={selectedAdjustmentStockLevel?.unit || 'Amount'}
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="stock-adjustment-note">Note</label>
+                  <input
+                    id="stock-adjustment-note"
+                    className="input"
+                    value={stockAdjustment.note}
+                    onChange={(event) => setStockAdjustment((current) => ({
+                      ...current,
+                      note: event.target.value,
+                    }))}
+                    placeholder="Stock take, transfer, or reason"
+                  />
+                </div>
+              </div>
+              <button
+                type="submit"
+                className="primary-button"
+                disabled={
+                  !canManageInvoices
+                  || !stockAdjustment.ingredientId
+                  || stockAdjustment.quantity === ''
+                  || isSavingStockAdjustment
+                }
+              >
+                {isSavingStockAdjustment ? 'Saving adjustment...' : 'Save stock adjustment'}
+              </button>
+            </form>
+
             <div className="field-grid">
               <input
                 type="search"
@@ -3365,6 +3553,32 @@ function InvoiceScanner({
                 placeholder="Search stock by ingredient, supplier, invoice, unit, or status"
               />
             </div>
+
+            <div className="section-header" style={{ marginTop: 18 }}>
+              <div>
+                <h3 className="breakdown-title">Current stock levels</h3>
+                <p className="small-text" style={{ margin: 0 }}>Invoice receipts, waste, and manual adjustments all feed these balances.</p>
+              </div>
+              <span className="badge">{filteredStockLevels.length} ingredients</span>
+            </div>
+            {filteredStockLevels.length === 0 ? (
+              <div className="empty-state">No current stock levels match this search yet.</div>
+            ) : (
+              <div className="invoice-report-panel" style={{ marginBottom: 18 }}>
+                {filteredStockLevels.slice(0, 50).map((stockLevel) => (
+                  <div key={stockLevel.ingredientId || stockLevel.id} className="invoice-report-row">
+                    <strong>{stockLevel.ingredientName}</strong>
+                    <span>{Number(stockLevel.currentQty || 0).toFixed(2).replace(/0+$/, '').replace(/\.$/, '')} {stockLevel.unit || 'each'}</span>
+                    <span className="small-text">
+                      Reorder at {Number(stockLevel.reorderPoint || 0).toFixed(2).replace(/0+$/, '').replace(/\.$/, '') || '0'}
+                    </span>
+                    <span className={`badge${stockLevel.status === 'low' ? ' is-red' : stockLevel.status === 'overstocked' ? ' is-orange' : ' is-green'}`}>
+                      {stockLevel.status || 'ok'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {filteredStockMovements.length === 0 ? (
               <div className="empty-state">No stock movements match this search yet.</div>
@@ -3379,9 +3593,11 @@ function InvoiceScanner({
                       </span>
                     </div>
                     <span>
-                      +{Number(movement.quantityBase || 0).toFixed(2).replace(/0+$/, '').replace(/\.$/, '')} {movement.baseUnit || 'each'}
+                      {Number(movement.quantityBase || 0) > 0 ? '+' : ''}
+                      {Number(movement.quantityBase || 0).toFixed(2).replace(/0+$/, '').replace(/\.$/, '')} {movement.baseUnit || 'each'}
                     </span>
                     <span className="small-text">
+                      {String(movement.type || '').replace(/_/g, ' ')}: {' '}
                       {Number(movement.previousQuantityBase || 0).toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}
                       {' to '}
                       {Number(movement.resultingQuantityBase || 0).toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}

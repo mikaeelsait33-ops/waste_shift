@@ -9,7 +9,6 @@ const ItemPriceManager = lazy(() => import('./ItemPriceManager'));
 const RecipeManager = lazy(() => import('./RecipeManager'));
 const Reports = lazy(() => import('./Reports'));
 const Settings = lazy(() => import('./Settings'));
-const StoreRoom = lazy(() => import('./StoreRoom'));
 const WasteList = lazy(() => import('./WasteList'));
 
 const PageFallback = ({ label = 'Loading screen' }) => (
@@ -55,18 +54,19 @@ export default function AppWorkspace({
     portionProfiles,
     settings,
     staffList,
-    storeRoomItems,
-    storeRoomMovements,
     wasteItems,
   } = data;
   const {
     activeTab,
-    inventoryView,
     menuPricingView,
-    onInventoryViewChange,
     onMenuPricingViewChange,
     onNavigate,
   } = navigation;
+  const connectionIssue = !sync.isOnline
+    ? 'Offline. New restaurant records are paused until this device reconnects.'
+    : sync.firebaseSync?.status === 'error'
+      ? sync.firebaseSync.message || 'Firebase is temporarily unavailable.'
+      : '';
 
   return (
     <div className="app-shell">
@@ -80,6 +80,12 @@ export default function AppWorkspace({
       />
 
       <main className={`app-page${['dashboard', 'inventory', 'storeRoom', 'invoices', 'menuPricing', 'wasteLog', 'reports', 'settings'].includes(activeTab) ? ' app-page--wide' : ''}`}>
+        {connectionIssue && (
+          <div className="connection-banner" role="status">
+            <strong>Connection issue</strong>
+            <span>{connectionIssue}</span>
+          </div>
+        )}
         <div key={activeTab} className="page-transition">
           <ErrorBoundary key={activeTab}>
             <Suspense fallback={<PageFallback />}>
@@ -111,6 +117,7 @@ export default function AppWorkspace({
                   activeStaffId={activeStaffId}
                   onActiveStaffChange={onActiveStaffChange}
                   onRetryEntrySync={wasteActions.onRetryEntrySync}
+                  isOnline={sync.isOnline}
                 />
               )}
 
@@ -132,50 +139,22 @@ export default function AppWorkspace({
                     <div className="section-header settings-page-header">
                       <div>
                         <p className="eyebrow">Inventory</p>
-                        <h2 className="title">Invoices & Stock</h2>
-                        <p className="subtitle">Scan supplier invoices, update ingredient prices, and manage store room stock from one place.</p>
+                        <h2 className="title">Invoices, Ingredients & Stock</h2>
+                        <p className="subtitle">Scan supplier invoices, maintain raw ingredient prices, and run one shared stock ledger.</p>
                       </div>
-                    </div>
-                    <div className="segmented-control settings-tabs" aria-label="Inventory sections">
-                      <button
-                        type="button"
-                        onClick={() => onInventoryViewChange('invoices')}
-                        className={`segment-button${inventoryView === 'invoices' ? ' is-active' : ''}`}
-                      >
-                        Invoices
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onInventoryViewChange('stock')}
-                        className={`segment-button${inventoryView === 'stock' ? ' is-active' : ''}`}
-                      >
-                        Stock
-                      </button>
                     </div>
                   </div>
 
-                  {inventoryView === 'invoices' ? (
-                    <InvoiceScanner
-                      accessProfile={accessProfile}
-                      recipes={effectiveRecipes}
-                      menuItems={menuItems}
-                      itemPriceCatalog={itemPriceCatalog}
-                      inventoryMovements={inventoryMovements}
-                      onInvoiceSaved={inventoryActions.onInvoiceSaved}
-                      onInvoicePricesUpdated={inventoryActions.onInvoicePricesUpdated}
-                      onIngredientDeleted={inventoryActions.onIngredientDeleted}
-                    />
-                  ) : (
-                    <StoreRoom
-                      storeRoomItems={storeRoomItems}
-                      storeRoomMovements={storeRoomMovements}
-                      itemPriceCatalog={itemPriceCatalog}
-                      accessProfile={accessProfile}
-                      onSaveStoreRoomItem={inventoryActions.onSaveStoreRoomItem}
-                      onRecordStoreRoomMovement={inventoryActions.onRecordStoreRoomMovement}
-                      onDeleteStoreRoomItem={inventoryActions.onDeleteStoreRoomItem}
-                    />
-                  )}
+                  <InvoiceScanner
+                    accessProfile={accessProfile}
+                    recipes={effectiveRecipes}
+                    menuItems={menuItems}
+                    itemPriceCatalog={itemPriceCatalog}
+                    inventoryMovements={inventoryMovements}
+                    onInvoiceSaved={inventoryActions.onInvoiceSaved}
+                    onInvoicePricesUpdated={inventoryActions.onInvoicePricesUpdated}
+                    onIngredientDeleted={inventoryActions.onIngredientDeleted}
+                  />
                 </>
               )}
 
@@ -235,35 +214,9 @@ export default function AppWorkspace({
                 </>
               )}
 
-              {activeTab === 'storeRoom' && (
-                <StoreRoom
-                  storeRoomItems={storeRoomItems}
-                  storeRoomMovements={storeRoomMovements}
-                  itemPriceCatalog={itemPriceCatalog}
-                  accessProfile={accessProfile}
-                  onSaveStoreRoomItem={inventoryActions.onSaveStoreRoomItem}
-                  onRecordStoreRoomMovement={inventoryActions.onRecordStoreRoomMovement}
-                  onDeleteStoreRoomItem={inventoryActions.onDeleteStoreRoomItem}
-                />
-              )}
-
-              {activeTab === 'invoices' && (
-                <InvoiceScanner
-                  accessProfile={accessProfile}
-                  recipes={effectiveRecipes}
-                  menuItems={menuItems}
-                  itemPriceCatalog={itemPriceCatalog}
-                  inventoryMovements={inventoryMovements}
-                  onInvoiceSaved={inventoryActions.onInvoiceSaved}
-                  onInvoicePricesUpdated={inventoryActions.onInvoicePricesUpdated}
-                  onIngredientDeleted={inventoryActions.onIngredientDeleted}
-                />
-              )}
-
               {activeTab === 'reports' && (
                 <Reports
                   wasteItems={wasteItems}
-                  storeRoomMovements={storeRoomMovements}
                   activeStaffMember={activeStaffMember}
                   accessProfile={accessProfile}
                 />
@@ -280,19 +233,15 @@ export default function AppWorkspace({
                   menuItems={menuItems}
                   customMenuItems={customMenuItems}
                   itemPriceCatalog={itemPriceCatalog}
-                  storeRoomItems={storeRoomItems}
-                  storeRoomMovements={storeRoomMovements}
                   portionProfiles={portionProfiles}
                   activeStaffId={activeStaffId}
                   activeStaffMember={activeStaffMember}
                   accessProfile={accessProfile}
                   inventoryMovements={inventoryMovements}
                   auditLog={auditLog}
-                  syncAccessKey={sync.syncAccessKey}
                   authSettings={authSettings}
                   authSession={authSession}
                   firebaseSync={sync.firebaseSync}
-                  serverSync={sync.serverSync}
                   lastSavedAt={lastSavedAt}
                   onSaveSettings={settingsActions.onSaveSettings}
                   onClearAllWaste={wasteActions.onClearAllWaste}
@@ -307,8 +256,7 @@ export default function AppWorkspace({
                   onImportMenuItems={menuActions.onImportMenuItems}
                   onSaveItemPrice={menuActions.onCreateCatalogItem}
                   onDeleteItemPrice={menuActions.onDeleteItemPrice}
-                  onSaveToServer={settingsActions.onSaveToServer}
-                  onSaveSyncAccessKey={settingsActions.onSaveSyncAccessKey}
+                  onSaveToFirebase={settingsActions.onSaveToFirebase}
                   onSavePinSettings={settingsActions.onSavePinSettings}
                   onLogout={onLogout}
                   onRestoreDatabase={settingsActions.onRestoreDatabase}

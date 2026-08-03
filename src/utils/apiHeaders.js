@@ -28,7 +28,7 @@ export const getManagerApiErrorMessage = (payload, fallback = 'The protected req
 };
 
 // Firebase ID tokens are short-lived and can be verified by Vercel with Firebase Admin.
-// No server secret is ever stored in the browser for Gemini/OCR requests.
+// No server secret is ever stored in the browser for Gemini requests.
 export const getAutomaticManagerApiHeaders = async (extraHeaders = {}) => {
   let idToken = '';
 

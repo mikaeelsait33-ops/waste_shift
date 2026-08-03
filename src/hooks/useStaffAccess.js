@@ -5,6 +5,7 @@ import {
   createPinRecord,
   sanitizeAuthSettings,
   sanitizePinRecord,
+  validatePin,
   verifyPin,
 } from '../utils/pinAuth';
 import {
@@ -17,8 +18,8 @@ import { clearPersistedAuthSession } from '../utils/sessionPersistence';
 import { saveCurrentUserStaffProfile } from '../services/firebaseAccess';
 import { saveManagerAccount } from '../services/managerAccounts';
 import {
+  bootstrapManagerSession,
   establishManagerSession,
-  recoverManagerSession,
   revokeManagerSession,
 } from '../services/managerSession';
 import {
@@ -42,7 +43,6 @@ export function useStaffAccess({
   setAuthSettings,
   setCustomStaffList,
   setIsPreparingAuth,
-  setSyncAccessKey,
   staffList,
 }) {
   const handleSavePinSettings = useCallback(async ({ staffPin, managementPin, pinPresetVersion = 'custom' }) => {
@@ -334,13 +334,13 @@ export function useStaffAccess({
     };
   }, [setActiveStaffId, setActiveTab, setAuditLog, setAuthSession, staffList, upsertLoginAccount]);
 
-  const handleRecoverManagerAccess = useCallback(async ({ name, pin, recoveryKey }) => {
+  const handleBootstrapManagerAccess = useCallback(async ({ name, pin }) => {
     const managerName = String(name || '').trim();
     const managerId = createStaffMemberId(managerName);
-    const result = await recoverManagerSession({ managerId, name: managerName, pin, recoveryKey });
+    const result = await bootstrapManagerSession({ managerId, name: managerName, pin });
 
     if (!result?.ok) {
-      return { ok: false, message: result?.message || 'Could not recover manager access.' };
+      return { ok: false, message: result?.message || 'Could not create manager access.' };
     }
 
     const managerMember = upsertLoginAccount({
@@ -354,7 +354,7 @@ export function useStaffAccess({
       roleKey: 'manager',
       staffId: managerMember.id,
     }).catch((error) => {
-      console.warn('Could not save recovered Firebase access profile.', error);
+      console.warn('Could not save manager Firebase access profile.', error);
     });
     const nextSession = {
       mode: 'management',
@@ -370,14 +370,14 @@ export function useStaffAccess({
     setActiveTab('dashboard');
     setAuditLog((currentLog) => [
       createAuditLogEntry({
-        action: 'Legacy manager access recovered',
+        action: 'Manager access created',
         user: managerMember.name,
         relatedItem: restaurantName || 'Restaurant',
       }),
       ...currentLog,
     ].slice(0, 500));
 
-    return { ok: true, message: 'Manager access restored.' };
+    return { ok: true, message: 'Manager access created.' };
   }, [restaurantName, setActiveStaffId, setActiveTab, setAuditLog, setAuthSession, upsertLoginAccount]);
 
   const handlePrepareSetupManagerAccess = useCallback(async ({ name, managerPin }) => {
@@ -436,7 +436,6 @@ export function useStaffAccess({
     clearPersistedAuthSession();
     setAuthSession(null);
     setActiveStaffId('');
-    setSyncAccessKey('');
     setActiveTab('dashboard');
 
     if (previousSession?.staffName) {
@@ -456,7 +455,7 @@ export function useStaffAccess({
     if (!result.ok) {
       console.warn(result.message);
     }
-  }, [authSession, setActiveStaffId, setActiveTab, setAuditLog, setAuthSession, setSyncAccessKey]);
+  }, [authSession, setActiveStaffId, setActiveTab, setAuditLog, setAuthSession]);
 
   const handleAddStaff = async (newStaffMember) => {
     const permission = requirePermission(accessProfile, 'canManageStaff', 'manage staff');
@@ -465,27 +464,41 @@ export function useStaffAccess({
       return { ok: false, message: permission.message };
     }
 
-    const nextStaffSection = inferStaffSection(newStaffMember.staffSection || newStaffMember.role);
-    const isManagerAccount = nextStaffSection === 'management' || inferRoleKey(newStaffMember.role) === 'manager' || inferRoleKey(newStaffMember.role) === 'owner';
+    const roleKey = inferRoleKey(newStaffMember.role);
+    const isManagerAccount = inferStaffSection(newStaffMember.staffSection || newStaffMember.role) === 'management'
+      || roleKey === 'manager'
+      || roleKey === 'owner';
+    const nextStaffSection = isManagerAccount ? 'management' : inferStaffSection(newStaffMember.staffSection || newStaffMember.role);
     const chosenStaffPin = String(newStaffMember.staffPin || '').trim();
+    const chosenManagerPin = String(newStaffMember.managerPin || '').trim();
+
+    if (isManagerAccount) {
+      const validationError = validatePin(chosenManagerPin);
+      if (validationError) {
+        return { ok: false, message: validationError };
+      }
+    }
 
     if (!isManagerAccount && !/^\d{5}$/.test(chosenStaffPin)) {
       return { ok: false, message: 'Enter a 5 digit staff PIN.' };
     }
 
-    if (!isManagerAccount) {
-      for (const member of staffList.filter((staffMember) => !staffMember.removed && staffMember.id !== createStaffMemberId(newStaffMember.name))) {
-        const existingStaffCode = sanitizePinRecord(member.staffCode);
+    for (const member of staffList.filter((staffMember) => !staffMember.removed && staffMember.id !== createStaffMemberId(newStaffMember.name))) {
+      const existingPinRecord = sanitizePinRecord(isManagerAccount ? member.managerPin : member.staffCode);
 
-        if (existingStaffCode && await verifyPin(chosenStaffPin, existingStaffCode)) {
-          return { ok: false, message: 'That staff PIN is already in use. Choose another 5 digit PIN.' };
-        }
+      if (existingPinRecord && await verifyPin(isManagerAccount ? chosenManagerPin : chosenStaffPin, existingPinRecord)) {
+        return {
+          ok: false,
+          message: isManagerAccount
+            ? 'That manager PIN is already in use. Choose another PIN.'
+            : 'That staff PIN is already in use. Choose another 5 digit PIN.',
+        };
       }
     }
 
     const generatedStaffCode = isManagerAccount ? '' : chosenStaffPin;
     const staffCodeRecord = generatedStaffCode ? await createPinRecord(generatedStaffCode) : null;
-    const managerPinRecord = isManagerAccount ? await createPinRecord(newStaffMember.managerPin) : null;
+    const managerPinRecord = isManagerAccount ? await createPinRecord(chosenManagerPin) : null;
     const nextStaffMember = {
       ...newStaffMember,
       id: createStaffMemberId(newStaffMember.name),
@@ -574,16 +587,31 @@ export function useStaffAccess({
       removedAt: new Date().toISOString(),
     };
 
-    if (!isManagerAccount) {
-      const accountResult = await saveStaffAccessAccount(removedStaffMember);
-      if (!accountResult.ok) {
-        return { ok: false, message: accountResult.message };
+    if (isManagerAccount) {
+      const activeManagers = staffList.filter((member) => (
+        !member.removed
+        && (member.staffSection === 'management'
+          || inferRoleKey(member.role) === 'manager'
+          || inferRoleKey(member.role) === 'owner')
+      ));
+
+      if (staffId === activeStaffId) {
+        return { ok: false, message: 'You cannot remove the manager account that is currently signed in.' };
       }
-    } else {
+
+      if (activeManagers.length <= 1) {
+        return { ok: false, message: 'Add another manager before removing the last manager account.' };
+      }
+
       try {
         await saveManagerAccount(removedStaffMember);
       } catch (error) {
-        return { ok: false, message: error?.message || 'Could not archive the manager account.' };
+        return { ok: false, message: error?.message || 'Could not remove the manager account.' };
+      }
+    } else {
+      const accountResult = await saveStaffAccessAccount(removedStaffMember);
+      if (!accountResult.ok) {
+        return { ok: false, message: accountResult.message };
       }
     }
 
@@ -627,6 +655,8 @@ export function useStaffAccess({
       }),
       ...prevLog,
     ].slice(0, 500));
+
+    return { ok: true, message: `${staffMember.name} was removed.` };
   };
 
   const handleResetStaffCode = async (staffId) => {
@@ -639,6 +669,57 @@ export function useStaffAccess({
 
     if (!staffMember) {
       return { ok: false, message: 'Staff member not found.' };
+    }
+
+    const isManagerAccount = staffMember.staffSection === 'management'
+      || inferRoleKey(staffMember.role) === 'manager'
+      || inferRoleKey(staffMember.role) === 'owner';
+
+    if (isManagerAccount) {
+      const chosenManagerPin = String(window.prompt(`Enter a new 4 to 8 digit manager PIN for ${staffMember.name}.`, '') || '').trim();
+      const validationError = validatePin(chosenManagerPin);
+
+      if (!chosenManagerPin) {
+        return { ok: false, message: 'PIN reset cancelled.' };
+      }
+
+      if (validationError) {
+        return { ok: false, message: validationError };
+      }
+
+      for (const member of staffList.filter((existingMember) => !existingMember.removed && existingMember.id !== staffId)) {
+        const existingManagerPin = sanitizePinRecord(member.managerPin);
+        if (existingManagerPin && await verifyPin(chosenManagerPin, existingManagerPin)) {
+          return { ok: false, message: 'That manager PIN is already in use. Choose another PIN.' };
+        }
+      }
+
+      const managerPinRecord = await createPinRecord(chosenManagerPin);
+      const updatedManager = { ...staffMember, managerPin: managerPinRecord, isCsvSeed: false };
+
+      try {
+        await saveManagerAccount(updatedManager);
+      } catch (error) {
+        return { ok: false, message: error?.message || 'Could not reset this manager PIN.' };
+      }
+
+      setCustomStaffList(prevStaffList => {
+        const existingIndex = prevStaffList.findIndex((member) => member.id === staffId);
+        return existingIndex === -1
+          ? [...prevStaffList, updatedManager]
+          : prevStaffList.map((member, index) => (index === existingIndex ? { ...member, ...updatedManager } : member));
+      });
+      setAuditLog(prevLog => [
+        createAuditLogEntry({
+          action: 'Manager PIN reset',
+          user: activeStaffMember?.name || 'System',
+          relatedItem: staffMember.name,
+          afterValue: { staffId, managerPinSet: true },
+        }),
+        ...prevLog,
+      ].slice(0, 500));
+
+      return { ok: true, staffName: staffMember.name, message: `New manager PIN set for ${staffMember.name}.` };
     }
 
     const chosenStaffPin = String(window.prompt(`Enter a new 5 digit PIN for ${staffMember.name}.`, '') || '').trim();
@@ -712,7 +793,7 @@ export function useStaffAccess({
     handleLogin,
     handleLogout,
     handlePrepareSetupManagerAccess,
-    handleRecoverManagerAccess,
+    handleBootstrapManagerAccess,
     handleResetStaffCode,
     handleSavePinSettings,
   };

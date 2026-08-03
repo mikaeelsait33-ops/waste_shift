@@ -32,11 +32,11 @@ export function useInvoicePricing({
   setWasteItems,
   wasteItems,
 }) {
-  const handleSaveItemPrice = (priceRecord) => {
+  const handleSaveItemPrice = async (priceRecord) => {
     const permission = requirePermission(accessProfile, 'canManageMenu', 'manage raw ingredient prices');
     if (!permission.ok) {
       alert(permission.message);
-      return;
+      return { ok: false, message: permission.message };
     }
 
     const cleanedRecord = sanitizeItemPriceRecord({
@@ -47,6 +47,19 @@ export function useInvoicePricing({
     if (!cleanedRecord) {
       alert('Enter an ingredient name, price, and unit.');
       return { ok: false, message: 'Enter an ingredient name, price, and unit.' };
+    }
+
+    if (!FIRESTORE_CONFIGURED) {
+      return { ok: false, message: 'Firebase is required before ingredient prices can be saved.' };
+    }
+
+    try {
+      const result = await saveIngredientPriceRecord(cleanedRecord);
+      if (result?.skipped || result?.ok === false) {
+        return { ok: false, message: 'Firebase did not save this ingredient price.' };
+      }
+    } catch (error) {
+      return { ok: false, message: error?.message || 'Could not save this ingredient price to Firebase.' };
     }
 
     const nextCatalog = {
@@ -90,13 +103,6 @@ export function useInvoicePricing({
     });
 
     setItemPriceCatalog(nextCatalog);
-
-    if (FIRESTORE_CONFIGURED) {
-      saveIngredientPriceRecord(cleanedRecord)
-        .catch((error) => {
-          console.warn('Could not sync manual ingredient price to Firebase:', error);
-        });
-    }
 
     if (repricedEntries > 0) {
       setWasteItems(nextWasteItems);
@@ -150,14 +156,20 @@ export function useInvoicePricing({
     const newRecords = records.filter((record) => !findItemPriceRecord(existingCatalog, record.ingredientId || record.name));
 
     if (newRecords.length > 0) {
+      if (!FIRESTORE_CONFIGURED) {
+        return { ok: false, message: 'Firebase is required before ingredients can be created.' };
+      }
+
+      try {
+        await Promise.all(newRecords.map((record) => saveIngredientPriceRecord(record)));
+      } catch (error) {
+        return { ok: false, message: error?.message || 'Could not create the ingredients in Firebase.' };
+      }
+
       setItemPriceCatalog((currentCatalog) => ({
         ...currentCatalog,
         ...Object.fromEntries(newRecords.map((record) => [record.key, record])),
       }));
-
-      if (FIRESTORE_CONFIGURED) {
-        await Promise.all(newRecords.map((record) => saveIngredientPriceRecord(record)));
-      }
 
       setAuditLog((prevLog) => [
         createAuditLogEntry({
@@ -179,27 +191,33 @@ export function useInvoicePricing({
     };
   }, [accessProfile, activeStaffMember?.name, itemPriceCatalog, setAuditLog, setItemPriceCatalog]);
 
-  const handleDeleteItemPrice = (itemPriceKey) => {
+  const handleDeleteItemPrice = async (itemPriceKey) => {
     const permission = requirePermission(accessProfile, 'canManageMenu', 'remove raw ingredient prices');
     if (!permission.ok) {
       alert(permission.message);
-      return;
+      return { ok: false, message: permission.message };
     }
 
     const deletedRecord = itemPriceCatalog[itemPriceKey];
+
+    if (!FIRESTORE_CONFIGURED || !itemPriceKey) {
+      return { ok: false, message: 'Firebase is required before ingredients can be archived.' };
+    }
+
+    try {
+      const result = await deleteIngredient(itemPriceKey);
+      if (result?.skipped || result?.ok === false) {
+        return { ok: false, message: 'Firebase did not archive this ingredient.' };
+      }
+    } catch (error) {
+      return { ok: false, message: error?.message || 'Could not archive this ingredient in Firebase.' };
+    }
 
     setItemPriceCatalog(prevCatalog => {
       const nextCatalog = { ...prevCatalog };
       delete nextCatalog[itemPriceKey];
       return nextCatalog;
     });
-
-    if (FIRESTORE_CONFIGURED && itemPriceKey) {
-      deleteIngredient(itemPriceKey)
-        .catch((error) => {
-          console.warn('Could not delete raw ingredient price from Firebase:', error);
-        });
-    }
 
     if (deletedRecord) {
       setAuditLog(prevLog => [
@@ -212,6 +230,8 @@ export function useInvoicePricing({
         ...prevLog,
       ].slice(0, 500));
     }
+
+    return { ok: true, message: `${deletedRecord?.name || 'Ingredient'} archived.` };
   };
 
   const handleInvoicePricesUpdated = useCallback((invoiceUpdate) => {

@@ -71,12 +71,12 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
     )).length,
   }));
 
-  const handleDeleteClick = (member) => {
+  const handleDeleteClick = async (member) => {
     const seedNote = member.isCsvSeed ? ' This built-in staff member will be hidden from active staff lists.' : '';
 
     if (window.confirm(`Remove ${member.name} from staff options?${seedNote}`)) {
-      onDeleteStaff(member.id);
-      setMessage(`${member.name} removed.`);
+      const result = await onDeleteStaff(member.id);
+      setMessage(result?.message || (result?.ok ? `${member.name} removed.` : `Could not remove ${member.name}.`));
     }
   };
 
@@ -107,32 +107,30 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
       return;
     }
 
-    if (isManagerDraft) {
-      if (!/^\d{4,8}$/.test(managerPin)) {
-        setMessage('Enter a 4 to 8 digit manager PIN.');
-        return;
-      }
+    if (isManagerDraft && !/^\d{4,8}$/.test(managerPin)) {
+      setMessage('Enter a 4 to 8 digit manager PIN.');
+      return;
+    }
 
-      if (managerPin !== confirmManagerPin) {
-        setMessage('Manager PINs do not match.');
-        return;
-      }
-    } else {
-      if (!/^\d{5}$/.test(staffPin)) {
-        setMessage('Enter a 5 digit staff PIN.');
-        return;
-      }
+    if (isManagerDraft && managerPin !== confirmManagerPin) {
+      setMessage('Manager PINs do not match.');
+      return;
+    }
 
-      if (staffPin !== confirmStaffPin) {
-        setMessage('Staff PINs do not match.');
-        return;
-      }
+    if (!isManagerDraft && !/^\d{5}$/.test(staffPin)) {
+      setMessage('Enter a 5 digit staff PIN.');
+      return;
+    }
+
+    if (!isManagerDraft && staffPin !== confirmStaffPin) {
+      setMessage('Staff PINs do not match.');
+      return;
     }
 
     const result = await onAddStaff({
       name: trimmedName,
       role: trimmedRole,
-      staffSection: isManagerDraft ? 'management' : staffSection,
+      staffSection,
       managerPin: isManagerDraft ? managerPin : '',
       staffPin: isManagerDraft ? '' : staffPin,
     });
@@ -163,7 +161,7 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
           <div>
             <p className="eyebrow">Staff setup</p>
             <h2 className="title">Staff Members</h2>
-            <p className="subtitle">Managers add staff profiles and issue personal 5 digit PINs. Staff cannot create their own accounts.</p>
+            <p className="subtitle">Add managers and staff with personal PINs. Every approved manager sees the same restaurant data on every device.</p>
           </div>
           <span className="badge">{safeStaffList.length} total</span>
         </div>
@@ -192,9 +190,9 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
                 className="input"
               />
               <datalist id="staff-role-options">
+                <option value="Manager" />
                 <option value="Kitchen" />
                 <option value="Prep" />
-                <option value="Manager" />
                 <option value="Front of house" />
                 <option value="Bar" />
                 <option value="Barista" />
@@ -207,7 +205,13 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
               <select
                 id="staff-section"
                 value={staffSection}
-                onChange={(event) => setStaffSection(event.target.value)}
+                onChange={(event) => {
+                  const nextSection = event.target.value;
+                  setStaffSection(nextSection);
+                  if (nextSection === 'management' && inferStaffSection(role) !== 'management') {
+                    setRole('Manager');
+                  }
+                }}
                 className="select"
               >
                 {STAFF_SECTIONS.map((section) => (
@@ -263,6 +267,7 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
                   onChange={(event) => setManagerPin(event.target.value)}
                   className="input"
                   autoComplete="new-password"
+                  placeholder="4 to 8 digits"
                 />
               </div>
 
@@ -276,13 +281,16 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
                   onChange={(event) => setConfirmManagerPin(event.target.value)}
                   className="input"
                   autoComplete="new-password"
+                  placeholder="4 to 8 digits"
                 />
               </div>
             </div>
           )}
 
           <button type="submit" className="primary-button" disabled={!accessProfile?.canManageStaff}>
-            {accessProfile?.canManageStaff ? isManagerDraft ? 'Add manager account' : 'Add staff with PIN' : 'Manager only'}
+            {accessProfile?.canManageStaff
+              ? isManagerDraft ? 'Add manager account' : 'Add staff with PIN'
+              : 'Manager only'}
           </button>
         </form>
 
@@ -341,23 +349,21 @@ function StaffSettings({ staffList, onAddStaff, onDeleteStaff, onResetStaffCode,
                   {section.label}
                 </span>
                 {member.isCsvSeed && <span className="badge">CSV</span>}
-                <span className={`badge${section.key === 'management' ? member.managerPin ? ' is-green' : ' is-yellow' : member.staffCode ? ' is-green' : ' is-yellow'}`}>
+                <span className={`badge${section.key === 'management' || member.staffCode ? ' is-green' : ' is-yellow'}`}>
                   {section.key === 'management'
-                    ? member.managerPin ? 'Manager PIN set' : 'No manager PIN'
+                    ? 'Manager PIN set'
                     : member.staffCode ? 'PIN set' : 'No PIN'}
                 </span>
               </div>
               <div className="manager-row">
-                {section.key !== 'management' && (
-                  <button
-                    type="button"
-                    onClick={() => handleResetCodeClick(member)}
-                    className="ghost-button compact-action"
-                    disabled={!accessProfile?.canManageStaff}
-                  >
-                    Reset PIN
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => handleResetCodeClick(member)}
+                  className="ghost-button compact-action"
+                  disabled={!accessProfile?.canManageStaff}
+                >
+                  Reset PIN
+                </button>
                 <button
                   type="button"
                   onClick={() => handleDeleteClick(member)}
@@ -396,7 +402,7 @@ function SecurityPanel({
     ['Export reports/backups', accessProfile?.canExportData],
     ['Manage staff', accessProfile?.canManageStaff],
     ['Manage menu and recipes', accessProfile?.canManageMenu],
-    ['Manage server sync', accessProfile?.canManageServerSync],
+    ['Sync Firebase', accessProfile?.canManageServerSync],
     ['Restore or clear database', accessProfile?.canRestoreDatabase && accessProfile?.canClearData],
   ];
   const handlePinSubmit = async (event) => {
@@ -452,9 +458,9 @@ function SecurityPanel({
 
         <div className="notice-panel notice-panel--warning">
           <div>
-            <h3 className="breakdown-title">Local role safety</h3>
+            <h3 className="breakdown-title">Restaurant access</h3>
             <p className="small-text" style={{ margin: 0 }}>
-              Staff use manager-created 5 digit PINs. Each manager uses their own manager PIN for reports, settings, exports, backup restore, and protected actions.
+              Managers use personal PINs and share access to the same restaurant records. Staff use personal 5 digit PINs with restricted access.
             </p>
           </div>
         </div>
@@ -479,7 +485,7 @@ function SecurityPanel({
           </div>
           <div className="import-summary-grid">
             <span className="badge is-green">Staff PINs per account</span>
-            <span className={`badge${activeStaffMember?.managerPin ? ' is-green' : ' is-yellow'}`}>Active manager PIN {activeStaffMember?.managerPin ? 'set' : 'not set'}</span>
+            <span className="badge is-green">Manager PIN verified by Firebase session</span>
             {authSettings?.updatedAt && <span className="badge">Updated {new Date(authSettings.updatedAt).toLocaleString()}</span>}
           </div>
         </div>
@@ -657,8 +663,6 @@ function Settings({
   menuItems,
   customMenuItems,
   itemPriceCatalog,
-  storeRoomItems,
-  storeRoomMovements,
   portionProfiles,
   activeStaffId,
   activeStaffMember,
@@ -667,9 +671,7 @@ function Settings({
   authSession,
   inventoryMovements,
   auditLog,
-  syncAccessKey,
   firebaseSync,
-  serverSync,
   lastSavedAt,
   onSaveSettings,
   onClearAllWaste,
@@ -684,8 +686,7 @@ function Settings({
   onImportMenuItems,
   onSaveItemPrice,
   onDeleteItemPrice,
-  onSaveToServer,
-  onSaveSyncAccessKey,
+  onSaveToFirebase,
   onSavePinSettings,
   onLogout,
   onRestoreDatabase,
@@ -732,7 +733,7 @@ function Settings({
     { key: 'staff', title: 'Staff', meta: `${staffList.length} active profiles`, text: 'Add staff profiles and issue fast 5 digit PINs.' },
     { key: 'security', title: 'Security', meta: accessProfile?.roleLabel || 'Access', text: 'Update manager PINs and check the current operator.' },
     { key: 'limits', title: 'Limits', meta: `Today ${todayItems.length} entries`, text: 'Set daily and monthly waste guardrails.' },
-    { key: 'database', title: 'Database & Backup', meta: firebaseSync?.status || 'Sync', text: 'Review Firebase, backup, restore, and server sync status.' },
+    { key: 'database', title: 'Database & Backup', meta: firebaseSync?.status || 'Sync', text: 'Review Firebase health and export or restore a restaurant backup.' },
     { key: 'audit', title: 'Audit Log', meta: `${auditLog.length} events`, text: 'Review staff, stock, waste, and inventory history.' },
     { key: 'danger', title: 'Danger Zone', meta: 'Protected', text: 'Reset or clear data only after deliberate confirmation.', danger: true },
   ];
@@ -997,19 +998,14 @@ function Settings({
           menuItems={menuItems}
           customMenuItems={customMenuItems}
           itemPriceCatalog={itemPriceCatalog}
-          storeRoomItems={storeRoomItems}
-          storeRoomMovements={storeRoomMovements}
           portionProfiles={portionProfiles}
           activeStaffId={activeStaffId}
           authSettings={authSettings}
           inventoryMovements={inventoryMovements}
           auditLog={auditLog}
-          syncAccessKey={syncAccessKey}
           accessProfile={accessProfile}
           firebaseSync={firebaseSync}
-          serverSync={serverSync}
-          onSaveToServer={onSaveToServer}
-          onSaveSyncAccessKey={onSaveSyncAccessKey}
+          onSaveToFirebase={onSaveToFirebase}
           lastSavedAt={lastSavedAt}
           onRestoreDatabase={onRestoreDatabase}
         />

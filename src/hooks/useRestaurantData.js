@@ -29,8 +29,6 @@ export function useRestaurantData() {
   const [firestoreMenuItems, setFirestoreMenuItems] = useState([]);
   const [portionProfiles, setPortionProfiles] = useState({});
   const [itemPriceCatalog, setItemPriceCatalog] = useState({});
-  const [storeRoomItems, setStoreRoomItems] = useState([]);
-  const [storeRoomMovements, setStoreRoomMovements] = useState([]);
 
   return {
     activeStaffId,
@@ -60,12 +58,8 @@ export function useRestaurantData() {
     setPortionProfiles,
     setRecipes,
     setSettings,
-    setStoreRoomItems,
-    setStoreRoomMovements,
     setWasteItems,
     settings,
-    storeRoomItems,
-    storeRoomMovements,
     wasteItems,
   };
 }

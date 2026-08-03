@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { loadInvoiceWorkspaceData } from '../services/invoiceFirestore';
+import {
+  loadInvoiceHistoryPage,
+  loadInvoiceWorkspaceData,
+  loadStockMovementPage,
+} from '../services/invoiceFirestore';
 import {
   createAccountingExport,
   createShiftSummaryReport,
@@ -20,13 +24,15 @@ const downloadTextFile = (filename, content, type = 'text/plain') => {
   URL.revokeObjectURL(url);
 };
 
-function Reports({ wasteItems, storeRoomMovements, activeStaffMember, accessProfile }) {
+function Reports({ wasteItems, activeStaffMember, accessProfile }) {
   const today = getToday();
   const [startDate, setStartDate] = useState(today);
   const [endDate, setEndDate] = useState(today);
   const [notes, setNotes] = useState('');
   const [includeLineItems, setIncludeLineItems] = useState(false);
   const [invoices, setInvoices] = useState([]);
+  const [stockMovements, setStockMovements] = useState([]);
+  const [isLoadingReportData, setIsLoadingReportData] = useState(false);
   const [message, setMessage] = useState('');
   const canExport = Boolean(accessProfile?.canExportData || accessProfile?.canViewFinancials);
 
@@ -37,15 +43,41 @@ function Reports({ wasteItems, storeRoomMovements, activeStaffMember, accessProf
       return () => {};
     }
 
+    setIsLoadingReportData(true);
     loadInvoiceWorkspaceData()
-      .then((workspaceData) => {
+      .then(async (workspaceData) => {
+        const allInvoices = [...(Array.isArray(workspaceData?.invoices) ? workspaceData.invoices : [])];
+        const allStockMovements = [...(Array.isArray(workspaceData?.stockMovements) ? workspaceData.stockMovements : [])];
+        let invoicePage = workspaceData?.pagination?.invoices || {};
+        let stockPage = workspaceData?.pagination?.stockMovements || {};
+
+        while (invoicePage.hasMore && allInvoices.length < 1000) {
+          const nextPage = await loadInvoiceHistoryPage({ cursor: invoicePage.cursor, pageSize: 150 });
+          allInvoices.push(...nextPage.records);
+          invoicePage = nextPage;
+        }
+        while (stockPage.hasMore && allStockMovements.length < 1000) {
+          const nextPage = await loadStockMovementPage({ cursor: stockPage.cursor, pageSize: 250 });
+          allStockMovements.push(...nextPage.records);
+          stockPage = nextPage;
+        }
+
         if (isMounted) {
-          setInvoices(Array.isArray(workspaceData?.invoices) ? workspaceData.invoices : []);
+          setInvoices(allInvoices);
+          setStockMovements(allStockMovements);
+          if (invoicePage.hasMore || stockPage.hasMore) {
+            setMessage('Report data reached the 1,000-record beta export limit. Narrow the date range for a complete export.');
+          }
         }
       })
       .catch((error) => {
         if (isMounted) {
           setMessage(error?.message || 'Could not load invoice data for reports.');
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsLoadingReportData(false);
         }
       });
 
@@ -57,12 +89,12 @@ function Reports({ wasteItems, storeRoomMovements, activeStaffMember, accessProf
   const shiftSummary = useMemo(() => createShiftSummaryReport({
     wasteItems,
     invoices,
-    stockMovements: storeRoomMovements,
+    stockMovements,
     startDate,
     endDate,
     preparedBy: activeStaffMember?.name || '',
     notes,
-  }), [activeStaffMember?.name, endDate, invoices, notes, startDate, storeRoomMovements, wasteItems]);
+  }), [activeStaffMember?.name, endDate, invoices, notes, startDate, stockMovements, wasteItems]);
 
   const accountingExport = useMemo(() => createAccountingExport({
     invoices,
@@ -70,6 +102,17 @@ function Reports({ wasteItems, storeRoomMovements, activeStaffMember, accessProf
     endDate,
     includeLineItems,
   }), [endDate, includeLineItems, invoices, startDate]);
+  const accountingTotals = useMemo(() => accountingExport.supplierTotals.reduce((totals, supplier) => ({
+    invoiceCount: totals.invoiceCount + Number(supplier.invoiceCount || 0),
+    totalExVAT: totals.totalExVAT + Number(supplier.totalExVAT || 0),
+    vatAmount: totals.vatAmount + Number(supplier.vatAmount || 0),
+    totalIncVAT: totals.totalIncVAT + Number(supplier.totalIncVAT || 0),
+  }), {
+    invoiceCount: 0,
+    totalExVAT: 0,
+    vatAmount: 0,
+    totalIncVAT: 0,
+  }), [accountingExport.supplierTotals]);
 
   const handleCopySummary = async () => {
     await navigator.clipboard.writeText(createShiftSummaryText(shiftSummary));
@@ -131,7 +174,7 @@ function Reports({ wasteItems, storeRoomMovements, activeStaffMember, accessProf
           <h2 className="title">Owner & Accounting Exports</h2>
           <p className="subtitle">Prepare end-of-shift summaries and invoice exports from one place.</p>
         </div>
-        <span className="badge">{accountingExport.rows.length} accounting rows</span>
+        <span className="badge">{isLoadingReportData ? 'Loading Firebase records...' : `${accountingExport.rows.length} accounting rows`}</span>
       </div>
 
       <div className="toolbar">
@@ -158,6 +201,8 @@ function Reports({ wasteItems, storeRoomMovements, activeStaffMember, accessProf
             <div className="metric-card"><span className="metric-value is-danger">R{shiftSummary.totals.foodCostLost.toFixed(2)}</span><span className="metric-label">Food cost lost</span></div>
             <div className="metric-card"><span className="metric-value">R{shiftSummary.totals.potentialRevenueLost.toFixed(2)}</span><span className="metric-label">Revenue lost</span></div>
             <div className="metric-card"><span className="metric-value">R{shiftSummary.totals.grossProfitLost.toFixed(2)}</span><span className="metric-label">Gross profit lost</span></div>
+            <div className="metric-card"><span className="metric-value">{shiftSummary.totals.invoiceCount}</span><span className="metric-label">Invoices</span></div>
+            <div className="metric-card"><span className="metric-value">{shiftSummary.totals.stockMovementCount}</span><span className="metric-label">Stock movements</span></div>
           </div>
 
           <div className="breakdown-grid">
@@ -198,6 +243,13 @@ function Reports({ wasteItems, storeRoomMovements, activeStaffMember, accessProf
           <div className="manager-row">
             <button type="button" className="primary-button" onClick={handleDownloadAccountingCsv} disabled={accountingExport.rows.length === 0}>Download accounting CSV</button>
             <button type="button" className="ghost-button" onClick={handleDownloadJson}>Download JSON backup</button>
+          </div>
+
+          <div className="metrics-grid" style={{ marginTop: 16 }}>
+            <div className="metric-card"><span className="metric-value">{accountingTotals.invoiceCount}</span><span className="metric-label">Invoices</span></div>
+            <div className="metric-card"><span className="metric-value">R{accountingTotals.totalExVAT.toFixed(2)}</span><span className="metric-label">Spend excl VAT</span></div>
+            <div className="metric-card"><span className="metric-value">R{accountingTotals.vatAmount.toFixed(2)}</span><span className="metric-label">VAT</span></div>
+            <div className="metric-card"><span className="metric-value">R{accountingTotals.totalIncVAT.toFixed(2)}</span><span className="metric-label">Spend incl VAT</span></div>
           </div>
 
           {message && <div className="empty-state">{message}</div>}

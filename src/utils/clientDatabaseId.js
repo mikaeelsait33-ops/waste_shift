@@ -19,7 +19,7 @@ const createClientDatabaseId = () => {
   return normalizeDatabaseId(`ws_${Date.now().toString(36)}_${randomPart}`);
 };
 
-const removeLegacyDatabaseQuery = () => {
+export const removeLegacyDatabaseQuery = () => {
   if (typeof window === 'undefined' || !window.history?.replaceState) {
     return;
   }

@@ -1,10 +1,20 @@
+import {
+  Boxes,
+  CookingPot,
+  LayoutDashboard,
+  LockKeyhole,
+  Plus,
+  Settings2,
+  Trash2,
+} from 'lucide-react';
+
 const navItems = [
-  { key: 'dashboard', label: 'Dashboard', shortLabel: 'Home', marker: 'D' },
-  { key: 'logWaste', label: 'Log Waste', shortLabel: 'Log', marker: '+' },
-  { key: 'wasteLog', label: 'Waste Log', shortLabel: 'Waste', marker: 'W' },
-  { key: 'inventory', label: 'Inventory', shortLabel: 'Stock', marker: 'I' },
-  { key: 'menuPricing', label: 'Menu & Pricing', shortLabel: 'Menu', marker: 'M' },
-  { key: 'settings', label: 'Settings', shortLabel: 'More', marker: 'S' },
+  { key: 'dashboard', label: 'Dashboard', shortLabel: 'Home', icon: LayoutDashboard },
+  { key: 'logWaste', label: 'Log Waste', shortLabel: 'Log', icon: Plus },
+  { key: 'wasteLog', label: 'Waste Log', shortLabel: 'Waste', icon: Trash2 },
+  { key: 'inventory', label: 'Inventory', shortLabel: 'Stock', icon: Boxes },
+  { key: 'menuPricing', label: 'Menu & Pricing', shortLabel: 'Menu', icon: CookingPot },
+  { key: 'settings', label: 'Settings', shortLabel: 'More', icon: Settings2 },
 ];
 
 function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, accessProfile, onLogout }) {
@@ -51,7 +61,8 @@ function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, acc
               className="quick-log-button"
               onClick={() => onNavigate('logWaste')}
             >
-              + Log Waste
+              <Plus size={17} strokeWidth={2.4} aria-hidden="true" />
+              <span>Log Waste</span>
             </button>
           </div>
         </div>
@@ -65,16 +76,17 @@ function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, acc
         <div className="nav-links" aria-label="Primary navigation">
           {visibleNavItems.map((item) => {
             const isActive = itemIsActive(item);
+            const Icon = item.icon;
 
             return (
               <button
                 key={item.key}
                 type="button"
-                className={`nav-button${isActive ? ' is-active' : ''}${item.key === 'logWaste' ? ' is-primary' : ''}`}
+                className={`nav-button${isActive ? ' is-active' : ''}`}
                 onClick={() => onNavigate(item.key)}
                 aria-current={isActive ? 'page' : undefined}
               >
-                <span className="nav-marker">{item.marker}</span>
+                <span className="nav-marker"><Icon size={17} strokeWidth={2.1} aria-hidden="true" /></span>
                 <span>{item.label}</span>
                 {item.key === 'wasteLog' && wasteCount > 0 && (
                   <span className="nav-count">{wasteCount}</span>
@@ -87,7 +99,7 @@ function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, acc
             className="nav-button"
             onClick={onLogout}
           >
-            <span className="nav-marker">L</span>
+            <span className="nav-marker"><LockKeyhole size={17} strokeWidth={2.1} aria-hidden="true" /></span>
             <span>Lock</span>
           </button>
         </div>
@@ -96,6 +108,7 @@ function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, acc
       <nav className="bottom-nav" aria-label="Mobile navigation">
         {mobileNavItems.map((item) => {
           const isActive = itemIsActive(item);
+          const Icon = item.icon;
 
           return (
             <button
@@ -105,7 +118,7 @@ function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, acc
               onClick={() => onNavigate(item.key)}
               aria-current={isActive ? 'page' : undefined}
             >
-              <span className="bottom-nav-marker">{item.marker}</span>
+              <span className="bottom-nav-marker"><Icon size={18} strokeWidth={2.2} aria-hidden="true" /></span>
               <span>{item.shortLabel}</span>
             </button>
           );

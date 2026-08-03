@@ -31,6 +31,8 @@ const server = await createServer({
 try {
   await server.listen();
   server.printUrls();
+  await server.transformRequest('/src/main.jsx');
+  await server.transformRequest('/src/e2e/WorkspaceHarness.jsx');
   await run(process.execPath, ['./node_modules/@playwright/test/cli.js', 'test']);
   await run(process.execPath, ['scripts/e2e-smoke.test.mjs']);
 } finally {

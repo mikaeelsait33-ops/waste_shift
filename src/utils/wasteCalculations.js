@@ -1,4 +1,10 @@
-import { calculateRecipeIngredientCost } from './itemPriceCatalog.js';
+import {
+  UNIT_CONVERSIONS,
+  calculateRecipeIngredientCost,
+  getBaseUnitForPriceUnit,
+  normalizeItemPriceUnit,
+  parseIngredientQuantity,
+} from './itemPriceCatalog.js';
 import { isWasteEntryVoided } from './wasteSync.js';
 
 export const WASTE_REASONS = [
@@ -312,4 +318,82 @@ export const createInventoryMovementsFromEntry = (entry) => {
     unit: entry.measuredUnit || entry.unit || '',
     costImpact: getEntryFoodCostLost(entry),
   }];
+};
+
+const createStockDeduction = ({
+  ingredientId,
+  ingredientName,
+  quantity,
+  unit,
+  cost = 0,
+}) => {
+  const safeIngredientId = String(ingredientId || '').trim();
+  const safeQuantity = Number(quantity);
+  const normalizedUnit = normalizeItemPriceUnit(unit);
+  const unitMeta = UNIT_CONVERSIONS[normalizedUnit];
+  const baseUnit = getBaseUnitForPriceUnit(normalizedUnit);
+  const baseMeta = UNIT_CONVERSIONS[baseUnit];
+
+  if (
+    !safeIngredientId
+    || !Number.isFinite(safeQuantity)
+    || safeQuantity <= 0
+    || !unitMeta
+    || !baseMeta
+    || unitMeta.family !== baseMeta.family
+  ) {
+    return null;
+  }
+
+  return {
+    ingredientId: safeIngredientId,
+    ingredientName: String(ingredientName || '').trim() || safeIngredientId,
+    quantityBase: Math.round((safeQuantity * (unitMeta.factor / baseMeta.factor)) * 10000) / 10000,
+    baseUnit,
+    cost: roundCurrency(cost),
+  };
+};
+
+export const buildWasteStockDeductions = (entry) => {
+  if (!entry || isWasteEntryVoided(entry)) {
+    return [];
+  }
+
+  if (entry.itemType === 'ingredient' || !entry.isRecipe) {
+    const deduction = createStockDeduction({
+      ingredientId: entry.ingredientId || entry.priceCatalogKey,
+      ingredientName: entry.name,
+      quantity: entry.measuredQuantity ?? entry.quantity,
+      unit: entry.measuredUnit || entry.unit,
+      cost: entry.foodCostLost ?? entry.cost,
+    });
+
+    return deduction ? [deduction] : [];
+  }
+
+  return (Array.isArray(entry.ingredients) ? entry.ingredients : [])
+    .map((ingredient) => {
+      const parsedQuantity = parseIngredientQuantity(ingredient?.quantity)
+        || (
+          Number(ingredient?.quantityValue) > 0
+            ? {
+                quantity: Number(ingredient.quantityValue),
+                unit: normalizeItemPriceUnit(ingredient.unit),
+              }
+            : null
+        );
+
+      if (!parsedQuantity) {
+        return null;
+      }
+
+      return createStockDeduction({
+        ingredientId: ingredient.ingredientId || ingredient.priceCatalogKey,
+        ingredientName: ingredient.name,
+        quantity: parsedQuantity.quantity,
+        unit: parsedQuantity.unit,
+        cost: ingredient.cost,
+      });
+    })
+    .filter(Boolean);
 };

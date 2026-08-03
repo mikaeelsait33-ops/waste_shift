@@ -25,7 +25,7 @@ const managerSession = await read('../src/services/managerSession.js');
 assert.match(app, /activeTab === 'dashboard'/);
 assert.match(app, /activeTab === 'logWaste'/);
 assert.match(app, /activeTab === 'wasteLog'/);
-assert.match(app, /activeTab === 'invoices'/);
+assert.match(app, /activeTab === 'inventory'/);
 assert.match(app, /activeTab === 'settings'/);
 assert.match(app, /onResetRestaurantData/);
 assert.match(app, /WIPE MENU/);
@@ -46,6 +46,8 @@ assert.match(wasteForm, /Repeat last/);
 assert.match(wasteForm, /selectedComponentKeys/);
 assert.match(wasteForm, /Retry sync/);
 assert.match(wasteForm, /Clear form/);
+assert.match(wasteForm, /buildWasteStockDeductions/);
+assert.match(wasteForm, /isOnline/);
 
 assert.match(dashboard, /Today At A Glance/);
 assert.match(dashboard, /Invoice & Stock Signals/);
@@ -89,5 +91,7 @@ assert.match(invoiceScanner, /visibilitychange/);
 assert.match(invoiceScanner, /pending_stock_post/);
 assert.match(invoiceScanner, /Post stock/);
 assert.match(invoiceScanner, /refreshWorkspaceInBackground/);
+assert.match(invoiceScanner, /adjustIngredientStock/);
+assert.match(invoiceScanner, /Stock adjustment/);
 
 console.log('E2E smoke checks passed');

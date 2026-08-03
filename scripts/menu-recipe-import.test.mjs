@@ -120,7 +120,7 @@ assert.equal(clientMergedPayload.items.length, 2);
 
 const generationConfig = createGeminiGenerationConfig('gemini-2.5-flash-lite');
 assert.equal(generationConfig.thinkingConfig.thinkingBudget, 0);
-assert.equal(generationConfig.maxOutputTokens, 8192);
+assert.equal(generationConfig.maxOutputTokens, 32768);
 
 const mergedPayload = mergeGeminiMenuPayloads([
   {
@@ -186,6 +186,9 @@ const appSource = [
 const firestoreMenuSource = await readFile(new URL('../src/services/firestoreMenuItems.js', import.meta.url), 'utf8');
 const menuImportSource = await readFile(new URL('../src/components/MenuImport.jsx', import.meta.url), 'utf8');
 const geminiMenuImportSource = await readFile(new URL('../src/services/geminiMenuImport.js', import.meta.url), 'utf8');
+const vercelGuideImportSource = await readFile(new URL('../src/services/vercelGeminiMenuImport.js', import.meta.url), 'utf8');
+const guideUploadApiSource = await readFile(new URL('../api/gemini-menu-upload.js', import.meta.url), 'utf8');
+const geminiMenuApiSource = await readFile(new URL('../api/gemini-menu.js', import.meta.url), 'utf8');
 
 assert.match(recipeManagerSource, /make-line guide together/);
 assert.match(recipeManagerSource, /Bulk add menu items/);
@@ -202,9 +205,16 @@ assert.match(appSource, /saveFirestoreMenuItem\(\{/);
 assert.match(firestoreMenuSource, /category: toSafeString\(category\)/);
 assert.match(menuImportSource, /Upload make-line guide/);
 assert.match(menuImportSource, /make-line-guide-file-gemini/);
-assert.match(menuImportSource, /prepareMakeLineGuideFilePayloads/);
-assert.match(menuImportSource, /fileBatches: preparedGuide\.fileBatches/);
+assert.match(menuImportSource, /uploadMakeLineGuideToVercel/);
+assert.match(menuImportSource, /vercelGeminiMenuImport/);
 assert.doesNotMatch(menuImportSource, /scan-document/);
+assert.match(vercelGuideImportSource, /@vercel\/blob\/client/);
+assert.match(vercelGuideImportSource, /handleUploadUrl: '\/api\/gemini-menu-upload'/);
+assert.match(guideUploadApiSource, /authorizeManagerSessionRequest/);
+assert.match(guideUploadApiSource, /maximumSizeInBytes: MAX_SOURCE_BYTES/);
+assert.match(geminiMenuApiSource, /uploadStoredGuideToGemini/);
+assert.match(geminiMenuApiSource, /blobPathname/);
+assert.match(geminiMenuApiSource, /del\(blobPathname\)/);
 assert.match(geminiMenuImportSource, /AbortController/);
 assert.match(geminiMenuImportSource, /response\?\.status === 504/);
 assert.match(geminiMenuImportSource, /response\?\.status === 413/);

@@ -6,6 +6,7 @@ import {
 } from '../utils/itemPriceCatalog';
 import {
   buildRecipeIngredientBreakdown,
+  buildWasteStockDeductions,
   DEFAULT_WASTE_CLASSIFICATION,
   WASTE_CATEGORY_OPTIONS,
   WASTE_CLASSIFICATION_OPTIONS,
@@ -207,6 +208,7 @@ function WasteForm({
   activeStaffId,
   onActiveStaffChange,
   onRetryEntrySync,
+  isOnline = true,
 }) {
   const [formType, setFormType] = useState('single');
   const [menuSearch, setMenuSearch] = useState('');
@@ -399,7 +401,7 @@ function WasteForm({
       ? `${selectedRecipeComponentCount} of ${allRecipeComponents.length} components`
       : 'Full item'
     : '';
-  const submitIsDisabled = isSavingEntry || isProcessingPhoto || (formType === 'recipe' && safeMenuItems.length === 0);
+  const submitIsDisabled = !isOnline || isSavingEntry || isProcessingPhoto || (formType === 'recipe' && safeMenuItems.length === 0);
   const smartSubmitCanShow = smartSubmitVisible && Boolean(activeWasteItem.name) && !submitIsDisabled;
   const quickReasonOptions = useMemo(() => (
     Array.from(new Set([
@@ -690,9 +692,15 @@ function WasteForm({
 
     try {
       const result = await onAddEntry(repeatedEntry);
+      if (result?.ok === false) {
+        setFormMessage(result.message || 'Could not save the repeated entry.');
+        return;
+      }
       setLastSavedEntryId(repeatedEntry.id);
       setFormMessage(
-        result?.syncStatus === 'failed'
+        result?.warning
+          ? `Repeated ${lastEntry.name}. ${result.warning}`
+          : result?.syncStatus === 'failed'
           ? `Repeated ${lastEntry.name}. Sync failed; retry before leaving this screen.`
           : result?.syncStatus === 'pending'
             ? `Repeated ${lastEntry.name}. It will sync when online.`
@@ -851,6 +859,7 @@ function WasteForm({
         grossProfitLost: 0,
         foodCostPercentage: null,
         costStatus,
+        ingredientId: activeItemPriceRecord?.ingredientId || activeItemPriceRecord?.key || '',
         priceCatalogKey: activeItemPriceRecord?.key || '',
         pricePerUnit: activeItemPriceRecord?.price ?? null,
         priceUnit: activeItemPriceRecord?.unit || '',
@@ -900,6 +909,11 @@ function WasteForm({
       };
     }
 
+    finalEntry = {
+      ...finalEntry,
+      stockDeductions: buildWasteStockDeductions(finalEntry),
+    };
+
     submitInFlightRef.current = true;
     setIsSavingEntry(true);
     setFormMessage('Saving waste entry...');
@@ -920,7 +934,9 @@ function WasteForm({
 
     setLastSavedEntryId(finalEntry.id);
     setFormMessage(
-      saveResult?.syncStatus === 'failed'
+      saveResult?.warning
+        ? `Logged ${finalEntry.name}. ${saveResult.warning}`
+        : saveResult?.syncStatus === 'failed'
         ? `Logged ${finalEntry.name} in this session. Sync failed; use retry before leaving.`
         : saveResult?.syncStatus === 'pending'
           ? `Logged ${finalEntry.name}. It will sync when online.`
@@ -954,6 +970,12 @@ function WasteForm({
             </button>
           </div>
         </div>
+
+        {!isOnline && (
+          <div className="notice-panel notice-panel--warning" role="status">
+            This device is offline. Reconnect before logging waste so the entry is safely saved for every device.
+          </div>
+        )}
 
         <div className="segmented-control" aria-label="Waste entry type" style={{ marginBottom: '16px' }}>
           <button

@@ -50,24 +50,24 @@ export const revokeManagerSession = async () => {
   }
 };
 
-export const recoverManagerSession = async ({ managerId, name, pin, recoveryKey } = {}) => {
+export const bootstrapManagerSession = async ({ managerId, name, pin } = {}) => {
   try {
-    const response = await fetch('/api/manager-recovery', {
+    const response = await fetch('/api/manager-bootstrap', {
       method: 'POST',
       headers: await getAutomaticManagerApiHeaders({ 'content-type': 'application/json' }),
-      body: JSON.stringify({ managerId, name, pin, recoveryKey }),
+      body: JSON.stringify({ managerId, name, pin }),
     });
     const payload = await response.json().catch(() => ({}));
 
     if (!response.ok || payload?.ok === false) {
       return {
         ok: false,
-        message: getManagerApiErrorMessage(payload, 'Could not recover manager access.'),
+        message: getManagerApiErrorMessage(payload, 'Could not create manager access.'),
       };
     }
 
     return payload;
   } catch (error) {
-    return { ok: false, message: error?.message || 'Could not recover manager access.' };
+    return { ok: false, message: error?.message || 'Could not create manager access.' };
   }
 };
