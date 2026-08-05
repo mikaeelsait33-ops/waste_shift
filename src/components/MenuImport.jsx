@@ -417,9 +417,8 @@ function MenuImport({
       <div className={compact ? '' : 'panel-body'}>
         <div className="section-header">
           <div>
-            <p className="eyebrow">Make-line guide</p>
-            <h2 className="title">Import Recipes With Gemini</h2>
-            <p className="subtitle">Upload or paste a make-line guide. Gemini extracts dishes and exact portions from the guide only.</p>
+            <h2 className="title">Import guide</h2>
+            <p className="subtitle">Paste text or upload a photo or PDF.</p>
           </div>
           <span className="badge">{saveableCount} ready</span>
         </div>
@@ -445,7 +444,7 @@ function MenuImport({
               rows={compact ? 4 : 7}
             />
             <button type="button" className="primary-button" onClick={extractFromText} disabled={isExtracting || isSaving || !canUseAiImports}>
-              {isExtracting ? 'Extracting...' : 'Build recipes'}
+              {isExtracting ? 'Reading guide...' : 'Read guide'}
             </button>
           </div>
         ) : (

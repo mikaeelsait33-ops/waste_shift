@@ -754,9 +754,7 @@ function Settings({
       <div className="settings-controls">
         <div className="section-header settings-page-header">
           <div>
-            <p className="eyebrow">Settings</p>
-            <h2 className="title">Setup & Controls</h2>
-            <p className="subtitle">Manage limits, staff, menu items, data health, and high-impact actions.</p>
+            <h2 className="title">Settings</h2>
           </div>
         </div>
 

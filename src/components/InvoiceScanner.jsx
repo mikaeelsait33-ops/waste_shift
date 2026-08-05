@@ -2351,19 +2351,17 @@ function InvoiceScanner({
     <section className="invoice-scanner-page">
       <div className="section-header">
         <div>
-          <p className="eyebrow">Invoices</p>
-          <h2 className="title">Invoice Workflow</h2>
-          <p className="subtitle">Upload, review, match ingredients, then confirm prices and stock in one guided flow.</p>
+          <h2 className="title">Invoices</h2>
         </div>
         <div className="segmented-control" aria-label="Invoice views">
           <button type="button" className={`segment-button${activeView === 'entry' ? ' is-active' : ''}`} onClick={() => setActiveView('entry')}>
-            Upload & Review
+            New invoice
           </button>
           <button type="button" className={`segment-button${activeView === 'ingredients' ? ' is-active' : ''}`} onClick={() => setActiveView('ingredients')}>
-            Raw ingredients
+            Ingredients
           </button>
           <button type="button" className={`segment-button${activeView === 'history' ? ' is-active' : ''}`} onClick={() => setActiveView('history')}>
-            Processed invoices
+            Processed
           </button>
           <button type="button" className={`segment-button${activeView === 'stock' ? ' is-active' : ''}`} onClick={() => setActiveView('stock')}>
             Stock
@@ -2398,13 +2396,17 @@ function InvoiceScanner({
 
       {activeView === 'entry' && (
         <>
+          <ol className="flow-steps" aria-label="Invoice steps">
+            <li className={lineItems.length === 0 ? 'is-current' : 'is-complete'}><span>1</span><strong>Upload</strong></li>
+            <li className={lineItems.length > 0 ? 'is-current' : ''}><span>2</span><strong>Review</strong></li>
+            <li><span>3</span><strong>Post</strong></li>
+          </ol>
           <div className="invoice-entry-grid">
             <section className="panel">
               <div className="panel-body">
                 <div className="section-header">
                   <div>
-                    <p className="eyebrow">Invoice details</p>
-                    <h2 className="title">Header</h2>
+                    <h2 className="title">Invoice details</h2>
                   </div>
                 </div>
 
@@ -2519,9 +2521,8 @@ function InvoiceScanner({
               <div className="panel-body">
                 <div className="section-header">
                   <div>
-                    <p className="eyebrow">Capture</p>
-                    <h2 className="title">Scan or Add Lines</h2>
-                    <p className="subtitle">Read invoice photos, PDFs, or CSV files into editable lines. Nothing saves until you confirm.</p>
+                    <h2 className="title">Upload invoice</h2>
+                    <p className="subtitle">Photo, PDF, or CSV.</p>
                   </div>
                   <span className="badge">{lineItems.length} lines</span>
                 </div>
@@ -2726,9 +2727,7 @@ function InvoiceScanner({
             <div className="panel-body">
               <div className="section-header">
                 <div>
-                  <p className="eyebrow">Line items</p>
-                  <h2 className="title">Review Invoice Lines</h2>
-                  <p className="subtitle">Every field is editable before save. New ingredients are flagged for setup.</p>
+                  <h2 className="title">Review items</h2>
                 </div>
                 <div className="manager-row">
                   <span className="badge is-green">{matchedCount} matched</span>
@@ -2969,8 +2968,7 @@ function InvoiceScanner({
             <div className="panel-body">
               <div className="section-header">
                 <div>
-                  <p className="eyebrow">Confirm</p>
-                  <h2 className="title">Save Invoice</h2>
+                  <h2 className="title">Post invoice</h2>
                 </div>
                 <span className="badge">{lineItems.length} lines</span>
               </div>

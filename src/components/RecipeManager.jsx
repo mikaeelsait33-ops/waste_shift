@@ -119,6 +119,7 @@ function RecipeManager({
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [bulkMenuText, setBulkMenuText] = useState('');
   const [isSavingRecipe, setIsSavingRecipe] = useState(false);
+  const [activeWorkspace, setActiveWorkspace] = useState('import');
   const safeItemPriceCatalog = useMemo(() => sanitizeItemPriceCatalog(itemPriceCatalog), [itemPriceCatalog]);
   const ingredientPriceOptions = useMemo(() => (
     Object.values(safeItemPriceCatalog)
@@ -272,6 +273,7 @@ function RecipeManager({
     setIngredients(editableIngredients);
     setIngredientsOpen(true);
     setMessage(`Editing ${item.name || 'menu item'}.`);
+    setActiveWorkspace('create');
   };
 
   const handleDuplicateItem = (item) => {
@@ -293,6 +295,7 @@ function RecipeManager({
     setIngredients(copiedIngredients);
     setIngredientsOpen(copiedIngredients.some((ingredient) => ingredient.name || ingredient.ingredientId));
     setMessage(`Duplicating ${item.name || 'menu item'}.`);
+    setActiveWorkspace('create');
   };
 
   const handleBulkAdd = () => {
@@ -472,23 +475,38 @@ function RecipeManager({
 
   return (
     <section className="inventory-section">
-      <MenuImport
-        existingMenuItems={safeMenuItems}
-        itemPriceCatalog={safeItemPriceCatalog}
-        accessProfile={accessProfile}
-        activeStaffMember={activeStaffMember}
-        onSaveApprovedItems={onImportMenuItems}
-        onCreateCatalogItem={onCreateCatalogItem}
-        onCreateCatalogItems={onCreateCatalogItems}
-      />
+      <div className="workspace-switcher">
+        <div className="segmented-control" aria-label="Menu tasks">
+          <button type="button" className={`segment-button${activeWorkspace === 'import' ? ' is-active' : ''}`} onClick={() => setActiveWorkspace('import')}>
+            Import guide
+          </button>
+          <button type="button" className={`segment-button${activeWorkspace === 'create' ? ' is-active' : ''}`} onClick={() => setActiveWorkspace('create')}>
+            Add item
+          </button>
+          <button type="button" className={`segment-button${activeWorkspace === 'library' ? ' is-active' : ''}`} onClick={() => setActiveWorkspace('library')}>
+            Library <span className="tab-count">{catalogEntries.length}</span>
+          </button>
+        </div>
+      </div>
 
+      {activeWorkspace === 'import' && (
+        <MenuImport
+          existingMenuItems={safeMenuItems}
+          itemPriceCatalog={safeItemPriceCatalog}
+          accessProfile={accessProfile}
+          activeStaffMember={activeStaffMember}
+          onSaveApprovedItems={onImportMenuItems}
+          onCreateCatalogItem={onCreateCatalogItem}
+          onCreateCatalogItems={onCreateCatalogItems}
+        />
+      )}
+
+      {activeWorkspace === 'create' && (
       <form onSubmit={handleSubmitRecipe} className="panel">
         <div className="panel-body">
           <div className="section-header">
             <div>
-              <p className="eyebrow">Menu setup</p>
-              <h2 className="title">{editingKey ? 'Edit Menu Item' : 'Menu Item Creator'}</h2>
-              <p className="subtitle">Save the dish and make-line guide together for accurate costing and raw waste logging.</p>
+              <h2 className="title">{editingKey ? 'Edit item' : 'Add menu item'}</h2>
             </div>
             {editingKey && (
               <button type="button" onClick={resetRecipeForm} className="ghost-button">
@@ -718,14 +736,14 @@ function RecipeManager({
           )}
         </div>
       </form>
+      )}
 
+      {activeWorkspace === 'library' && (
       <div className="panel">
         <div className="panel-body">
           <div className="section-header">
             <div>
-              <p className="eyebrow">Menu catalog</p>
-              <h2 className="title">Menu Items & Recipes</h2>
-              <p className="subtitle">Menu pricing and ingredient breakdowns used when logging waste.</p>
+              <h2 className="title">Menu library</h2>
             </div>
             <div className="manager-row">
               <span className="badge">{filteredCatalogEntries.length} shown</span>
@@ -847,6 +865,7 @@ function RecipeManager({
           )}
         </div>
       </div>
+      )}
     </section>
   );
 }

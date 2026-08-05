@@ -1,19 +1,19 @@
 import {
-  Boxes,
+  ClipboardList,
   CookingPot,
-  LayoutDashboard,
+  Home,
   LockKeyhole,
   Plus,
+  ReceiptText,
   Settings2,
-  Trash2,
 } from 'lucide-react';
 
 const navItems = [
-  { key: 'dashboard', label: 'Dashboard', shortLabel: 'Home', icon: LayoutDashboard },
-  { key: 'logWaste', label: 'Log Waste', shortLabel: 'Log', icon: Plus },
-  { key: 'wasteLog', label: 'Waste Log', shortLabel: 'Waste', icon: Trash2 },
-  { key: 'inventory', label: 'Inventory', shortLabel: 'Stock', icon: Boxes },
-  { key: 'menuPricing', label: 'Menu & Pricing', shortLabel: 'Menu', icon: CookingPot },
+  { key: 'dashboard', label: 'Home', shortLabel: 'Home', icon: Home },
+  { key: 'logWaste', label: 'Log waste', shortLabel: 'Log', icon: Plus },
+  { key: 'wasteLog', label: 'History', shortLabel: 'History', icon: ClipboardList },
+  { key: 'inventory', label: 'Invoices', shortLabel: 'Invoices', icon: ReceiptText },
+  { key: 'menuPricing', label: 'Menu', shortLabel: 'Menu', icon: CookingPot },
   { key: 'settings', label: 'Settings', shortLabel: 'More', icon: Settings2 },
 ];
 
@@ -51,7 +51,7 @@ function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, acc
             <span className="brand-mark">WS</span>
             <div>
               <h1 className="brand-name">WasteShift</h1>
-              <p className="brand-subtitle">Kitchen intelligence</p>
+              <p className="brand-subtitle">Restaurant ops</p>
             </div>
           </div>
 
@@ -62,7 +62,7 @@ function Navbar({ activePage, onNavigate, wasteCount = 0, activeStaffMember, acc
               onClick={() => onNavigate('logWaste')}
             >
               <Plus size={17} strokeWidth={2.4} aria-hidden="true" />
-              <span>Log Waste</span>
+              <span>Log waste</span>
             </button>
           </div>
         </div>

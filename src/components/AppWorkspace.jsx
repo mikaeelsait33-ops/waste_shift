@@ -134,28 +134,16 @@ export default function AppWorkspace({
               )}
 
               {activeTab === 'inventory' && (
-                <>
-                  <div className="settings-controls grouped-page-controls">
-                    <div className="section-header settings-page-header">
-                      <div>
-                        <p className="eyebrow">Inventory</p>
-                        <h2 className="title">Invoices, Ingredients & Stock</h2>
-                        <p className="subtitle">Scan supplier invoices, maintain raw ingredient prices, and run one shared stock ledger.</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <InvoiceScanner
-                    accessProfile={accessProfile}
-                    recipes={effectiveRecipes}
-                    menuItems={menuItems}
-                    itemPriceCatalog={itemPriceCatalog}
-                    inventoryMovements={inventoryMovements}
-                    onInvoiceSaved={inventoryActions.onInvoiceSaved}
-                    onInvoicePricesUpdated={inventoryActions.onInvoicePricesUpdated}
-                    onIngredientDeleted={inventoryActions.onIngredientDeleted}
-                  />
-                </>
+                <InvoiceScanner
+                  accessProfile={accessProfile}
+                  recipes={effectiveRecipes}
+                  menuItems={menuItems}
+                  itemPriceCatalog={itemPriceCatalog}
+                  inventoryMovements={inventoryMovements}
+                  onInvoiceSaved={inventoryActions.onInvoiceSaved}
+                  onInvoicePricesUpdated={inventoryActions.onInvoicePricesUpdated}
+                  onIngredientDeleted={inventoryActions.onIngredientDeleted}
+                />
               )}
 
               {activeTab === 'menuPricing' && (
@@ -163,9 +151,7 @@ export default function AppWorkspace({
                   <div className="settings-controls grouped-page-controls">
                     <div className="section-header settings-page-header">
                       <div>
-                        <p className="eyebrow">Menu & Pricing</p>
-                        <h2 className="title">Recipes & Ingredients</h2>
-                        <p className="subtitle">Keep sellable dishes separate from raw ingredient prices and invoice-updated costs.</p>
+                        <h2 className="title">Menu</h2>
                       </div>
                     </div>
                     <div className="segmented-control settings-tabs" aria-label="Menu and pricing sections">

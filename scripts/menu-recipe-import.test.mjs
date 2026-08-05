@@ -190,7 +190,10 @@ const vercelGuideImportSource = await readFile(new URL('../src/services/vercelGe
 const guideUploadApiSource = await readFile(new URL('../api/gemini-menu-upload.js', import.meta.url), 'utf8');
 const geminiMenuApiSource = await readFile(new URL('../api/gemini-menu.js', import.meta.url), 'utf8');
 
-assert.match(recipeManagerSource, /make-line guide together/);
+assert.match(recipeManagerSource, /activeWorkspace/);
+assert.match(recipeManagerSource, /Import guide/);
+assert.match(recipeManagerSource, /Add item/);
+assert.match(recipeManagerSource, /Library/);
 assert.match(recipeManagerSource, /Bulk add menu items/);
 assert.match(recipeManagerSource, /Duplicate/);
 assert.match(recipeManagerSource, /field-grid field-grid--three/);

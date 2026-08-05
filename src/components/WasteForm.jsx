@@ -960,9 +960,7 @@ function WasteForm({
       <div className="panel-body">
         <div className="section-header">
           <div>
-            <p className="eyebrow">Waste entry</p>
-            <h2 className="title">Log Waste</h2>
-            <p className="subtitle">Capture raw stock waste or finished menu items.</p>
+            <h2 className="title">Log waste</h2>
           </div>
           <div className="manager-row">
             <button type="button" className="ghost-button compact-action" onClick={handleDiscardDraft}>
@@ -976,6 +974,12 @@ function WasteForm({
             This device is offline. Reconnect before logging waste so the entry is safely saved for every device.
           </div>
         )}
+
+        <ol className="flow-steps" aria-label="Waste entry steps">
+          <li className="is-current"><span>1</span><strong>Choose item</strong></li>
+          <li><span>2</span><strong>Add details</strong></li>
+          <li><span>3</span><strong>Save</strong></li>
+        </ol>
 
         <div className="segmented-control" aria-label="Waste entry type" style={{ marginBottom: '16px' }}>
           <button

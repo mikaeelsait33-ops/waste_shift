@@ -160,8 +160,8 @@ test('legacy staff session cache does not grant staff access', async ({ page }) 
   await expect(page.getByRole('heading', { name: 'Set Up This Restaurant' })).toBeVisible();
   await expect(page.getByText('Firebase required')).toBeVisible();
   await expect(page.locator('.app-shell')).toHaveCount(0);
-  await expect(page.locator('.nav-button', { hasText: 'Dashboard' })).toHaveCount(0);
-  await expect(page.locator('.nav-button', { hasText: 'Inventory' })).toHaveCount(0);
-  await expect(page.locator('.nav-button', { hasText: 'Menu & Pricing' })).toHaveCount(0);
+  await expect(page.locator('.nav-button', { hasText: 'Home' })).toHaveCount(0);
+  await expect(page.locator('.nav-button', { hasText: 'Invoices' })).toHaveCount(0);
+  await expect(page.locator('.nav-button', { hasText: 'Menu' })).toHaveCount(0);
   await expect(page.locator('.nav-button', { hasText: 'Settings' })).toHaveCount(0);
 });

@@ -353,9 +353,8 @@ function Dashboard({
       <div className="panel-body">
         <div className="section-header">
           <div>
-            <p className="eyebrow">Analytics</p>
-            <h2 className="title">Impact Dashboard</h2>
-            <p className="subtitle">Track waste value, causes, and staff accountability.</p>
+            <h2 className="title">Today</h2>
+            <p className="subtitle">Waste, stock, and invoices at a glance.</p>
           </div>
 
           <div className="segmented-control" aria-label="Dashboard timeframe">
